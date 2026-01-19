@@ -7,6 +7,8 @@ import requests
 
 from config import settings
 from schemas.oauth import OAuthUserInfo
+import jwt
+from jwt import PyJWKClient
 
 
 class GoogleOAuthError(Exception):
@@ -152,19 +154,25 @@ class GoogleOAuth:
     """Google OAuth 인증 클래스"""
 
     def __init__(self):
-        self.client_ids = {
-            "web": settings.GOOGLE_WEB_CLIENT_ID,
-            "android": settings.GOOGLE_ANDROID_CLIENT_ID,
-            "ios": settings.GOOGLE_IOS_CLIENT_ID,
+        self.client_types = {
+            settings.GOOGLE_WEB_REDIRECT_URI: "web",
+            settings.GOOGLE_ANDROID_REDIRECT_URI: "android",
+            settings.GOOGLE_IOS_REDIRECT_URI: "ios",
         }
+
         self.redirect_uris = {
             "web": settings.GOOGLE_WEB_REDIRECT_URI,
             "android": settings.GOOGLE_ANDROID_REDIRECT_URI,
             "ios": settings.GOOGLE_IOS_REDIRECT_URI,
         }
-        self.client_id = self.client_ids["web"]
+
+        self.client_ids = {
+            "web": settings.GOOGLE_WEB_CLIENT_ID,
+            "android": settings.GOOGLE_ANDROID_CLIENT_ID,
+            "ios": settings.GOOGLE_IOS_CLIENT_ID,
+        }
+
         self.client_secret = settings.GOOGLE_CLIENT_SECRET
-        self.redirect_uri = self.redirect_uris["web"]
         self.scope = "openid email profile"
 
         # Google OAuth 엔드포인트
@@ -172,42 +180,38 @@ class GoogleOAuth:
         self.token_url = "https://oauth2.googleapis.com/token"
         self.user_info_url = "https://www.googleapis.com/oauth2/v2/userinfo"
 
-    def _resolve_client_id_by_redirect_uri(self, redirect_uri: Optional[str]) -> str:
-        if redirect_uri:
-            for key, uri in self.redirect_uris.items():
-                if uri and uri == redirect_uri:
-                    client_id = self.client_ids.get(key) or ""
-                    if not client_id:
-                        logger.warning(
-                            "Google OAuth client_id가 설정되지 않았습니다: %s", key
-                        )
-                    return client_id
+    def _resolve_redirect_uri(
+        self, redirect_uri: str, authorizationCode: str, codeVerifier: str
+    ) -> Dict[str, str]:
+
+        # 클라이언트 타입
+        client_type: str | None = self.client_types.get(redirect_uri)
+        if not client_type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="허용되지 않은 redirect_uri 입니다",
+                detail="유효하지 않은 리디렉션 URI입니다",
             )
 
-        client_id = self.client_ids.get("web") or ""
+        # 클라이언트 ID
+        client_id: str | None = self.client_ids.get(client_type)
         if not client_id:
-            logger.warning("Google OAuth client_id가 설정되지 않았습니다")
-        return client_id
-
-    def _resolve_redirect_uri(self, redirect_uri: Optional[str]) -> str:
-        if redirect_uri:
-            for uri in self.redirect_uris.values():
-                if uri and uri == redirect_uri:
-                    return redirect_uri
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="허용되지 않은 redirect_uri 입니다",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OAuth 클라이언트 ID가 설정되지 않았습니다",
             )
 
-        fallback = self.redirect_uris.get("web") or ""
-        if not fallback:
-            logger.warning("Google OAuth redirect_uri가 설정되지 않았습니다")
-        return fallback
+        # 요청 페이로드 생성
+        data = {
+            "client_id": client_id,
+            "grant_type": "authorization_code",
+            "code": authorizationCode,
+            "code_verifier": codeVerifier,
+            "redirect_uri": redirect_uri,
+        }
 
-    def get_authorization_url(self, state: str = None) -> str:
+        return data
+
+    def get_authorization_url(self, state: str) -> str:
         """Google OAuth 인증 URL 생성"""
         try:
             params = {
@@ -239,9 +243,10 @@ class GoogleOAuth:
     def exchange_code_for_token(
         self,
         authorizationCode: str,
-        codeVerifier: str = None,
-        redirect_uri: str = None,
+        codeVerifier: str,
+        redirect_uri: str,
     ) -> Dict[str, Any]:
+        response = None
         """인증 코드를 액세스 토큰으로 교환"""
         try:
             # # 환경 변수 검증
@@ -252,20 +257,20 @@ class GoogleOAuth:
             #         detail="Google OAuth 설정이 완료되지 않았습니다"
             #     )
 
-            client_id = self._resolve_client_id_by_redirect_uri(redirect_uri)
-            redirect_uri = self._resolve_redirect_uri(redirect_uri)
-            data = {
-                "client_id": client_id,
-                "grant_type": "authorization_code",
-                "code": authorizationCode,
-                "code_verifier": codeVerifier,
-                "redirect_uri": redirect_uri,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            }
+            # 리디렉션 URI로 요청 페이로드 생성
+            data = self._resolve_redirect_uri(
+                redirect_uri, authorizationCode, codeVerifier
+            )
 
             logger.info(f"Google OAuth 토큰 교환 요청: {data}")
 
             response = requests.post(self.token_url, data=data)
+            if not response:
+                logger.error("Google OAuth 토큰 교환 응답이 없습니다")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="OAuth 토큰 교환에 실패했습니다",
+                )
 
             # 응답 로깅
             logger.info(f"Google OAuth 응답 상태: {response.status_code}")
@@ -279,9 +284,72 @@ class GoogleOAuth:
             return token_data
 
         except requests.exceptions.HTTPError as e:
-            logger.error(
-                f"Google OAuth HTTP 에러: {str(e)}, 응답: {response.text if 'response' in locals() else 'N/A'}"
+            error_text = e.response.text if e.response is not None else "N/A"
+            logger.error(f"Google OAuth HTTP 에러: {str(e)}, 응답: {error_text}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"OAuth 토큰 교환에 실패했습니다: {str(e)}",
             )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Google OAuth 요청 실패: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth 토큰 교환에 실패했습니다",
+            )
+        except Exception as e:
+            logger.error(f"Google OAuth 토큰 교환 중 오류: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OAuth 토큰 교환 중 오류가 발생했습니다",
+            )
+
+    def exchange_code_for_token_web(self, authorizationCode: str) -> Dict[str, Any]:
+        response = None
+        """인증 코드를 액세스 토큰으로 교환"""
+        try:
+            # # 환경 변수 검증
+            # if not self.client_id or not self.client_secret:
+            #     logger.error("Google OAuth 클라이언트 ID 또는 시크릿이 설정되지 않았습니다")
+            #     raise HTTPException(
+            #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            #         detail="Google OAuth 설정이 완료되지 않았습니다"
+            #     )
+
+            # 리디렉션 URI로 요청 페이로드 생성
+
+            # 요청 페이로드 생성
+            data = {
+                "client_id": self.client_ids["web"],
+                "grant_type": "authorization_code",
+                "code": authorizationCode,
+                "redirect_uri": self.redirect_uris["web"],
+                "client_secret": self.client_secret,
+            }
+
+            logger.info(f"Google OAuth Web 토큰 교환 요청: {data}")
+
+            response = requests.post(self.token_url, data=data)
+            if not response:
+                logger.error("Google OAuth 토큰 교환 응답이 없습니다")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="OAuth 토큰 교환에 실패했습니다",
+                )
+
+            # 응답 로깅
+            logger.info(f"Google OAuth 응답 상태: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"Google OAuth 응답 내용: {response.text}")
+
+            response.raise_for_status()
+
+            token_data = response.json()
+            logger.info("Google OAuth 토큰 교환 성공")
+            return token_data
+
+        except requests.exceptions.HTTPError as e:
+            error_text = e.response.text if e.response is not None else "N/A"
+            logger.error(f"Google OAuth HTTP 에러: {str(e)}, 응답: {error_text}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"OAuth 토큰 교환에 실패했습니다: {str(e)}",
@@ -329,8 +397,6 @@ class GoogleOAuth:
         try:
             # Google의 공개 키를 사용하여 ID 토큰 검증
             # 실제 구현에서는 google-auth 라이브러리를 사용하는 것이 좋습니다
-            import jwt
-            from jwt import PyJWKClient
 
             # Google의 JWKS 엔드포인트
             jwks_client = PyJWKClient("https://www.googleapis.com/oauth2/v3/certs")
@@ -345,7 +411,7 @@ class GoogleOAuth:
                 id_token,
                 rsa_key,
                 algorithms=["RS256"],
-                audience=audiences or self.client_id,
+                audience=audiences,
                 issuer="https://accounts.google.com",
             )
 

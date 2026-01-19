@@ -86,9 +86,7 @@ async def google_oauth_callback(
     """Google OAuth 콜백 처리"""
     try:
         # 인증 코드를 액세스 토큰으로 교환
-        oauth_token_data = google_oauth.exchange_code_for_token(
-            code, redirect_uri=settings.GOOGLE_WEB_REDIRECT_URI
-        )
+        oauth_token_data = google_oauth.exchange_code_for_token_web(code)
         access_token = oauth_token_data.get("access_token")
         id_token = oauth_token_data.get("id_token")
 
@@ -153,7 +151,7 @@ async def google_oauth_callback(
 
 
 @router.get("/drive/callback", response_class=HTMLResponse)
-async def drive_token_callback(code: str = None, state: str = None):
+async def drive_token_callback(code: str, state: str):
     """드라이브 전용 토큰 발급을 위한 간단한 콜백 페이지.
     브라우저 주소창의 code 값을 복사해 콘솔 스크립트 2번 단계에 붙여넣으면 됩니다.
     """
@@ -416,16 +414,16 @@ async def create_or_get_oauth_user(
         )
 
 
-@router.get("/providers")
-async def get_oauth_providers():
-    """지원하는 OAuth 제공자 목록 조회"""
-    return {
-        "providers": [
-            {
-                "name": "google",
-                "display_name": "Google",
-                "enabled": bool(google_oauth.client_id),
-                "auth_url": "/auth/oauth/google" if google_oauth.client_id else None,
-            }
-        ]
-    }
+# @router.get("/providers")
+# async def get_oauth_providers():
+#     """지원하는 OAuth 제공자 목록 조회"""
+#     return {
+#         "providers": [
+#             {
+#                 "name": "google",
+#                 "display_name": "Google",
+#                 "enabled": bool(google_oauth.client_id),
+#                 "auth_url": "/auth/oauth/google" if google_oauth.client_id else None,
+#             }
+#         ]
+#     }
