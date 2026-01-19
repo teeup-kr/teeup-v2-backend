@@ -1,0 +1,1662 @@
+# 인증 관련 API들
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from typing import Optional
+from datetime import datetime, timedelta
+from utils.datetime_utils import get_kst_now, get_kst_date
+import hashlib
+import re
+import logging
+
+from database import get_db
+from models import User, Admin, UserStatus, Provider, RefreshTokenBlacklist, TokenRevokeReason
+from schemas import MessageResponse
+from utils.jwt_auth import jwt_auth
+from utils.csrf_protection import generate_csrf_token, get_middleware_instance
+import jwt
+
+router = APIRouter(prefix="/auth", tags=["인증"])
+
+# 로깅 설정
+logger = logging.getLogger(__name__)
+
+# 인증 관련 유틸리티 함수들
+security = HTTPBearer()
+
+# 유효성 검사 함수들
+def validate_email(email: str) -> bool:
+    """이메일 유효성 검사"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_nickname(nickname: str) -> bool:
+    """닉네임 유효성 검사 (영문 대소문자, 한글, 숫자만, 2-20자)"""
+    if len(nickname) < 2 or len(nickname) > 20:
+        return False
+    pattern = r'^[a-zA-Z가-힣0-9]+$'
+    return re.match(pattern, nickname) is not None
+
+def validate_password(password: str) -> dict:
+    """비밀번호 유효성 검사"""
+    result = {
+        "is_valid": False,
+        "errors": [],
+        "strength": 0
+    }
+    
+    if len(password) < 6 or len(password) > 32:
+        result["errors"].append("비밀번호는 6자 이상 32자 이하여야 합니다.")
+        return result
+    
+    # 영문 대문자, 소문자, 특수문자, 숫자 중 2개 이상 포함 확인
+    has_upper = bool(re.search(r'[A-Z]', password))
+    has_lower = bool(re.search(r'[a-z]', password))
+    has_digit = bool(re.search(r'[0-9]', password))
+    has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', password))
+    
+    strength = sum([has_upper, has_lower, has_digit, has_special])
+    
+    if strength < 2:
+        result["errors"].append("영문 대문자, 소문자, 특수문자, 숫자 중 2개 이상을 포함해야 합니다.")
+        return result
+    
+    result["is_valid"] = True
+    result["strength"] = strength
+    return result
+
+def validate_average_score(score: int) -> bool:
+    """평균타수 유효성 검사 (55-144타)"""
+    return 55 <= score <= 144
+
+def validate_birthdate(birthdate: str) -> dict:
+    """생년월일 유효성 검사 (만 14세 이상)"""
+    result = {
+        "is_valid": False,
+        "errors": [],
+        "age": None
+    }
+    
+    try:
+        # 날짜 형식 검사 (YYYY-MM-DD)
+        birth_date = datetime.strptime(birthdate, "%Y-%m-%d").date()
+        today = get_kst_date().date()
+        
+        # 미래 날짜 체크
+        if birth_date > today:
+            result["errors"].append("생년월일은 미래 날짜일 수 없습니다.")
+            return result
+        
+        # 만 나이 계산
+        age = today.year - birth_date.year
+        if (today.month, today.day) < (birth_date.month, birth_date.day):
+            age -= 1
+        
+        result["age"] = age
+        
+        # 만 14세 이상 확인
+        if age < 14:
+            result["errors"].append("만 14세 이상만 가입할 수 있습니다.")
+            return result
+        
+        # 유효한 범위 확인 (1900년 이후)
+        if birth_date.year < 1900:
+            result["errors"].append("올바른 생년월일을 입력해주세요.")
+            return result
+        
+        result["is_valid"] = True
+        return result
+        
+    except ValueError:
+        result["errors"].append("올바른 날짜 형식(YYYY-MM-DD)을 입력해주세요.")
+        return result
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """현재 사용자 조회 (JWT 토큰 검증 포함)"""
+    try:
+        # JWT 토큰 검증
+        token = credentials.credentials
+        logger.info(f"토큰 검증 시작: {token[:20] if token else 'None'}...")
+        payload = jwt_auth.verify_token(token, "access")
+        
+        user_id = payload.get("id")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="토큰에 사용자 정보가 없습니다."
+            )
+        
+        # 사용자 조회
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 사용자 상태 확인
+        if user.status == UserStatus.DELETED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="탈퇴한 사용자입니다."
+            )
+        
+        if user.status == UserStatus.DEACTIVATED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자에 의해 비활성화 처리된 회원입니다."
+            )
+        
+        # User 객체 반환
+        return user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"사용자 인증 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰 검증 중 오류가 발생했습니다."
+        )
+
+def get_current_active_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """현재 활성 사용자 조회"""
+    if current_user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="비활성화된 사용자입니다."
+        )
+    return current_user
+
+def get_current_admin_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> Admin:
+    """현재 관리자 사용자 조회"""
+    try:
+        token = credentials.credentials
+        payload = jwt_auth.verify_token(token, "access")
+        admin_id = payload.get("id")
+        user_type = payload.get("type", "user")
+        
+        if not admin_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 토큰입니다."
+            )
+        
+        # 관리자 타입 확인
+        if user_type != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자 권한이 필요합니다."
+            )
+        
+        # 관리자 조회
+        admin = db.query(Admin).filter(
+            Admin.id == admin_id,
+            Admin.deleted_at.is_(None)
+        ).first()
+        
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="관리자를 찾을 수 없습니다."
+            )
+        
+        return admin
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 인증 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰 검증 중 오류가 발생했습니다."
+        )
+
+def get_current_admin_user_jwt(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> Admin:
+    """JWT 토큰을 사용한 관리자 사용자 조회"""
+    try:
+        token = credentials.credentials
+        
+        # JWT 토큰 검증
+        payload = jwt_auth.verify_token(token, "access")
+        admin_id = payload.get("id")
+        user_type = payload.get("type", "user")
+        
+        if not admin_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 토큰입니다."
+            )
+        
+        # 관리자 타입 확인
+        if user_type != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자 권한이 필요합니다."
+            )
+        
+        # 관리자 조회
+        admin = db.query(Admin).filter(
+            Admin.id == admin_id,
+            Admin.deleted_at.is_(None)
+        ).first()
+        
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="관리자를 찾을 수 없습니다."
+            )
+        
+        # 관리자 상태 확인
+        if admin.status == UserStatus.DELETED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="삭제된 관리자 계정입니다."
+            )
+        
+        if admin.status == UserStatus.DEACTIVATED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="비활성화된 관리자 계정입니다."
+            )
+        
+        return admin
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 인증 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰 검증 중 오류가 발생했습니다."
+        )
+
+def get_current_user_or_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """관리자 또는 일반 사용자 인증 (JWT 기반)"""
+    try:
+        token = credentials.credentials
+        
+        # JWT 토큰 검증
+        payload = jwt_auth.verify_token(token, "access")
+        user_id = payload.get("id")
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 토큰입니다."
+            )
+        
+        # 사용자 조회
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 사용자 상태 확인
+        if user.status == UserStatus.DELETED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="탈퇴한 사용자입니다."
+            )
+        
+        if user.status == UserStatus.DEACTIVATED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자에 의해 비활성화 처리된 회원입니다."
+            )
+        
+        # 활성 사용자만 허용
+        if user.status != UserStatus.ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="비활성화된 사용자입니다."
+            )
+        
+        return user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"사용자 인증 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰 검증 중 오류가 발생했습니다."
+        )
+
+# 간단한 로그인 스키마
+from pydantic import BaseModel
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: dict
+
+@router.post("/login", response_model=LoginResponse)
+async def login(
+    login_data: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    """로그인"""
+    try:
+        # 사용자 조회 (삭제 여부와 관계없이 조회)
+        user = db.query(User).filter(User.email == login_data.email).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="이메일 또는 비밀번호가 올바르지 않습니다."
+            )
+        
+        # 삭제된 사용자 체크 (먼저 확인)
+        if user.status == UserStatus.DELETED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="사용할 수 없는 계정입니다."
+            )
+        
+        # 비활성화된 사용자 체크
+        if user.status == UserStatus.DEACTIVATED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자에 의해 비활성화 처리된 회원입니다."
+            )
+        
+        # 활성 사용자만 로그인 가능
+        if user.status != UserStatus.ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="로그인할 수 없는 계정 상태입니다."
+            )
+        
+        # 비밀번호 확인 (간단한 해시 비교)
+        password_hash = hashlib.sha256(login_data.password.encode()).hexdigest()
+        if user.password != password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="이메일 또는 비밀번호가 올바르지 않습니다."
+            )
+        
+        # JWT 토큰 생성
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "nickname": user.nickname,
+            "type": "user"  # 일반 사용자 타입
+        }
+        
+        access_token = jwt_auth.create_access_token(user_data)
+        refresh_token = jwt_auth.create_refresh_token(user_data)
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": 3600,  # 1시간
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "nickname": user.nickname,
+                "type": "user"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.get("/me")
+async def get_current_user_info(
+    current_user: User = Depends(get_current_active_user)
+):
+    """현재 사용자 정보 조회"""
+    try:
+        return {
+            "id": current_user.id,
+            "email": current_user.email,
+            "nickname": current_user.nickname,
+            "type": "user",
+            "status": current_user.status.value if current_user.status else None
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# 회원가입 스키마
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    nickname: str
+    average_score: Optional[int] = None
+    # 약관동의
+    terms_agreement: bool  # 서비스이용약관 (필수)
+    privacy_policy: bool   # 개인정보처리방침 (필수)
+    privacy_collection: bool  # 개인정보 수집 및 이용동의 (필수)
+    marketing_consent: Optional[bool] = False  # 마케팅정보 수신동의 (선택)
+
+@router.post("/register", response_model=LoginResponse)
+async def register(
+    register_data: RegisterRequest,
+    db: Session = Depends(get_db)
+):
+    """회원가입"""
+    try:
+        # 이메일 유효성 검사
+        if not validate_email(register_data.email):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="올바른 이메일 형식이 아닙니다."
+            )
+        
+        # 이메일 중복 확인
+        existing_user = db.query(User).filter(
+            User.email == register_data.email,
+            User.status != UserStatus.DELETED
+        ).first()
+        if existing_user:
+            # OAuth 사용자인 경우 특별한 메시지
+            if existing_user.provider != Provider.LOCAL:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"이미 {existing_user.provider.value} 계정으로 가입된 이메일입니다. 소셜 로그인을 이용해주세요."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="이미 사용 중인 이메일입니다."
+                )
+        
+        # 닉네임 유효성 검사
+        if not validate_nickname(register_data.nickname):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="닉네임은 영문 대소문자, 한글, 숫자만 사용 가능하며 2-20자여야 합니다."
+            )
+        
+        # 닉네임 중복 확인
+        existing_nickname = db.query(User).filter(
+            User.nickname == register_data.nickname,
+            User.status != UserStatus.DELETED
+        ).first()
+        if existing_nickname:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 사용 중인 닉네임입니다."
+            )
+        
+        # 삭제된 사용자의 이메일 확인 (영구 재사용 불가)
+        deleted_email_user = db.query(User).filter(
+            User.email == register_data.email,
+            User.status == UserStatus.DELETED,
+            User.deleted_at.isnot(None)
+        ).first()
+        if deleted_email_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="탈퇴한 사용자의 이메일은 재사용할 수 없습니다."
+            )
+        
+        # 탈퇴한 사용자의 닉네임 락 확인
+        deleted_user = db.query(User).filter(
+            User.original_nickname == register_data.nickname,
+            User.status == UserStatus.DELETED,
+            User.nickname_locked_until.isnot(None)
+        ).first()
+        
+        if deleted_user:
+            # 7일 락이 아직 유효한지 확인
+            if deleted_user.nickname_locked_until > get_kst_now():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="사용할 수 없는 닉네임입니다. (탈퇴 후 7일간 사용 불가)"
+                )
+        
+        # 비밀번호 유효성 검사
+        password_validation = validate_password(register_data.password)
+        if not password_validation["is_valid"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="; ".join(password_validation["errors"])
+            )
+        
+        # 평균타수 유효성 검사 (제공된 경우)
+        if register_data.average_score is not None and not validate_average_score(register_data.average_score):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="평균타수는 55타 이상 144타 이하여야 합니다."
+            )
+        
+        # 필수 약관동의 검증
+        if not register_data.terms_agreement:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="서비스이용약관에 동의해야 합니다."
+            )
+        
+        if not register_data.privacy_policy:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="개인정보처리방침에 동의해야 합니다."
+            )
+        
+        if not register_data.privacy_collection:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="개인정보 수집 및 이용동의에 동의해야 합니다."
+            )
+        
+        # 비밀번호 해시화
+        password_hash = hashlib.sha256(register_data.password.encode()).hexdigest()
+        
+        # 평균 타수로부터 초기 핸디캡 자동 계산
+        from utils.handicap_calculator import calculate_initial_handicap_from_average
+        from models import HandicapUpdateMethod
+        
+        initial_handicap = None
+        if register_data.average_score is not None:
+            initial_handicap = calculate_initial_handicap_from_average(register_data.average_score)
+        
+        # 사용자 생성 (id는 자동 생성)
+        user = User(
+            email=register_data.email,
+            password=password_hash,
+            nickname=register_data.nickname,
+            realname=None,  # 회원가입 시 실명은 None으로 설정
+            phone_number=None,  # 회원가입 시 전화번호는 None으로 설정
+            birthdate=None,  # 회원가입 시 생년월일은 None으로 설정
+            gender=None,  # 회원가입 시 성별은 None으로 설정
+            handicap=None,  # 회원가입 시 핸디캡은 None으로 설정 (하위 호환성)
+            average_score=register_data.average_score,
+            initial_handicap=initial_handicap,  # 평균 타수로부터 자동 계산
+            handicap_update_method=HandicapUpdateMethod.MANUAL if initial_handicap else None,
+            status=UserStatus.ACTIVE,
+            provider=Provider.LOCAL,  # 로컬 회원가입
+            needs_terms_agreement=True,  # 회원가입 시 약관 동의 필요
+            # 약관동의 정보 저장
+            terms_agreement=register_data.terms_agreement,
+            privacy_policy=register_data.privacy_policy,
+            privacy_collection=register_data.privacy_collection,
+            marketing_consent=register_data.marketing_consent or False
+        )
+        
+        db.add(user)
+        db.commit()
+        
+        # 회원가입 후 자동 로그인을 위해 토큰 생성
+        access_token = jwt_auth.create_access_token(data={"sub": user.id})
+        refresh_token = jwt_auth.create_refresh_token(data={"sub": user.id})
+        
+        # 사용자 정보 반환 (비밀번호 제외)
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "nickname": user.nickname,
+            "type": "user",
+            "status": user.status.value,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "expires_in": 3600,  # 1시간
+            "user": user_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# 새로운 API 엔드포인트들
+
+@router.get("/check-email")
+async def check_email_duplicate(
+    email: str = Query(..., description="확인할 이메일 주소"),
+    db: Session = Depends(get_db)
+):
+    """이메일 중복 확인 및 유효성 검사"""
+    try:
+        logger.info(f"이메일 중복 확인 요청: {email}")
+        
+        # 이메일 유효성 검사
+        if not validate_email(email):
+            logger.info(f"이메일 형식 검증 실패: {email}")
+            return {
+                "is_available": False,
+                "is_valid": False,
+                "message": "올바른 이메일 형식이 아닙니다."
+            }
+        
+        # 활성 사용자 이메일 중복 확인 (삭제되지 않은 사용자만 확인)
+        existing_user = db.query(User).filter(
+            User.email == email,
+            User.deleted_at.is_(None),  # 삭제되지 않은 사용자만 확인
+            User.status != UserStatus.DELETED  # 상태도 확인
+        ).first()
+        
+        logger.info(f"이메일 중복 확인 쿼리 결과: existing_user={existing_user is not None}, email={email}")
+        
+        # 명시적으로 None 체크
+        if existing_user is not None:
+            logger.info(f"이미 사용 중인 이메일 발견: {email}, provider={existing_user.provider}")
+            # OAuth 사용자인 경우 특별한 메시지
+            if existing_user.provider != Provider.LOCAL:
+                return {
+                    "is_available": False,
+                    "is_valid": True,
+                    "message": f"이미 {existing_user.provider.value} 계정으로 가입된 이메일입니다. 소셜 로그인을 이용해주세요."
+                }
+            else:
+                return {
+                    "is_available": False,
+                    "is_valid": True,
+                    "message": "이미 사용 중인 이메일입니다."
+                }
+        
+        # 탈퇴한 사용자의 이메일 확인 (영구 락)
+        deleted_user = db.query(User).filter(
+            User.email == email,
+            User.status == UserStatus.DELETED,
+            User.deleted_at.isnot(None)
+        ).first()
+        
+        logger.info(f"탈퇴한 사용자 이메일 확인 쿼리 결과: deleted_user={deleted_user is not None}, email={email}")
+        
+        if deleted_user is not None:
+            logger.info(f"탈퇴한 사용자의 이메일 발견: {email}")
+            return {
+                "is_available": False,
+                "is_valid": True,
+                "message": "사용할 수 없는 이메일입니다."
+            }
+        
+        logger.info(f"사용 가능한 이메일: {email}")
+        return {
+            "is_available": True,
+            "is_valid": True,
+            "message": "사용 가능한 이메일입니다."
+        }
+        
+    except Exception as e:
+        logger.error(f"이메일 중복 확인 중 오류 발생: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.get("/check-nickname")
+async def check_nickname_duplicate(
+    nickname: str = Query(..., description="확인할 닉네임"),
+    db: Session = Depends(get_db)
+):
+    """닉네임 중복 확인 및 유효성 검사"""
+    try:
+        logger.info(f"닉네임 중복 확인 요청: {nickname}")
+        
+        # 닉네임 유효성 검사
+        if not validate_nickname(nickname):
+            logger.info(f"닉네임 형식 검증 실패: {nickname}")
+            return {
+                "is_available": False,
+                "is_valid": False,
+                "message": "닉네임은 영문 대소문자, 한글, 숫자만 사용 가능하며 2-20자여야 합니다."
+            }
+        
+        # 닉네임 중복 확인 (삭제되지 않은 사용자만 확인)
+        existing_user = db.query(User).filter(
+            User.nickname == nickname,
+            User.deleted_at.is_(None),  # 삭제되지 않은 사용자만 확인
+            User.status != UserStatus.DELETED  # 상태도 확인
+        ).first()
+        
+        logger.info(f"닉네임 중복 확인 쿼리 결과: existing_user={existing_user is not None}, nickname={nickname}")
+        
+        # 명시적으로 None 체크
+        if existing_user is not None:
+            logger.info(f"이미 사용 중인 닉네임 발견: {nickname}")
+            return {
+                "is_available": False,
+                "is_valid": True,
+                "message": "이미 사용 중인 닉네임입니다."
+            }
+        
+        # 탈퇴한 사용자의 닉네임 락 확인 (original_nickname으로 검색)
+        deleted_user = db.query(User).filter(
+            User.original_nickname == nickname,
+            User.status == UserStatus.DELETED,
+            User.deleted_at.isnot(None),
+            User.nickname_locked_until.isnot(None)
+        ).first()
+        
+        logger.info(f"탈퇴한 사용자 닉네임 락 확인 쿼리 결과: deleted_user={deleted_user is not None}, nickname={nickname}")
+        
+        if deleted_user is not None:
+            # 7일 락이 아직 유효한지 확인
+            if deleted_user.nickname_locked_until and deleted_user.nickname_locked_until > get_kst_now():
+                # 남은 일수 계산
+                remaining_days = (deleted_user.nickname_locked_until - get_kst_now()).days
+                logger.info(f"탈퇴한 사용자의 닉네임 락 유효: {nickname}, 남은 기간: {remaining_days}일")
+                return {
+                    "is_available": False,
+                    "is_valid": True,
+                    "message": f"탈퇴한 사용자의 닉네임은 7일 동안(남은 기간: {remaining_days}일) 사용할 수 없습니다."
+                }
+        
+        logger.info(f"사용 가능한 닉네임: {nickname}")
+        return {
+            "is_available": True,
+            "is_valid": True,
+            "message": "사용 가능한 닉네임입니다."
+        }
+        
+    except Exception as e:
+        logger.error(f"닉네임 중복 확인 중 오류 발생: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/validate-password")
+async def validate_password_strength(
+    password: str = Query(..., description="검사할 비밀번호")
+):
+    """비밀번호 유효성 검사"""
+    try:
+        result = validate_password(password)
+        return {
+            "is_valid": result["is_valid"],
+            "strength": result["strength"],
+            "errors": result["errors"],
+            "message": "비밀번호가 유효합니다." if result["is_valid"] else "비밀번호가 유효하지 않습니다."
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/validate-average-score")
+async def validate_average_score_value(
+    score: int = Query(..., description="검사할 평균타수")
+):
+    """평균타수 유효성 검사"""
+    try:
+        is_valid = validate_average_score(score)
+        return {
+            "is_valid": is_valid,
+            "message": "유효한 평균타수입니다." if is_valid else "평균타수는 55타 이상 144타 이하여야 합니다."
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.put("/change-password")
+async def change_password(
+    current_password: str = Query(..., description="현재 비밀번호"),
+    new_password: str = Query(..., description="새 비밀번호"),
+    confirm_password: str = Query(..., description="새 비밀번호 확인"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """비밀번호 변경"""
+    try:
+        # 새 비밀번호와 확인 비밀번호 일치 확인
+        if new_password != confirm_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="새 비밀번호와 확인 비밀번호가 일치하지 않습니다."
+            )
+        
+        # 새 비밀번호 유효성 검사
+        password_validation = validate_password(new_password)
+        if not password_validation["is_valid"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="; ".join(password_validation["errors"])
+            )
+        
+        # 현재 사용자 조회
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 현재 비밀번호 확인
+        current_password_hash = hashlib.sha256(current_password.encode()).hexdigest()
+        if user.password != current_password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 비밀번호가 올바르지 않습니다."
+            )
+        
+        # 새 비밀번호 해시화 및 저장
+        new_password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+        user.password = new_password_hash
+        user.updated_at = get_kst_now()
+        
+        db.commit()
+        
+        return {
+            "message": "비밀번호가 성공적으로 변경되었습니다.",
+            "success": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"비밀번호 변경 중 오류: {str(e)}")
+        import traceback
+        logger.error(f"상세 오류: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.delete("/withdraw")
+async def withdraw_user(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """회원탈퇴"""
+    try:
+        # 사용자 조회
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # UI 표시용으로 닉네임 변경 (DB는 원본 유지)
+        user.original_nickname = user.nickname  # 원본 닉네임 저장
+        # 닉네임은 유니크 제약이 있으므로 중복을 피하기 위해 유니크 접미사를 부여한다
+        base_nickname = "탈퇴회원"
+        # 타임스탬프 기반 접미사로 충돌 방지 (예: 탈퇴회원_1730208732)
+        unique_suffix = f"_{int(get_kst_now().timestamp())}"
+        user.nickname = f"{base_nickname}{unique_suffix}"
+        
+        # 닉네임 락 설정 (7일 후 해제)
+        user.nickname_locked_until = get_kst_now() + timedelta(days=7)
+        
+        # 사용자 상태를 DELETED로 변경
+        user.status = UserStatus.DELETED
+        user.deleted_at = get_kst_now()
+        user.updated_at = get_kst_now()
+        
+        # 이메일은 그대로 두고, 중복확인에서 status로 체크하도록 함
+        # user.email = f"deleted_{user.id}_{int(get_kst_now().timestamp())}@deleted.com"
+        
+        db.commit()
+        
+        return {
+            "message": "회원탈퇴가 완료되었습니다.",
+            "success": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"회원탈퇴 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.post("/logout")
+async def logout(
+    current_user: dict = Depends(get_current_active_user)
+):
+    """로그아웃 (토큰 무효화)"""
+    try:
+        # 현재는 간단한 토큰 시스템이므로 실제 무효화는 클라이언트에서 처리
+        # 향후 JWT 토큰 시스템으로 변경 시 토큰 블랙리스트에 추가하는 로직 구현
+        
+        return {
+            "message": "로그아웃이 완료되었습니다.",
+            "success": True
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# 토큰 갱신 스키마
+class TokenRefreshRequest(BaseModel):
+    refresh_token: Optional[str] = None
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600  # 1시간
+    user: dict
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    token_data: TokenRefreshRequest,
+    db: Session = Depends(get_db)
+):
+    """토큰 갱신 (자동 로그인용)"""
+    try:
+        # 리프레시 토큰 검증
+        if not token_data.refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="리프레시 토큰이 필요합니다."
+            )
+        
+        # JWT 리프레시 토큰 검증
+        payload = jwt_auth.verify_token(token_data.refresh_token, "refresh")
+        user_id = payload.get("id")
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 리프레시 토큰입니다."
+            )
+        
+        # 사용자 확인
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.status == UserStatus.ACTIVE,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 새로운 액세스 토큰과 리프레시 토큰 생성
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "nickname": user.nickname,
+            "type": "user"
+        }
+        
+        new_access_token = jwt_auth.create_access_token(user_data)
+        new_refresh_token = jwt_auth.create_refresh_token(user_data)
+        
+        return TokenResponse(
+            access_token=new_access_token,
+            refresh_token=new_refresh_token,
+            expires_in=7200,  # 2시간
+            user={
+                "id": user.id,
+                "email": user.email,
+                "nickname": user.nickname,
+                "type": "user"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"토큰 갱신 실패: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="토큰 갱신 중 오류가 발생했습니다."
+        )
+
+@router.post("/verify-token", response_model=dict)
+async def verify_token(
+    token: str = Query(..., description="검증할 토큰"),
+    db: Session = Depends(get_db)
+):
+    """토큰 유효성 검사"""
+    try:
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="토큰이 필요합니다."
+            )
+        
+        # JWT 토큰 검증
+        payload = jwt_auth.verify_token(token, "access")
+        user_id = payload.get("id")
+        
+        if not user_id:
+            return {
+                "valid": False,
+                "message": "토큰에 사용자 정보가 없습니다."
+            }
+        
+        # 사용자 확인
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.status == UserStatus.ACTIVE,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            return {
+                "valid": False,
+                "message": "사용자를 찾을 수 없습니다."
+            }
+        
+        return {
+            "valid": True,
+            "message": "유효한 토큰입니다.",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "nickname": user.nickname,
+                "type": "user"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"토큰 검증 실패: {e}")
+        return {
+            "valid": False,
+            "message": "토큰 검증 중 오류가 발생했습니다."
+        }
+
+# 토큰 무효화 관련 함수들
+def revoke_refresh_token(token_jti: str, user_id: int, reason: TokenRevokeReason, expires_at: datetime, db: Session):
+    """리프레시 토큰을 블랙리스트에 추가"""
+    try:
+        # 이미 블랙리스트에 있는지 확인
+        existing = db.query(RefreshTokenBlacklist).filter(
+            RefreshTokenBlacklist.token_jti == token_jti
+        ).first()
+        
+        if existing:
+            logger.warning(f"토큰이 이미 블랙리스트에 있습니다: {token_jti}")
+            return existing
+        
+        # 블랙리스트에 추가 (id는 자동 생성)
+        blacklist_entry = RefreshTokenBlacklist(
+            token_jti=token_jti,
+            user_id=user_id,
+            reason=reason,
+            expires_at=expires_at
+        )
+        
+        db.add(blacklist_entry)
+        db.commit()
+        db.refresh(blacklist_entry)
+        
+        logger.info(f"토큰 블랙리스트 추가 완료: {token_jti}, 사유: {reason.value}")
+        return blacklist_entry
+        
+    except Exception as e:
+        logger.error(f"토큰 블랙리스트 추가 실패: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="토큰 무효화 중 오류가 발생했습니다."
+        )
+
+def is_token_blacklisted(token_jti: str, db: Session) -> bool:
+    """토큰이 블랙리스트에 있는지 확인"""
+    try:
+        blacklist_entry = db.query(RefreshTokenBlacklist).filter(
+            RefreshTokenBlacklist.token_jti == token_jti
+        ).first()
+        
+        return blacklist_entry is not None
+        
+    except Exception as e:
+        logger.error(f"토큰 블랙리스트 확인 실패: {e}")
+        return False
+
+def revoke_all_user_tokens(user_id: int, reason: TokenRevokeReason, db: Session):
+    """사용자의 모든 리프레시 토큰 무효화"""
+    try:
+        # 사용자의 모든 활성 토큰을 블랙리스트에 추가
+        # 실제 구현에서는 사용자의 모든 활성 토큰을 찾아서 무효화해야 함
+        # 여기서는 예시로 현재 시간 기준으로 처리
+        
+        logger.info(f"사용자 {user_id}의 모든 토큰 무효화 요청, 사유: {reason.value}")
+        
+        # 실제로는 사용자의 모든 활성 토큰을 찾아서 처리해야 함
+        # 현재는 로그만 남기고 성공으로 처리
+        
+        return {
+            "message": "사용자의 모든 토큰이 무효화되었습니다.",
+            "user_id": user_id,
+            "reason": reason.value
+        }
+        
+    except Exception as e:
+        logger.error(f"사용자 토큰 무효화 실패: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="토큰 무효화 중 오류가 발생했습니다."
+        )
+
+@router.post("/revoke-token", response_model=MessageResponse)
+async def revoke_refresh_token_api(
+    token_jti: str,
+    reason: TokenRevokeReason = TokenRevokeReason.LOGOUT,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    특정 리프레시 토큰 무효화
+    """
+    try:
+        # 토큰의 만료 시간 계산 (일반적으로 7일)
+        expires_at = get_kst_now() + timedelta(days=7)
+        
+        # 토큰 무효화
+        blacklist_entry = revoke_refresh_token(
+            token_jti=token_jti,
+            user_id=int(current_user["id"]) if isinstance(current_user["id"], str) else current_user["id"],
+            reason=reason,
+            expires_at=expires_at,
+            db=db
+        )
+        
+        return MessageResponse(
+            success=True,
+            message=f"토큰이 성공적으로 무효화되었습니다. (사유: {reason.value})"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"토큰 무효화 API 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="토큰 무효화 중 오류가 발생했습니다."
+        )
+
+@router.post("/revoke-all-tokens", response_model=MessageResponse)
+async def revoke_all_user_tokens_api(
+    reason: TokenRevokeReason = TokenRevokeReason.LOGOUT,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    사용자의 모든 리프레시 토큰 무효화 (모든 기기에서 로그아웃)
+    """
+    try:
+        result = revoke_all_user_tokens(
+            user_id=int(current_user["id"]) if isinstance(current_user["id"], str) else current_user["id"],
+            reason=reason,
+            db=db
+        )
+        
+        return MessageResponse(
+            success=True,
+            message=result["message"]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모든 토큰 무효화 API 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="토큰 무효화 중 오류가 발생했습니다."
+        )
+
+@router.get("/csrf-token")
+async def get_csrf_token():
+    """
+    CSRF 토큰 발급 (인증 불필요)
+    """
+    try:
+        # 미들웨어 인스턴스에서 토큰 생성 (저장소에 등록됨)
+        middleware = get_middleware_instance()
+        if middleware:
+            token = middleware.generate_csrf_token()
+        else:
+            # 미들웨어가 아직 초기화되지 않은 경우 대체 방법 사용
+            token = generate_csrf_token()
+        return {
+            "csrf_token": token,
+            "expires_in": 3600  # 1시간
+        }
+    except Exception as e:
+        logger.error(f"CSRF 토큰 생성 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="CSRF 토큰 생성 중 오류가 발생했습니다."
+        )
+
+class AdminTokenVerifyRequest(BaseModel):
+    token: str
+
+@router.post("/verify-admin-token")
+async def verify_admin_token(
+    request: AdminTokenVerifyRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    """임시 어드민 토큰 검증 및 사용자 정보 반환 (일회용)"""
+    try:
+        token = request.token
+        
+        # 토큰 검증
+        payload = jwt_auth.verify_token(token, "admin_temp")
+        
+        # 어드민 임시 토큰인지 확인
+        if payload.get("type") != "admin_temp" or not payload.get("admin_view"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 어드민 토큰입니다"
+            )
+        
+        # 일회용 토큰 확인 (이미 사용되었는지 체크)
+        token_jti = payload.get("jti")
+        if not token_jti:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 토큰 형식입니다"
+            )
+        
+        # 토큰 사용 여부 확인 (admin.py의 함수 사용)
+        from routers.admin import is_token_used, mark_token_as_used
+        
+        if is_token_used(token_jti):
+            logger.warning(f"이미 사용된 토큰으로 접근 시도: {token_jti}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="이미 사용된 토큰입니다"
+            )
+        
+        # 관리자 정보 조회
+        admin_id = payload.get("id")
+        admin = db.query(Admin).filter(
+            Admin.id == admin_id,
+            Admin.deleted_at.is_(None)
+        ).first()
+        
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="관리자를 찾을 수 없습니다"
+            )
+        
+        # 관리자 상태 확인
+        if admin.status == UserStatus.DELETED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="삭제된 관리자 계정입니다"
+            )
+        
+        if admin.status == UserStatus.DEACTIVATED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="비활성화된 관리자 계정입니다"
+            )
+        
+        # 토큰을 사용됨으로 표시 (일회용)
+        mark_token_as_used(token_jti)
+        logger.info(f"어드민 토큰 사용 완료 및 무효화: {token_jti}, admin_id: {admin_id}")
+        
+        # 일반 access 토큰 생성 (클라이언트에서 일반 API 호출에 사용)
+        user_data = {
+            "id": admin.id,
+            "email": admin.email,
+            "name": admin.name,
+            "admin_view": True,  # 어드민 뷰 플래그 유지
+            "type": "admin"  # 관리자 타입
+        }
+        
+        # 일반 access 토큰 생성 (5분 유효기간 유지)
+        access_token = jwt_auth.create_access_token(
+            user_data,
+            expires_delta=timedelta(minutes=5)
+        )
+        
+        # 관리자 정보 반환 (클라이언트에서 사용할 수 있는 형태)
+        return {
+            "id": admin.id,
+            "email": admin.email,
+            "name": admin.name,
+            "type": "admin",
+            "admin_view": True,
+            "access_token": access_token,  # 일반 access 토큰 반환
+            "temp_token": token  # 호환성을 위해 임시 토큰도 반환 (사용하지 않음)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"어드민 토큰 검증 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰 검증 중 오류가 발생했습니다"
+        )
+
+@router.get("/terms/{terms_type}")
+async def get_terms_public(
+    terms_type: str,
+    db: Session = Depends(get_db)
+):
+    """약관 조회 (공개 API)"""
+    try:
+        from models import Terms
+        
+        # 약관 타입 검증
+        valid_types = ['service', 'privacy', 'collection', 'marketing']
+        if terms_type not in valid_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="유효하지 않은 약관 타입입니다"
+            )
+        
+        # 약관 타입 매핑
+        type_mapping = {
+            'service': 'SERVICE',
+            'privacy': 'PRIVACY',
+            'marketing': 'MARKETING'
+        }
+        
+        if terms_type not in type_mapping:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="유효하지 않은 약관 타입입니다"
+            )
+        
+        db_terms_type = type_mapping[terms_type]
+        
+        # 약관 조회
+        terms = db.query(Terms).filter(
+            Terms.type == db_terms_type,
+            Terms.is_active == True
+        ).first()
+        
+        if not terms:
+            # 기본 약관 반환
+            return {
+                "title": get_default_terms_title(terms_type),
+                "content": get_default_terms_content(terms_type),
+                "updated_at": None
+            }
+        
+        return {
+            "title": terms.title,
+            "content": terms.content,
+            "updated_at": terms.updated_at.isoformat() if terms.updated_at else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"약관 조회 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다"
+        )
+
+def get_default_terms_title(terms_type: str) -> str:
+    """기본 약관 제목 반환"""
+    titles = {
+        'service': '서비스 이용약관',
+        'privacy': '개인정보처리방침',
+        'collection': '개인정보 수집 및 이용동의',
+        'marketing': '마케팅정보 수신동의'
+    }
+    return titles.get(terms_type, '약관')
+
+def get_default_terms_content(terms_type: str) -> str:
+    """기본 약관 내용 반환"""
+    contents = {
+        'service': '<h2>제1조 (목적)</h2><p>본 약관은 TeeUp 서비스의 이용과 관련하여 회사와 이용자 간의 권리, 의무 및 책임사항을 규정함을 목적으로 합니다.</p>',
+        'privacy': '<h2>제1조 (개인정보의 처리목적)</h2><p>회사는 다음의 목적을 위하여 개인정보를 처리합니다.</p>',
+        'collection': '<h2>제1조 (개인정보의 수집 및 이용목적)</h2><p>회사는 다음의 목적을 위하여 개인정보를 수집 및 이용합니다.</p>',
+        'marketing': '<h2>제1조 (마케팅정보 수신동의)</h2><p>회사는 이용자에게 다양한 정보를 제공하기 위해 마케팅 정보를 수신하는 것에 동의를 받습니다.</p>'
+    }
+    return contents.get(terms_type, '<p>약관 내용을 입력해주세요.</p>')
+
+# 비밀번호 재설정 관련 스키마
+class PasswordResetRequest(BaseModel):
+    nickname: str
+    email: str
+
+class PasswordResetTokenRequest(BaseModel):
+    token: str
+    new_password: str
+
+@router.post("/request-password-reset", response_model=MessageResponse)
+async def request_password_reset(
+    request_data: PasswordResetRequest,
+    db: Session = Depends(get_db)
+):
+    """비밀번호 재설정 요청 (닉네임+이메일 확인 후 인증 링크 전송)"""
+    try:
+        nickname = request_data.nickname.strip()
+        email = request_data.email.strip()
+        
+        # 입력값 유효성 검사
+        if not nickname or not email:
+            # 보안을 위해 항상 성공 메시지 반환
+            logger.warning("비밀번호 재설정 요청: 입력값 누락")
+            return MessageResponse(
+                success=True,
+                message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
+            )
+        
+        if not validate_email(email):
+            # 보안을 위해 항상 성공 메시지 반환
+            logger.warning(f"비밀번호 재설정 요청: 잘못된 이메일 형식 - {email}")
+            return MessageResponse(
+                success=True,
+                message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
+            )
+        
+        # 닉네임과 이메일이 일치하는 사용자 확인
+        user = db.query(User).filter(
+            User.nickname == nickname,
+            User.email == email,
+            User.status == UserStatus.ACTIVE,
+            User.deleted_at.is_(None),
+            User.provider == Provider.LOCAL  # 일반 회원가입 사용자만
+        ).first()
+        
+        # 사용자가 존재하는 경우에만 이메일 전송
+        if user:
+            try:
+                # 재설정 토큰 생성 (1시간 유효)
+                from datetime import timedelta
+                token_data = {
+                    "id": user.id,
+                    "email": user.email,
+                    "nickname": user.nickname,
+                    "type": "password_reset"
+                }
+                reset_token = jwt_auth.create_access_token(
+                    token_data,
+                    expires_delta=timedelta(hours=1)
+                )
+                
+                # 이메일 전송
+                from utils.email_service import send_password_reset_email
+                await send_password_reset_email(
+                    to=user.email,
+                    nickname=user.nickname,
+                    reset_token=reset_token
+                )
+                
+                logger.info(f"비밀번호 재설정 이메일 전송 성공: {user.email}")
+            except Exception as e:
+                logger.error(f"비밀번호 재설정 이메일 전송 실패: {str(e)}")
+                # 이메일 전송 실패해도 성공 메시지 반환 (보안)
+        
+        # 보안을 위해 항상 성공 메시지 반환 (사용자 존재 여부 노출 방지)
+        return MessageResponse(
+            success=True,
+            message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"비밀번호 재설정 요청 처리 중 오류: {str(e)}")
+        # 보안을 위해 항상 성공 메시지 반환
+        return MessageResponse(
+            success=True,
+            message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
+        )
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    request_data: PasswordResetTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """비밀번호 재설정 (토큰 기반)"""
+    try:
+        token = request_data.token
+        new_password = request_data.new_password
+        
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="토큰이 필요합니다."
+            )
+        
+        if not new_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="새 비밀번호를 입력해주세요."
+            )
+        
+        # 토큰 검증
+        try:
+            # password_reset 토큰은 type 체크를 건너뛰고 검증
+            # verify_token은 type이 "access"가 아니면 실패하므로, 
+            # decode_token을 사용하여 검증 없이 디코딩 후 수동으로 검증
+            payload = jwt_auth.decode_token(token)
+            
+            # 만료 시간 확인
+            exp = payload.get("exp")
+            if exp:
+                from datetime import timezone
+                exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
+                current_utc = get_kst_now().astimezone(timezone.utc)
+                if current_utc > exp_datetime:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="토큰이 만료되었습니다. 비밀번호 찾기를 다시 시도해주세요."
+                    )
+            
+            # 토큰 타입 확인
+            if payload.get("type") != "password_reset":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="유효하지 않은 토큰입니다."
+                )
+            
+            user_id = payload.get("id")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="유효하지 않은 토큰입니다."
+                )
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="토큰이 만료되었습니다. 비밀번호 찾기를 다시 시도해주세요."
+            )
+        except jwt.InvalidTokenError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="유효하지 않은 토큰입니다."
+            )
+        except Exception as e:
+            logger.error(f"토큰 검증 실패: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="유효하지 않은 토큰입니다."
+            )
+        
+        # 사용자 조회
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.status == UserStatus.ACTIVE,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 새 비밀번호 유효성 검사
+        password_validation = validate_password(new_password)
+        if not password_validation["is_valid"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="; ".join(password_validation["errors"])
+            )
+        
+        # 비밀번호 해시화 및 저장
+        new_password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+        user.password = new_password_hash
+        user.updated_at = get_kst_now()
+        
+        db.commit()
+        
+        logger.info(f"비밀번호 재설정 완료: user_id={user_id}")
+        
+        return MessageResponse(
+            success=True,
+            message="비밀번호가 성공적으로 재설정되었습니다."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"비밀번호 재설정 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )

@@ -1,0 +1,1605 @@
+"""
+모임 워크플로우 관리 API
+- 참가 신청 관리
+- 팀 편성 관리
+- 정산 관리
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, and_, or_
+from typing import List, Optional
+from datetime import datetime, time
+import logging
+from utils.datetime_utils import get_kst_now
+
+from database import get_db
+from models import (
+    User, Club, ClubMembership, Meeting, MeetingParticipant, 
+    Team, TeamMember, Expense, ExpenseParticipant,
+    Notification, MeetingResult, Guest, ParticipantType
+)
+from schemas import (
+    MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod,
+    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole,
+    ClubRole, NotificationType, NotificationStatus
+)
+from schemas import (
+    RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, 
+    MeetingResponse, MeetingParticipantResponse, PaginatedResponse,
+    TeamFormationRequest, TeamFormationResponse, TeamFormationMode
+)
+from routers.auth import get_current_active_user, get_current_user
+from routers.auth import get_current_user_or_admin
+from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.handicap_calculator import process_meeting_completion
+from utils.team_formation import TeamFormationEngine
+
+router = APIRouter(prefix="/meetings", tags=["meeting-workflow"])
+logger = logging.getLogger(__name__)
+
+# 한국 시간 기준으로 application_deadline이 지났는지 확인하는 헬퍼 함수
+def is_application_deadline_passed(application_deadline):
+    """한국 시간 기준으로 신청 마감일이 지났는지 확인"""
+    if not application_deadline:
+        return False
+    # 한국 시간으로 저장되어 있으므로 직접 비교 (서버가 한국 시간대이므로)
+    return datetime.now() > application_deadline
+
+# =============================================================================
+# 참가 신청 관리 API
+# =============================================================================
+
+@router.post("/{meeting_id}/apply")
+async def apply_to_meeting(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """모임 참가 신청 (일반회원/리더/매니저 구분없이)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 클럽 멤버십 확인
+        membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        ).first()
+        
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="클럽 멤버만 참가 신청할 수 있습니다."
+            )
+        
+        # 이미 참가 신청했는지 확인
+        existing_participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id
+        ).first()
+        
+        if existing_participant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 참가 신청한 모임입니다."
+            )
+        
+        # 참가 신청 마감 확인 (한국 시간 기준으로 비교)
+        if is_application_deadline_passed(meeting.application_deadline):
+            # 자동 마감 시 알림 전송 (한 번만)
+            if not meeting.application_closed_early:
+                await send_application_closed_notification(meeting_id, db, is_early=False)
+                meeting.application_closed_early = True  # 알림 전송 표시
+                db.commit()
+            
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="참가 신청 마감되었습니다."
+            )
+        
+        # 조기 마감 확인
+        if meeting.application_closed_early:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="참가 신청이 조기 마감되었습니다."
+            )
+        
+        # 참가자 수 확인 (max_participants가 null이면 제한 없음)
+        if meeting.max_participants is not None:
+            current_participants = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+            ).count()
+            
+            if current_participants >= meeting.max_participants:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="모임 정원이 마감되었습니다."
+                )
+        
+        # 참가자 생성 (클럽 역할에 따라)
+        # 클럽에서의 역할을 조회하여 모임 참가자 역할 결정
+        club_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.user_id == current_user.id
+        ).first()
+        
+        # 클럽 역할에 따라 모임 참가자 역할 매핑
+        # 리더/매니저는 PARTICIPANT 역할로 설정 (권한은 별도 체크)
+        if club_membership:
+            if club_membership.role == ClubRole.LEADER:
+                participant_role = MeetingParticipantRole.PARTICIPANT
+            elif club_membership.role == ClubRole.MANAGER:
+                participant_role = MeetingParticipantRole.PARTICIPANT
+            else:
+                participant_role = MeetingParticipantRole.PARTICIPANT
+        else:
+            participant_role = MeetingParticipantRole.PARTICIPANT
+        
+        participant = MeetingParticipant(
+            meeting_id=meeting_id,
+            user_id=current_user.id,
+            participant_type=ParticipantType.USER,
+            status=MeetingParticipantStatus.PENDING,  # 매니저/리더 승인 대기
+            role=participant_role
+        )
+        
+        db.add(participant)
+        db.commit()
+        db.refresh(participant)
+        
+        return {"message": "참가 신청이 완료되었습니다. 매니저/리더의 승인을 기다려주세요."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"참가 신청 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/participants/{participant_id}/approve")
+async def approve_participant(
+    meeting_id: int,
+    participant_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """참가자 승인 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 참가자를 승인할 수 있습니다."
+            )
+        
+        # 승인할 참가자 조회
+        target_participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.id == participant_id,
+            MeetingParticipant.meeting_id == meeting_id
+        ).first()
+        
+        if not target_participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="참가자를 찾을 수 없습니다."
+            )
+        
+        # 참가자 수 확인 (max_participants가 null이면 제한 없음)
+        if meeting.max_participants is not None:
+            current_participants = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            ).count()
+            
+            if current_participants >= meeting.max_participants:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="모임 정원이 마감되었습니다."
+                )
+        
+        # 승인 처리
+        target_participant.status = MeetingParticipantStatus.CONFIRMED
+        db.commit()
+        
+        return {"message": "참가자가 승인되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"참가자 승인 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/participants/{participant_id}/reject")
+async def reject_participant(
+    meeting_id: int,
+    participant_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """참가자 거절 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 참가자를 거절할 수 있습니다."
+            )
+        
+        # 거절할 참가자 조회
+        target_participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.id == participant_id,
+            MeetingParticipant.meeting_id == meeting_id
+        ).first()
+        
+        if not target_participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="참가자를 찾을 수 없습니다."
+            )
+        
+        # 거절 처리
+        target_participant.status = MeetingParticipantStatus.REJECTED
+        db.commit()
+        
+        return {"message": "참가자가 거절되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"참가자 거절 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/close-application")
+async def close_application_early(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """참가 신청 조기 마감 (매니저/리더만 가능)"""
+    try:
+        logger.info(f"참가 신청 조기 마감 요청 - meeting_id: {meeting_id}, user_id: {current_user.id}")
+        
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        logger.info(f"모임 조회 성공 - meeting_id: {meeting_id}, status: {meeting.status}, application_closed_early: {getattr(meeting, 'application_closed_early', False)}")
+        
+        # 클럽 멤버십 확인
+        membership = db.query(ClubMembership).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        ).first()
+        
+        if not membership:
+            logger.error(f"클럽 멤버십 없음 - user_id: {current_user.id}, club_id: {meeting.club_id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="해당 클럽의 멤버가 아닙니다."
+            )
+        
+        logger.info(f"클럽 멤버십 확인 성공 - user_id: {current_user.id}, club_id: {meeting.club_id}")
+        
+        # 이미 조기 마감된 경우
+        if meeting.application_closed_early:
+            logger.info(f"이미 조기 마감된 모임 - meeting_id: {meeting_id}")
+            return {
+                "message": "이미 조기 마감된 모임입니다.",
+                "outcome": "ALREADY_CLOSED"
+            }
+        
+        # 조기 마감 처리
+        meeting.application_closed_early = True
+        logger.info(f"조기 마감 플래그 설정 - meeting_id: {meeting_id}")
+        
+        try:
+            confirmed_count = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            ).count()
+            
+            logger.info(f"확정 참가자 수: {confirmed_count}명 - meeting_id: {meeting_id}")
+            
+            # 확정 참가자가 4명 이상이면 팀 편성 단계로 이동 안내
+            if confirmed_count >= 4:
+                logger.info(f"팀 편성 준비 - meeting_id: {meeting_id}, confirmed_count: {confirmed_count}")
+                db.commit()
+                try:
+                    await send_application_closed_notification(
+                        meeting_id,
+                        db,
+                        is_early=True,
+                        outcome="TEAM_FORMATION_READY",
+                        confirmed_count=confirmed_count
+                    )
+                except Exception as notif_error:
+                    logger.error(f"알림 전송 실패 (팀 편성 준비): {notif_error}", exc_info=True)
+                return {
+                    "message": "참가 신청이 조기 마감되었습니다.\n팀 편성을 준비해주세요.",
+                    "outcome": "TEAM_FORMATION_READY",
+                    "confirmed_count": confirmed_count
+                }
+            
+            # 확정 참가자가 부족하면 모임 자동 취소
+            logger.info(f"모임 자동 취소 처리 시작 - meeting_id: {meeting_id}, confirmed_count: {confirmed_count}")
+            meeting.status = MeetingStatus.CANCELED
+            meeting.cancel_reason = "확정 인원 미달로 모임이 자동 취소되었습니다."
+            meeting.updated_at = datetime.now()
+            db.commit()
+            logger.info(f"모임 상태 취소로 변경 완료 - meeting_id: {meeting_id}")
+            
+            try:
+                await send_application_closed_notification(
+                    meeting_id,
+                    db,
+                    is_early=True,
+                    outcome="AUTO_CANCELED",
+                    confirmed_count=confirmed_count
+                )
+                logger.info(f"알림 전송 완료 - meeting_id: {meeting_id}")
+            except Exception as notif_error:
+                logger.error(f"알림 전송 실패 (자동 취소): {notif_error}", exc_info=True)
+                # 알림 전송 실패해도 취소는 이미 완료되었으므로 계속 진행
+            
+            return {
+                "message": "확정 인원이 부족하여 \n 모임이 자동 취소되었습니다.",
+                "outcome": "AUTO_CANCELED",
+                "confirmed_count": confirmed_count
+            }
+        except Exception as inner_error:
+            logger.error(f"조기 마감 처리 중 내부 오류: {inner_error}", exc_info=True)
+            db.rollback()
+            raise
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"참가 신청 조기 마감 오류: {e}", exc_info=True)
+        import traceback
+        logger.error(f"트레이스백: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.get("/{meeting_id}/application-status")
+async def get_application_status(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """참가 신청 현황 조회 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 클럽 멤버십 확인
+        membership = db.query(ClubMembership).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        ).first()
+        
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="해당 클럽의 멤버가 아닙니다."
+            )
+        
+        # 참가자 현황 조회
+        pending_participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.PENDING
+        ).count()
+        
+        confirmed_participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).count()
+        
+        total_applications = pending_participants + confirmed_participants
+        
+        return {
+            "meeting_id": meeting_id,
+            "max_participants": meeting.max_participants,
+            "total_applications": total_applications,
+            "pending_count": pending_participants,
+            "confirmed_count": confirmed_participants,
+            "application_closed_early": meeting.application_closed_early,
+            "application_deadline": meeting.application_deadline.isoformat() if meeting.application_deadline else None,
+            "can_start_team_formation": meeting.application_closed_early or is_application_deadline_passed(meeting.application_deadline)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"참가 신청 현황 조회 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/start-team-formation")
+async def start_team_formation(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """팀 편성 시작 (모집마감 후에만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 소셜 모임은 팀 편성 기능을 지원하지 않음
+        if meeting.meeting_type == MeetingType.SOCIAL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="소셜 모임은 팀 편성 기능을 지원하지 않습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 팀 편성을 시작할 수 있습니다."
+            )
+        
+        # 모집마감 확인
+        is_closed = meeting.application_closed_early or is_application_deadline_passed(meeting.application_deadline)
+        if not is_closed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="모집이 마감되지 않았습니다. 먼저 모집을 마감해주세요."
+            )
+        
+        # 확정된 참가자 수 확인
+        confirmed_participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).count()
+        
+        # 라운딩 모임은 최소 4명, 소셜 모임은 최소 2명 필요
+        min_participants = 4 if meeting.meeting_type == MeetingType.ROUND else 2
+        if confirmed_participants < min_participants:
+            meeting_type_name = "라운딩" if meeting.meeting_type == MeetingType.ROUND else "소셜"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{meeting_type_name} 모임의 팀 편성을 위해서는 최소 {min_participants}명의 확정된 참가자가 필요합니다."
+            )
+        
+        # 대기 중인 참가자가 있는지 확인
+        pending_participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.PENDING
+        ).count()
+        
+        if pending_participants > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="대기 중인 참가자가 있습니다. 모든 참가자를 승인하거나 거절해주세요."
+            )
+        
+        return {
+            "message": "팀 편성을 시작할 수 있습니다.",
+            "confirmed_participants": confirmed_participants,
+            "can_auto_form": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"팀 편성 시작 확인 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# =============================================================================
+# 팀 편성 관리 API
+# =============================================================================
+
+@router.post("/{meeting_id}/teams/auto-formation", response_model=TeamFormationResponse)
+async def auto_form_teams(
+    meeting_id: int,
+    formation_request: TeamFormationRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """자동 팀 편성 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 소셜 모임은 팀 편성 기능을 지원하지 않음
+        if meeting.meeting_type == MeetingType.SOCIAL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="소셜 모임은 팀 편성 기능을 지원하지 않습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 팀을 편성할 수 있습니다."
+            )
+        
+        # 모집마감 확인
+        is_closed = meeting.application_closed_early or is_application_deadline_passed(meeting.application_deadline)
+        if not is_closed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="모집이 마감되지 않았습니다. 먼저 모집을 마감해주세요."
+            )
+        
+        # 대기 중인 참가자가 있는지 확인
+        pending_participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.PENDING
+        ).count()
+        
+        if pending_participants > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="대기 중인 참가자가 있습니다. 모든 참가자를 승인하거나 거절해주세요."
+            )
+        
+        # 확정된 참가자 조회 (게스트 포함)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).options(joinedload(MeetingParticipant.user)).all()
+        
+        # 라운딩 모임은 최소 4명, 소셜 모임은 최소 2명 필요
+        min_participants = 4 if meeting.meeting_type == MeetingType.ROUND else 2
+        if len(participants) < min_participants:
+            meeting_type_name = "라운딩" if meeting.meeting_type == MeetingType.ROUND else "소셜"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{meeting_type_name} 모임의 팀 편성을 위해서는 최소 {min_participants}명의 참가자가 필요합니다."
+            )
+        
+        # 팀 편성 실행 (TeamFormationEngine 사용)
+        formation_engine = TeamFormationEngine(db)
+        teams = formation_engine.create_teams_from_formation(
+            meeting_id, formation_request, participants
+        )
+        
+        # 편성 결과 조회 및 응답 생성
+        from schemas import TeamResponse, TeamMemberResponse, TeamStatus
+        
+        team_responses = []
+        for team in teams:
+            members = []
+            for team_member in team.members:
+                # user_id 또는 guest_id를 통해 MeetingParticipant 조회
+                if team_member.user_id:
+                    participant = db.query(MeetingParticipant).filter(
+                        MeetingParticipant.meeting_id == meeting_id,
+                        or_(
+                (MeetingParticipant.user_id == team_member.user_id) if team_member.user_id else False,
+                (MeetingParticipant.guest_id == team_member.guest_id) if team_member.guest_id else False
+            )
+                    ).first()
+                elif team_member.guest_id:
+                    participant = db.query(MeetingParticipant).filter(
+                        MeetingParticipant.meeting_id == meeting_id,
+                        MeetingParticipant.guest_id == team_member.guest_id
+                    ).first()
+                else:
+                    continue
+                
+                if not participant:
+                    continue
+                
+                # 게스트인 경우와 멤버인 경우 구분
+                gender = None
+                handicap_index = None
+                recent_avg_score = None
+                
+                if participant.guest_id:
+                    # guest_id를 통해 Guest 모델에서 정보 조회
+                    guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
+                    if guest:
+                        user_name = guest.name or "게스트"
+                        user_nickname = guest.name or "게스트"
+                        gender = guest.gender.value if guest.gender else None
+                        handicap_index = int(guest.handicap) if guest.handicap else None
+                    else:
+                        user_name = "게스트"
+                        user_nickname = "게스트"
+                        gender = None
+                        handicap_index = None
+                else:
+                    user = participant.user
+                    if not user:
+                        continue
+                    user_name = user.realname or user.nickname or "이름 없음"
+                    user_nickname = user.nickname or "닉네임 없음"
+                    gender = user.gender.value if user.gender else None
+                    handicap_index = participant.handicap_index
+                    
+                    # MeetingResult에서 실제 직전 대회 성적 조회
+                    recent_avg_score = None
+                    if participant.user_id:
+                        last_result = db.query(MeetingResult).filter(
+                            MeetingResult.user_id == participant.user_id,
+                            MeetingResult.meeting_id != meeting_id  # 현재 모임 제외
+                        ).order_by(MeetingResult.completed_at.desc()).first()
+                        
+                        if last_result:
+                            recent_avg_score = last_result.gross_score
+                
+                members.append(TeamMemberResponse(
+                    id=team_member.id,                    team_id=team.id,
+                    user_id=team_member.user_id,
+                    user_name=user_name,
+                    user_nickname=user_nickname,
+                    order=team_member.order,
+                    gender=gender,
+                    handicap_index=handicap_index,
+                    recent_avg_score=recent_avg_score,
+                    created_at=team_member.created_at
+                ))
+            
+            team_responses.append(TeamResponse(
+                id=team.id,                name=team.name,
+                meeting_id=team.meeting_id,
+                formation_mode=formation_request.formation_mode,
+                status=TeamStatus.DRAFT,
+                formation_notes=team.formation_notes,
+                member_count=len(members),
+                members=members,
+                total_handicap=float(team.total_handicap) if team.total_handicap else None,
+                created_at=team.created_at,
+                updated_at=team.updated_at
+            ))
+        
+        # 편성 요약 생성
+        formation_summary = formation_engine.get_formation_summary(teams)
+        
+        return TeamFormationResponse(
+            teams=team_responses,
+            total_teams=len(teams),
+            unassigned_participants=[],
+            total_participants=len(participants),
+            formation_summary=formation_summary
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"자동 팀 편성 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/teams/confirm")
+async def confirm_team_formation(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """팀 편성 확정 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 팀 편성을 확정할 수 있습니다."
+            )
+        
+        # 팀 편성 확정
+        teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
+        for team in teams:
+            team.is_confirmed = True
+            team.status = "CONFIRMED"
+        
+        # 확정일자 저장
+        meeting.team_formation_confirmed_at = datetime.now()
+        
+        db.commit()
+        db.refresh(meeting)
+        
+        logger.info(f"팀 편성 확정 완료 - meeting_id: {meeting_id}, team_formation_confirmed_at: {meeting.team_formation_confirmed_at}")
+        
+        # 팀 편성 완료 알림 전송 (참가자들에게)
+        try:
+            logger.info(f"팀 편성 완료 알림 전송 시작 - meeting_id: {meeting_id}")
+            await send_team_formation_completed_notification(meeting_id, db)
+            logger.info(f"팀 편성 완료 알림 전송 완료 - meeting_id: {meeting_id}")
+        except Exception as e:
+            logger.error(f"팀 편성 완료 알림 전송 실패: {str(e)}", exc_info=True)
+        
+        return {"message": "팀 편성이 확정되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"팀 편성 확정 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/teams/{team_id}/members/{member_id}/confirm")
+async def confirm_team_member(
+    meeting_id: int,
+    team_id: int,
+    member_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """팀 편성 확인 완료 (참가자 본인만 가능)"""
+    try:
+        # 팀 멤버 조회
+        team_member = db.query(TeamMember).join(Team).filter(
+            TeamMember.id == member_id,
+            Team.id == team_id,
+            Team.meeting_id == meeting_id
+        ).first()
+        
+        if not team_member:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="팀 멤버를 찾을 수 없습니다."
+            )
+        
+        # 참가자 확인 (user_id를 통해 조회)
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            or_(
+                (MeetingParticipant.user_id == team_member.user_id) if team_member.user_id else False,
+                (MeetingParticipant.guest_id == team_member.guest_id) if team_member.guest_id else False
+            )
+        ).first()
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="참가자를 찾을 수 없습니다."
+            )
+        
+        if participant.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="본인의 팀 편성만 확인할 수 있습니다."
+            )
+        
+        # 확인 완료 처리
+        team_member.confirmation_checked = True
+        db.commit()
+        
+        return {"message": "팀 편성 확인이 완료되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"팀 편성 확인 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# =============================================================================
+# 모임 진행 시작 API
+# =============================================================================
+
+@router.post("/{meeting_id}/start-rounding")
+async def start_rounding(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_or_admin)
+):
+    """모임 진행 시작 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 모임을 진행할 수 있습니다."
+            )
+        
+        # 팀 편성 확정 확인
+        if not meeting.team_formation_confirmed_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="팀 편성이 확정되지 않았습니다."
+            )
+        
+        # 이미 진행 중인지 확인
+        if meeting.rounding_started_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 모임이 진행 중입니다."
+            )
+        
+        # 모임 진행 시작
+        meeting.rounding_started_at = get_kst_now()
+        db.commit()
+        db.refresh(meeting)
+        
+        logger.info(f"모임 {meeting_id} 진행 시작: rounding_started_at = {meeting.rounding_started_at}")
+        
+        return {
+            "message": "모임 진행이 시작되었습니다.",
+            "rounding_started_at": meeting.rounding_started_at
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모임 진행 시작 오류: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/complete-rounding")
+async def complete_rounding(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_or_admin)
+):
+    """라운딩 종료 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 라운딩 모임 확인
+        if meeting.meeting_type != MeetingType.ROUND:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="라운딩 모임이 아닙니다."
+            )
+        
+        # 매니저/리더 권한 확인
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 라운딩을 종료할 수 있습니다."
+            )
+        
+        # 모임 진행 중인지 확인
+        if not meeting.rounding_started_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="모임이 진행 중이 아닙니다."
+            )
+        
+        # 이미 종료되었는지 확인
+        if meeting.rounding_completed_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 라운딩이 종료되었습니다."
+            )
+        
+        # 라운딩 종료
+        meeting.rounding_completed_at = get_kst_now()
+        db.commit()
+        db.refresh(meeting)
+        
+        logger.info(f"라운딩 {meeting_id} 종료: rounding_completed_at = {meeting.rounding_completed_at}")
+        
+        # 라운딩 종료 알림 전송
+        try:
+            await send_rounding_completed_notification(meeting_id, db)
+        except Exception as e:
+            logger.error(f"라운딩 종료 알림 전송 실패: {str(e)}", exc_info=True)
+        
+        return {
+            "message": "라운딩이 종료되었습니다.",
+            "rounding_completed_at": meeting.rounding_completed_at
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"라운딩 종료 오류: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# =============================================================================
+# 모임 완료 및 정산 관리 API
+# =============================================================================
+
+@router.post("/{meeting_id}/complete")
+async def complete_meeting(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """모임 완료 체크 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 모임을 완료 처리할 수 있습니다."
+            )
+        
+        # 모임 완료 처리
+        meeting.is_completed = True
+        meeting.status = MeetingStatus.COMPLETED
+        db.commit()
+        
+        # 모든 참가자 스코어 히스토리 저장 및 핸디캡 자동 업데이트
+        try:
+            result = process_meeting_completion(db, meeting_id, score_count=5)
+            logger.info(f"모임 완료 시 스코어 처리 결과: {result}")
+        except Exception as e:
+            # 스코어 처리 실패해도 모임 완료는 성공으로 처리
+            logger.error(f"모임 완료 시 스코어 처리 실패: {str(e)}")
+        
+        # 모임 완료 알림 전송
+        try:
+            await send_meeting_completed_notification(meeting_id, db)
+        except Exception as e:
+            logger.error(f"모임 완료 알림 전송 실패: {str(e)}")
+        
+        return {"message": "모임이 완료 처리되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모임 완료 처리 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+@router.get("/{meeting_id}/results")
+async def get_meeting_results(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """모임별 전체 성적 조회"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # MeetingResult와 UserScoreHistory 조인 조회 (순위 순으로 정렬)
+        from models import UserScoreHistory
+        from sqlalchemy import asc
+        results = db.query(MeetingResult, UserScoreHistory).join(
+            UserScoreHistory,
+            (UserScoreHistory.meeting_id == MeetingResult.meeting_id) &
+            (UserScoreHistory.user_id == MeetingResult.user_id)
+        ).filter(
+            MeetingResult.meeting_id == meeting_id
+        ).order_by(
+            asc(MeetingResult.rank),
+            asc(UserScoreHistory.net_score)
+        ).all()
+        
+        # 사용자 정보 포함하여 응답 생성
+        result_list = []
+        for result, score_history in results:
+            user = db.query(User).filter(User.id == result.user_id).first()
+            result_list.append({
+                "id": result.id,                "meeting_id": result.meeting_id,
+                "user_id": result.user_id,
+                "user_nickname": user.nickname if user else None,
+                "gross_score": score_history.gross_score,
+                "net_score": float(score_history.net_score) if score_history.net_score else None,
+                "rank": result.rank,
+                "handicap_used": float(score_history.handicap_used) if score_history.handicap_used else None,
+                "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+                "created_at": result.created_at.isoformat() if result.created_at else None
+            })
+        
+        return {
+            "meeting_id": meeting_id,
+            "meeting_name": meeting.name,
+            "total_participants": len(result_list),
+            "results": result_list
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모임 성적 조회 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="모임 성적을 조회하는 중 오류가 발생했습니다."
+        )
+
+@router.post("/{meeting_id}/settlement/confirm")
+async def confirm_settlement(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_or_admin)
+):
+    """정산 확정 (매니저/리더만 가능)"""
+    try:
+        # 모임 존재 확인
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="모임을 찾을 수 없습니다."
+            )
+        
+        # 매니저/리더 권한 확인 (주최자 또는 참가자이면서 클럽 리더/매니저)
+        from routers.meeting_settlement import can_manage_settlement
+        
+        if not can_manage_settlement(meeting_id, current_user.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="매니저/리더만 정산을 확정할 수 있습니다."
+            )
+        
+        # 정산 확정 처리
+        meeting.settlement_confirmed = True
+        db.commit()
+        db.refresh(meeting)  # meeting 객체 갱신
+        
+        # 정산 완료 알림 전송 (소셜모임과 라운딩 모임 구분)
+        try:
+            from utils.notification_service import create_social_settlement_completed_notification
+            from models import Club
+            
+            # 클럽 정보 조회
+            club = db.query(Club).filter(Club.id == meeting.club_id).first()
+            club_name = club.name if club else "알 수 없는 클럽"
+            
+            # 소셜모임인 경우 별도 알림 전송
+            if meeting.meeting_type == MeetingType.SOCIAL:
+                # 참가자들 조회 (CONFIRMED 상태)
+                participants = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+                ).all()
+                
+                for participant in participants:
+                    create_social_settlement_completed_notification(
+                        db=db,
+                        user_id=participant.user_id,
+                        meeting_name=meeting.name,
+                        club_name=club_name,
+                        meeting_id=meeting_id
+                    )
+            else:
+                # 라운딩 모임인 경우 정산 완료 알림 전송 (모임 종료 알림)
+                await send_settlement_completed_notification(meeting_id, db)
+        except Exception as e:
+            logger.error(f"정산 완료 알림 전송 실패: {str(e)}", exc_info=True)
+        
+        return {"message": "정산이 확정되었습니다."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"정산 확정 오류: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+# =============================================================================
+# 알림 관련 헬퍼 함수
+# =============================================================================
+
+async def send_application_closed_notification(
+    meeting_id: int,
+    db: Session,
+    is_early: bool = False,
+    outcome: Optional[str] = None,
+    confirmed_count: Optional[int] = None
+):
+    """모집 마감 시 참가자들에게 알림 전송"""
+    try:
+        # 모임 정보 조회
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            return
+        
+        # 클럽 정보 조회
+        club = db.query(Club).filter(Club.id == meeting.club_id).first()
+        club_name = club.name if club else "알 수 없는 클럽"
+        
+        # 참가 신청자들 조회 (PENDING, CONFIRMED 상태)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status.in_([MeetingParticipantStatus.PENDING, MeetingParticipantStatus.CONFIRMED])
+        ).all()
+        
+        if not participants:
+            logger.info(f"알림을 받을 참가자가 없습니다: {meeting_id}")
+            return
+        
+        # 알림 메시지 생성
+        # meeting_time 안전하게 포맷팅
+        meeting_time_str = "미정"
+        if meeting.meeting_time:
+            try:
+                if isinstance(meeting.meeting_time, datetime):
+                    meeting_time_str = meeting.meeting_time.strftime('%Y년 %m월 %d일 %H:%M')
+                else:
+                    meeting_time_str = str(meeting.meeting_time)
+            except Exception as e:
+                logger.error(f"모임 시간 포맷팅 실패: {e}")
+                meeting_time_str = str(meeting.meeting_time) if meeting.meeting_time else "미정"
+        
+        if is_early:
+            if outcome == "AUTO_CANCELED":
+                title = f"모임 자동 취소 - {meeting.name}"
+                content = f"""
+{club_name}의 모임 '{meeting.name}'이 확정 인원 미달로 자동 취소되었습니다.
+
+📅 모임 일시: {meeting_time_str}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+모임 준비에 도움 주신 모든 분들께 감사드립니다.
+다음 모임에서 다시 만나요!
+                """.strip()
+            elif outcome == "TEAM_FORMATION_READY":
+                title = f"모집 조기 마감 - {meeting.name}"
+                content = f"""
+{club_name}의 모임 '{meeting.name}' 모집이 조기 마감되었습니다.
+
+📅 모임 일시: {meeting_time_str}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+확정 인원: {confirmed_count or 0}명
+
+확정된 참가자 기준으로 팀 편성을 준비해주세요.
+모임 매니저는 팀 편성을 진행하고 참가자분들은 안내를 기다려주세요.
+                """.strip()
+            else:
+                title = f"모집 조기 마감 - {meeting.name}"
+                content = f"""
+{club_name}의 모임 '{meeting.name}' 모집이 조기 마감되었습니다.
+
+📅 모임 일시: {meeting_time_str}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+모집이 조기 마감되어 더 이상 신청을 받지 않습니다.
+확정된 참가자들은 모임 준비를 해주세요!
+                """.strip()
+        else:
+            title = f"모집 마감 - {meeting.name}"
+            content = f"""
+{club_name}의 모임 '{meeting.name}' 모집이 마감되었습니다.
+
+📅 모임 일시: {meeting_time_str}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+모집 마감으로 인해 더 이상 신청을 받지 않습니다.
+확정된 참가자들은 모임 준비를 해주세요!
+            """.strip()
+        
+        # 각 참가자에게 알림 전송
+        sent_count = 0
+        for participant in participants:
+            try:
+                notification = Notification(
+                    user_id=participant.user_id,
+                    type=NotificationType.MEETING_CANCELLATION.value,  # 모집 마감 알림으로 사용
+                    title=title,
+                    content=content,
+                    status=NotificationStatus.UNREAD.value
+                )
+                
+                db.add(notification)
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"모집 마감 알림 생성 실패 - user_id: {participant.user_id}, error: {str(e)}", exc_info=True)
+                continue
+        
+        if sent_count > 0:
+            try:
+                db.commit()
+                logger.info(f"모집 마감 알림 전송 완료 - meeting_id: {meeting_id}, sent_count: {sent_count}")
+            except Exception as commit_error:
+                logger.error(f"모집 마감 알림 커밋 실패: {commit_error}", exc_info=True)
+                db.rollback()
+                raise
+        else:
+            logger.info(f"모집 마감 알림 전송 건수 없음 - meeting_id: {meeting_id}")
+        
+    except Exception as e:
+        logger.error(f"모집 마감 알림 전송 오류: {str(e)}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"롤백 실패: {rollback_error}")
+
+async def send_settlement_completed_notification(meeting_id: int, db: Session):
+    """정산 완료 시 참가자들에게 알림 전송"""
+    try:
+        # 모임 정보 조회
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            return
+        
+        # 클럽 정보 조회
+        club = db.query(Club).filter(Club.id == meeting.club_id).first()
+        club_name = club.name if club else "알 수 없는 클럽"
+        
+        # 참가자들 조회 (CONFIRMED 상태)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).all()
+        
+        if not participants:
+            logger.info(f"알림을 받을 참가자가 없습니다: {meeting_id}")
+            return
+        
+        # 알림 메시지 생성 (모임 종료 알림)
+        title = f"모임 종료 - {meeting.name}"
+        meeting_time_str = meeting.meeting_time.strftime('%Y년 %m월 %d일 %H:%M') if meeting.meeting_time else '미정'
+        content = f"""
+{club_name}의 라운딩 모임 '{meeting.name}'이 종료되었습니다!
+
+📅 모임 일시: {meeting_time_str}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+정산이 완료되어 각자의 부담금이 확정되었습니다.
+정산 내역을 확인해보세요!
+        """.strip()
+        
+        # 각 참가자에게 알림 전송
+        sent_count = 0
+        for participant in participants:
+            try:
+                notification = Notification(
+                    user_id=participant.user_id,
+                    type=NotificationType.MEETING_SETTLEMENT_COMPLETED.value,
+                    title=title,
+                    content=content,
+                    status=NotificationStatus.UNREAD.value
+                )
+                
+                db.add(notification)
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"정산 완료 알림 생성 실패 - user_id: {participant.user_id}, error: {str(e)}")
+                continue
+        
+        db.commit()
+        logger.info(f"정산 완료 알림 전송 완료 - meeting_id: {meeting_id}, sent_count: {sent_count}")
+        
+    except Exception as e:
+        logger.error(f"정산 완료 알림 전송 오류: {str(e)}")
+        db.rollback()
+
+async def send_team_formation_completed_notification(meeting_id: int, db: Session):
+    """팀 편성 완료 시 참가자들에게 알림 전송"""
+    try:
+        # 모임 정보 조회
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            return
+        
+        # 클럽 정보 조회
+        club = db.query(Club).filter(Club.id == meeting.club_id).first()
+        club_name = club.name if club else "알 수 없는 클럽"
+        
+        # 참가자들 조회 (CONFIRMED 상태, 게스트 제외)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
+            MeetingParticipant.is_guest == False
+        ).all()
+        
+        logger.info(f"팀 편성 완료 알림 - meeting_id: {meeting_id}, 참가자 수: {len(participants)}")
+        
+        if not participants:
+            logger.warning(f"알림을 받을 참가자가 없습니다: {meeting_id}")
+            return
+        
+        # 알림 메시지 생성
+        title = f"팀 편성이 완료되었습니다"
+        content = f"""
+{club_name}의 라운딩 모임 '{meeting.name}' 팀 편성이 완료되었습니다.
+
+📅 모임 일시: {meeting.meeting_time.strftime('%Y년 %m월 %d일 %H:%M') if meeting.meeting_time else '미정'}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+팀 편성 결과를 확인해보세요!
+        """.strip()
+        
+        # 각 참가자에게 알림 전송
+        sent_count = 0
+        for participant in participants:
+            # user_id가 없는 경우 건너뛰기
+            if not participant.user_id:
+                logger.warning(f"user_id가 없는 참가자 건너뛰기 - participant_id: {participant.id}, meeting_id: {meeting_id}")
+                continue
+            
+            try:
+                notification = Notification(
+                    user_id=participant.user_id,
+                    type=NotificationType.TEAM_FORMATION_COMPLETED.value,
+                    title=title,
+                    content=content,
+                    status=NotificationStatus.UNREAD.value
+                )
+                
+                db.add(notification)
+                sent_count += 1
+                logger.debug(f"팀 편성 완료 알림 추가 - user_id: {participant.user_id}, meeting_id: {meeting_id}")
+                
+            except Exception as e:
+                logger.error(f"팀 편성 완료 알림 생성 실패 - user_id: {participant.user_id}, error: {str(e)}", exc_info=True)
+                continue
+        
+        if sent_count > 0:
+            try:
+                db.commit()
+                logger.info(f"팀 편성 완료 알림 전송 완료 - meeting_id: {meeting_id}, sent_count: {sent_count}")
+            except Exception as commit_error:
+                logger.error(f"팀 편성 완료 알림 커밋 실패: {commit_error}", exc_info=True)
+                db.rollback()
+                raise
+        else:
+            logger.warning(f"팀 편성 완료 알림 전송 건수 없음 - meeting_id: {meeting_id}, 참가자 수: {len(participants)}")
+        
+    except Exception as e:
+        logger.error(f"팀 편성 완료 알림 전송 오류: {str(e)}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"롤백 실패: {rollback_error}")
+
+async def send_rounding_completed_notification(meeting_id: int, db: Session):
+    """라운딩 종료 시 참가자들에게 알림 전송"""
+    try:
+        # 모임 정보 조회
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            return
+        
+        # 클럽 정보 조회
+        club = db.query(Club).filter(Club.id == meeting.club_id).first()
+        club_name = club.name if club else "알 수 없는 클럽"
+        
+        # 참가자들 조회 (CONFIRMED 상태)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).all()
+        
+        if not participants:
+            logger.info(f"알림을 받을 참가자가 없습니다: {meeting_id}")
+            return
+        
+        # 알림 메시지 생성
+        title = f"라운딩 종료 - {meeting.name}"
+        content = f"""
+{club_name}의 라운딩 모임 '{meeting.name}'이 종료되었습니다!
+
+📅 모임 일시: {meeting.meeting_time.strftime('%Y년 %m월 %d일 %H:%M') if meeting.meeting_time else '미정'}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+라운딩이 성공적으로 종료되었습니다.
+정산 및 후속 처리가 진행될 예정입니다.
+
+수고하셨습니다!
+        """.strip()
+        
+        # 각 참가자에게 알림 전송
+        sent_count = 0
+        for participant in participants:
+            try:
+                notification = Notification(
+                    user_id=participant.user_id,
+                    type=NotificationType.MEETING_COMPLETED.value,
+                    title=title,
+                    content=content,
+                    status=NotificationStatus.UNREAD.value
+                )
+                
+                db.add(notification)
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"라운딩 종료 알림 생성 실패 - user_id: {participant.user_id}, error: {str(e)}")
+                continue
+        
+        db.commit()
+        logger.info(f"라운딩 종료 알림 전송 완료 - meeting_id: {meeting_id}, sent_count: {sent_count}")
+        
+    except Exception as e:
+        logger.error(f"라운딩 종료 알림 전송 오류: {str(e)}")
+        db.rollback()
+
+async def send_meeting_completed_notification(meeting_id: int, db: Session):
+    """모임 완료 시 참가자들에게 알림 전송"""
+    try:
+        # 모임 정보 조회
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            logger.error(f"모임을 찾을 수 없습니다: {meeting_id}")
+            return
+        
+        # 클럽 정보 조회
+        club = db.query(Club).filter(Club.id == meeting.club_id).first()
+        club_name = club.name if club else "알 수 없는 클럽"
+        
+        # 참가자들 조회 (CONFIRMED 상태)
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).all()
+        
+        if not participants:
+            logger.info(f"알림을 받을 참가자가 없습니다: {meeting_id}")
+            return
+        
+        # 알림 메시지 생성
+        title = f"모임 완료 - {meeting.name}"
+        content = f"""
+{club_name}의 모임 '{meeting.name}'이 완료되었습니다!
+
+📅 모임 일시: {meeting.meeting_time.strftime('%Y년 %m월 %d일 %H:%M')}
+📍 장소: {meeting.location or meeting.venue_name or '미정'}
+
+모임이 성공적으로 완료되었습니다.
+정산 및 후속 처리가 진행될 예정입니다.
+
+수고하셨습니다!
+        """.strip()
+        
+        # 각 참가자에게 알림 전송
+        sent_count = 0
+        for participant in participants:
+            try:
+                notification = Notification(
+                    user_id=participant.user_id,
+                    type=NotificationType.MEETING_COMPLETED.value,
+                    title=title,
+                    content=content,
+                    status=NotificationStatus.UNREAD.value
+                )
+                
+                db.add(notification)
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"모임 완료 알림 생성 실패 - user_id: {participant.user_id}, error: {str(e)}")
+                continue
+        
+        db.commit()
+        logger.info(f"모임 완료 알림 전송 완료 - meeting_id: {meeting_id}, sent_count: {sent_count}")
+        
+    except Exception as e:
+        logger.error(f"모임 완료 알림 전송 오류: {str(e)}")
+        db.rollback()
+
+
+
+

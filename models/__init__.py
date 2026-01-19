@@ -1,0 +1,77 @@
+# 모델 패키지 초기화 파일
+# 모든 모델을 한 곳에서 import할 수 있도록 함
+
+# Enum 클래스들
+from .enums import (
+    UserStatus, Provider, Gender,
+    ClubType, ClubStatus, ClubRole, MembershipStatus,
+    MeetingStatus, ParticipantStatus, ParticipantRole, ParticipantType,
+    PaymentStatus, SubscriptionStatus, BillingCycle,
+    TermsType, InquiryStatus, FeeType, ExpenseStatus,
+    NoticeType, TokenRevokeReason, HandicapUpdateMethod,
+    NotificationType, NotificationStatus
+)
+
+# User 관련 모델
+from .user import User, RefreshTokenBlacklist
+
+# Admin 관련 모델
+from .admin import Admin
+
+# Club 관련 모델
+from .club import (
+    Club, ClubMembership, ClubNotice,
+    ClubFee, RegulationCategory, Regulation
+)
+
+# Meeting 관련 모델
+from .meeting import (
+    Guest, Meeting, MeetingParticipant, Team, TeamMember,
+    Expense, ExpenseParticipant, Score, UserScoreHistory, MeetingResult
+)
+
+# Payment 관련 모델
+from .payment import Plan, Payment, UserPaymentMethod, Subscription
+
+# Terms 관련 모델
+from .terms import Terms, TermsAgreement
+
+# Inquiry 관련 모델
+from .inquiry import Inquiry, InquiryResponse
+
+# 기타 모델
+from .notification import Notification
+from .notice import Notice
+from .faq import FAQCategory, FAQ
+
+# 모든 모델을 __all__에 추가
+__all__ = [
+    # Enums
+    "UserStatus", "Provider", "Gender",
+    "ClubType", "ClubStatus", "ClubRole", "MembershipStatus",
+    "MeetingStatus", "ParticipantStatus", "ParticipantRole", "ParticipantType",
+    "PaymentStatus", "SubscriptionStatus", "BillingCycle",
+    "TermsType", "InquiryStatus", "FeeType", "ExpenseStatus",
+    "NoticeType", "TokenRevokeReason", "HandicapUpdateMethod",
+    "NotificationType", "NotificationStatus",
+    # User
+    "User", "RefreshTokenBlacklist",
+    # Admin
+    "Admin",
+    # Club
+    "Club", "ClubMembership", "ClubNotice",
+    "ClubFee", "RegulationCategory", "Regulation",
+    # Meeting
+    "Guest", "Meeting", "MeetingParticipant", "Team", "TeamMember",
+    "Expense", "ExpenseParticipant", "Score", "UserScoreHistory", "MeetingResult",
+    # Payment
+    "Plan", "Payment", "UserPaymentMethod", "Subscription",
+    # Terms
+    "Terms", "TermsAgreement",
+    # Inquiry
+    "Inquiry", "InquiryResponse",
+    # Others
+    "Notification", "Notice",
+    "FAQCategory", "FAQ"
+]
+
