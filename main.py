@@ -5,6 +5,7 @@ from pprint import pprint
 import sys
 import locale
 from typing import cast
+from sqlalchemy import text
 
 sys.stdout = cast(io.TextIOWrapper, sys.stdout)
 sys.stderr = cast(io.TextIOWrapper, sys.stderr)
@@ -230,7 +231,7 @@ async def health_check_db(db: Session = Depends(get_db)):
     """Database health check"""
     try:
         # Simple query to test database connection
-        db.execute("SELECT 1")
+        db.execute(statement=text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
