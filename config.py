@@ -45,9 +45,17 @@ class Settings(BaseSettings):
     TOSS_PAYMENTS_BASE_URL: str = "https://api.tosspayments.com/v1"
 
     # Google OAuth Configuration
-    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_WEB_CLIENT_ID: str = ""
+    GOOGLE_WEB_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
+    GOOGLE_ANDROID_CLIENT_ID: str = ""
+    GOOGLE_ANDROID_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
+    GOOGLE_IOS_CLIENT_ID: str = ""
+    GOOGLE_IOS_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+    GOOGLE_IOS_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_REDIRECT_URI: str = (
         ""  # 드라이브 전용 토큰 발급 콜백(프런트) (환경 변수 필수)

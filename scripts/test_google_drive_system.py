@@ -21,9 +21,9 @@ def test_config():
     logger.info("=== Google Drive API 설정 확인 ===")
     
     config_items = [
-        ("GOOGLE_CLIENT_ID", settings.GOOGLE_CLIENT_ID),
+        ("GOOGLE_WEB_CLIENT_ID", settings.GOOGLE_WEB_CLIENT_ID),
         ("GOOGLE_CLIENT_SECRET", settings.GOOGLE_CLIENT_SECRET),
-        ("GOOGLE_REDIRECT_URI", settings.GOOGLE_REDIRECT_URI),
+        ("GOOGLE_WEB_REDIRECT_URI", settings.GOOGLE_WEB_REDIRECT_URI),
         ("GOOGLE_DRIVE_FOLDER_ID_EXCEL", settings.GOOGLE_DRIVE_FOLDER_ID),
     ]
     
