@@ -4,6 +4,8 @@ OAuth 인증 라우터
 
 import secrets
 import logging
+import json
+from urllib.parse import urlencode
 from typing import Dict, Any, cast
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
@@ -77,77 +79,89 @@ async def google_oauth_login():
         )
 
 
-@router.get("/google/callback")
-async def google_oauth_callback(
-    code: str = Query(..., description="OAuth 인증 코드"),
-    state: str = Query(None, description="OAuth 상태 값"),
-    db: Session = Depends(get_db),
-):
-    """Google OAuth 콜백 처리"""
-    try:
-        # 인증 코드를 액세스 토큰으로 교환
-        oauth_token_data = google_oauth.exchange_code_for_token_web(code)
-        access_token = oauth_token_data.get("access_token")
-        id_token = oauth_token_data.get("id_token")
+# @router.get("/google/callback")
+# async def google_oauth_callback(
+#     code: str = Query(..., description="OAuth 인증 코드"),
+#     state: str = Query(None, description="OAuth 상태 값"),
+#     db: Session = Depends(get_db),
+# ):
+#     """Google OAuth 콜백 처리"""
+#     try:
+#         # 인증 코드를 액세스 토큰으로 교환
+#         oauth_token_data = google_oauth.exchange_code_for_token_web(code)
+#         access_token = oauth_token_data.get("access_token")
+#         id_token = oauth_token_data.get("id_token")
 
-        if not access_token:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="액세스 토큰을 받지 못했습니다",
-            )
+#         if not access_token:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="액세스 토큰을 받지 못했습니다",
+#             )
 
-        # 사용자 정보 조회
-        google_user = google_oauth.get_user_info(access_token)
+#         # 사용자 정보 조회
+#         google_user = google_oauth.get_user_info(access_token)
 
-        # 사용자 생성 또는 조회
-        user, is_new_user = await create_or_get_oauth_user(google_user, db)
+#         # 사용자 생성 또는 조회
+#         user, is_new_user = await create_or_get_oauth_user(google_user, db)
 
-        # JWT 토큰 생성
-        jwt_payload = {
-            "id": user.id,
-            "email": user.email,
-            "nickname": user.nickname,
-            "role": "user",
-            "provider": user.provider.value if user.provider is not None else None,
-        }
+#         # JWT 토큰 생성
+#         jwt_payload = {
+#             "id": user.id,
+#             "email": user.email,
+#             "nickname": user.nickname,
+#             "role": "user",
+#             "provider": user.provider.value if user.provider is not None else None,
+#         }
 
-        access_token = jwt_auth.create_access_token(jwt_payload)
-        refresh_token = jwt_auth.create_refresh_token(jwt_payload)
+#         access_token = jwt_auth.create_access_token(jwt_payload)
+#         refresh_token = jwt_auth.create_refresh_token(jwt_payload)
 
-        logger.info(f"Google OAuth 로그인 성공: {user.email}")
+#         logger.info(f"Google OAuth 로그인 성공: {user.email}")
 
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": jwt_auth.expire_minutes * 60,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "nickname": user.nickname,
-                "role": "user",
-                "status": user.status.value,
-                "provider": user.provider.value if user.provider is not None else None,
-                "created_at": (
-                    user.created_at.isoformat() if user.created_at is not None else None
-                ),
-                "updated_at": (
-                    user.updated_at.isoformat() if user.updated_at is not None else None
-                ),
-                "profile_image": user.profile_image,
-                "phone": user.phone_number,
-            },
-            "is_new_user": is_new_user,
-        }
+#         payload = {
+#             "access_token": access_token,
+#             "refresh_token": refresh_token,
+#             "token_type": "bearer",
+#             "expires_in": jwt_auth.expire_minutes * 60,
+#             "user": {
+#                 "id": user.id,
+#                 "email": user.email,
+#                 "nickname": user.nickname,
+#                 "role": "user",
+#                 "status": user.status.value,
+#                 "provider": user.provider.value if user.provider is not None else None,
+#                 "created_at": (
+#                     user.created_at.isoformat() if user.created_at is not None else None
+#                 ),
+#                 "updated_at": (
+#                     user.updated_at.isoformat() if user.updated_at is not None else None
+#                 ),
+#                 "profile_image": user.profile_image,
+#                 "phone": user.phone_number,
+#             },
+#             "is_new_user": is_new_user,
+#         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Google OAuth 콜백 처리 실패: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OAuth 콜백 처리에 실패했습니다",
-        )
+#         query_params = {
+#             "payload": json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+#         }
+#         if state:
+#             query_params["state"] = state
+
+#         redirect_url = (
+#             f"{settings.FRONTEND_BASE_URL}/api/{settings.API_VERSION}/auth/oauth/google/callback?"
+#             f"{urlencode(query_params)}"
+#         )
+#         return RedirectResponse(url=redirect_url)
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Google OAuth 콜백 처리 실패: {str(e)}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="OAuth 콜백 처리에 실패했습니다",
+#         )
 
 
 @router.get("/drive/callback", response_class=HTMLResponse)

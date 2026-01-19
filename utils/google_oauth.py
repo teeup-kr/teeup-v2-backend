@@ -205,9 +205,17 @@ class GoogleOAuth:
             "client_id": client_id,
             "grant_type": "authorization_code",
             "code": authorizationCode,
-            "code_verifier": codeVerifier,
             "redirect_uri": redirect_uri,
+            "code_verifier": codeVerifier,
         }
+
+        # 웹인 경우 client_secret 추가
+        if client_type == "web":
+            data["client_secret"] = settings.GOOGLE_CLIENT_SECRET
+
+        # if client_type == "android":
+        #     data["code"] = authorizationCode
+        #     data["code_verifier"] = codeVerifier
 
         return data
 
@@ -263,70 +271,6 @@ class GoogleOAuth:
             )
 
             logger.info(f"Google OAuth 토큰 교환 요청: {data}")
-
-            response = requests.post(self.token_url, data=data)
-            if not response:
-                logger.error("Google OAuth 토큰 교환 응답이 없습니다")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth 토큰 교환에 실패했습니다",
-                )
-
-            # 응답 로깅
-            logger.info(f"Google OAuth 응답 상태: {response.status_code}")
-            if response.status_code != 200:
-                logger.error(f"Google OAuth 응답 내용: {response.text}")
-
-            response.raise_for_status()
-
-            token_data = response.json()
-            logger.info("Google OAuth 토큰 교환 성공")
-            return token_data
-
-        except requests.exceptions.HTTPError as e:
-            error_text = e.response.text if e.response is not None else "N/A"
-            logger.error(f"Google OAuth HTTP 에러: {str(e)}, 응답: {error_text}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"OAuth 토큰 교환에 실패했습니다: {str(e)}",
-            )
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Google OAuth 요청 실패: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth 토큰 교환에 실패했습니다",
-            )
-        except Exception as e:
-            logger.error(f"Google OAuth 토큰 교환 중 오류: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="OAuth 토큰 교환 중 오류가 발생했습니다",
-            )
-
-    def exchange_code_for_token_web(self, authorizationCode: str) -> Dict[str, Any]:
-        response = None
-        """인증 코드를 액세스 토큰으로 교환"""
-        try:
-            # # 환경 변수 검증
-            # if not self.client_id or not self.client_secret:
-            #     logger.error("Google OAuth 클라이언트 ID 또는 시크릿이 설정되지 않았습니다")
-            #     raise HTTPException(
-            #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            #         detail="Google OAuth 설정이 완료되지 않았습니다"
-            #     )
-
-            # 리디렉션 URI로 요청 페이로드 생성
-
-            # 요청 페이로드 생성
-            data = {
-                "client_id": self.client_ids["web"],
-                "grant_type": "authorization_code",
-                "code": authorizationCode,
-                "redirect_uri": self.redirect_uris["web"],
-                "client_secret": self.client_secret,
-            }
-
-            logger.info(f"Google OAuth Web 토큰 교환 요청: {data}")
 
             response = requests.post(self.token_url, data=data)
             if not response:

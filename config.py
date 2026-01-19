@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    FRONTEND_BASE_URL: str = ""
+    API_VERSION: str = ""
     # Database Configuration
     DATABASE_URL: str = ""
 

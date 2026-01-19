@@ -131,18 +131,7 @@ app.add_middleware(RawRequestLogMiddleware)
 # CORS 설정 - 가장 먼저 추가해야 함 (미들웨어는 역순으로 실행됨)
 # 개발 환경을 위한 localhost 기본값 (하드코딩된 도메인 제거)
 default_dev_origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://localhost:3003",
-    "http://localhost:3005",
-    "http://localhost:3006",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://127.0.0.1:3002",
-    "http://127.0.0.1:3003",
-    "http://127.0.0.1:3005",
-    "http://127.0.0.1:3006",
+    "http://localhost:8081"
 ]
 # CORS_ORIGINS 환경 변수 필수 (프로덕션 도메인은 환경 변수로 설정)
 allowed_origins = (
