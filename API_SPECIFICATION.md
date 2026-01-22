@@ -820,6 +820,8 @@
 ```json
 {
   "name": string,
+  "sido_code": string,
+  "gungu_codes": [string], // 1~4개
   "type": "REGULAR",
   "description": string,
   "member_count": int,
@@ -839,6 +841,8 @@
 ```json
 {
   "name": string,
+  "sido_code": string,
+  "gungu_codes": [string], // 1~4개
   "description": string,
   "member_count": int,
   "location": string
@@ -873,6 +877,8 @@
   "id": int,
   "display_id": string (optional),
   "name": string,
+  "sido_code": string (optional),
+  "gungu_codes": [string] (optional),
   "type": "REGULAR",
   "description": string (optional),
   "member_count": int (optional),

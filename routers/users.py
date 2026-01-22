@@ -46,12 +46,8 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 # 핸디캡 관련 스키마
 class HandicapUpdate(BaseModel):
-    average_score: Optional[int] = Field(
-        None, ge=55, le=144, description="평균 타수 (자동 계산용)"
-    )
-    initial_handicap: Optional[float] = Field(
-        None, ge=0, le=72, description="초기 핸디캡 (직접 입력, 하위 호환성)"
-    )
+    average_score: Optional[int] = Field(None, ge=55, le=144, description="평균 타수 (자동 계산용)")
+    initial_handicap: Optional[float] = Field(None, ge=0, le=72, description="초기 핸디캡 (직접 입력, 하위 호환성)")
 
     @validator("*", pre=True, always=True)
     def check_at_least_one(cls, v, values):
@@ -77,14 +73,14 @@ class HandicapResponse(BaseModel):
 
 @router.get("/", response_model=PaginatedResponse[UserResponse])
 async def get_users(
-    page: int = 1,
-    limit: int = 10,
-    role_filter: Optional[str] = None,
-    status_filter: Optional[str] = None,
-    search: Optional[str] = None,
-    sort_order: Optional[str] = "recent",
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_admin()),
+        page: int = 1,
+        limit: int = 10,
+        role_filter: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_order: Optional[str] = "recent",
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(require_admin()),
 ):
     """사용자 목록 조회 (관리자만 가능)"""
     try:
@@ -92,9 +88,7 @@ async def get_users(
 
         # 사용자 확인
         if not current_user or not current_user.get("id"):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="로그인이 필요합니다"
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그인이 필요합니다")
 
         # 페이지네이션 계산
         offset = (page - 1) * limit
@@ -117,32 +111,20 @@ async def get_users(
         # 검색 기능 추가
         if search:
             search_term = f"%{search}%"
-            users_query = users_query.filter(
-                (User.email.ilike(search_term))
-                | (User.realname.ilike(search_term))
-                | (User.nickname.ilike(search_term))
-                | (User.phone_number.ilike(search_term))
-            )
+            users_query = users_query.filter((User.email.ilike(search_term))
+                                             | (User.realname.ilike(search_term))
+                                             | (User.nickname.ilike(search_term))
+                                             | (User.phone_number.ilike(search_term)))
 
         total = users_query.count()
 
         # 정렬 처리
         logger.info(f"정렬 옵션: {sort_order}")
         if sort_order == "oldest":
-            users = (
-                users_query.order_by(User.created_at.asc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
+            users = (users_query.order_by(User.created_at.asc()).offset(offset).limit(limit).all())
             logger.info("오래된 가입순으로 정렬")
         else:  # "recent" 또는 기본값 - 최근 가입순이 기본
-            users = (
-                users_query.order_by(User.created_at.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
+            users = (users_query.order_by(User.created_at.desc()).offset(offset).limit(limit).all())
             logger.info("최근 가입순으로 정렬 (기본값)")
 
         logger.info(f"조회된 사용자 수: {len(users)}")
@@ -193,9 +175,9 @@ async def get_users(
 
 @router.post("/", response_model=UserResponse)
 async def create_user(
-    user_data: UserCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_data: UserCreate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 생성 (관리자만 가능)"""
     try:
@@ -203,9 +185,7 @@ async def create_user(
 
         # 관리자 권한 확인
         if not PermissionChecker.check_admin_permission(current_user, db):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
 
         # 유효성 검사: 실명/닉네임/핸디캡/평균 스코어 (제공된 경우)
         try:
@@ -286,9 +266,7 @@ async def create_user(
             )
 
         # 닉네임 중복 확인
-        existing_nickname = (
-            db.query(User).filter(User.nickname == user_data.nickname).first()
-        )
+        existing_nickname = (db.query(User).filter(User.nickname == user_data.nickname).first())
         if existing_nickname:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -338,15 +316,10 @@ async def create_user(
             gender=user_data.gender,
             handicap=user_data.handicap,
             average_score=user_data.average_score,
-            status=(
-                UserStatus(user_data.status) if user_data.status else UserStatus.ACTIVE
-            ),
+            status=(UserStatus(user_data.status) if user_data.status else UserStatus.ACTIVE),
             provider=Provider.LOCAL,  # 백오피스에서 생성하는 사용자는 항상 일반 로그인
-            needs_terms_agreement=(
-                user_data.needs_terms_agreement
-                if user_data.needs_terms_agreement is not None
-                else True
-            ),
+            needs_terms_agreement=(user_data.needs_terms_agreement
+                                   if user_data.needs_terms_agreement is not None else True),
         )
 
         db.add(user)
@@ -388,20 +361,16 @@ async def create_user(
 
 @router.put("/me", response_model=UserResponse)
 async def update_my_profile(
-    user_data: UserUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        user_data: UserUpdate,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """내 프로필 수정"""
     try:
         logger.info(f"내 프로필 수정 시작 - user_id: {current_user.id}")
 
         # 사용자 조회
-        user = (
-            db.query(User)
-            .filter(User.id == current_user.id, User.deleted_at.is_(None))
-            .first()
-        )
+        user = (db.query(User).filter(User.id == current_user.id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -460,24 +429,17 @@ async def update_my_profile(
         # 평균 타수 입력 시 initial_handicap 자동 계산
         if user_data.average_score is not None:
             from utils.handicap_calculator import (
-                calculate_initial_handicap_from_average,
-            )
+                calculate_initial_handicap_from_average, )
             from models import HandicapUpdateMethod
 
-            calculated_initial_handicap = calculate_initial_handicap_from_average(
-                user_data.average_score
-            )
+            calculated_initial_handicap = calculate_initial_handicap_from_average(user_data.average_score)
             if calculated_initial_handicap is not None:
                 user.initial_handicap = calculated_initial_handicap
                 user.handicap_update_method = HandicapUpdateMethod.MANUAL
 
         # 이메일 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.email and user_data.email != user.email:
-            existing_user = (
-                db.query(User)
-                .filter(User.email == user_data.email, User.id != user.id)
-                .first()
-            )
+            existing_user = (db.query(User).filter(User.email == user_data.email, User.id != user.id).first())
             if existing_user:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -486,11 +448,7 @@ async def update_my_profile(
 
         # 닉네임 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.nickname and user_data.nickname != user.nickname:
-            existing_nickname = (
-                db.query(User)
-                .filter(User.nickname == user_data.nickname, User.id != user.id)
-                .first()
-            )
+            existing_nickname = (db.query(User).filter(User.nickname == user_data.nickname, User.id != user.id).first())
             if existing_nickname:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -499,11 +457,8 @@ async def update_my_profile(
 
         # 전화번호 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.phone_number and user_data.phone_number != user.phone_number:
-            existing_phone = (
-                db.query(User)
-                .filter(User.phone_number == user_data.phone_number, User.id != user.id)
-                .first()
-            )
+            existing_phone = (db.query(User).filter(User.phone_number == user_data.phone_number, User.id
+                                                    != user.id).first())
             if existing_phone:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -516,13 +471,10 @@ async def update_my_profile(
         # average_score가 변경되는 경우 initial_handicap 자동 계산
         if "average_score" in update_data and update_data["average_score"] is not None:
             from utils.handicap_calculator import (
-                calculate_initial_handicap_from_average,
-            )
+                calculate_initial_handicap_from_average, )
             from models import HandicapUpdateMethod
 
-            calculated_initial_handicap = calculate_initial_handicap_from_average(
-                update_data["average_score"]
-            )
+            calculated_initial_handicap = calculate_initial_handicap_from_average(update_data["average_score"])
             if calculated_initial_handicap is not None:
                 user.initial_handicap = calculated_initial_handicap
                 user.handicap_update_method = HandicapUpdateMethod.MANUAL
@@ -576,19 +528,17 @@ async def update_my_profile(
 
 @router.put("/{user_id}", response_model=UserResponse)
 async def update_user(
-    user_id: int,
-    user_data: UserUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_id: int,
+        user_data: UserUpdate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 정보 수정"""
     try:
         logger.info(f"사용자 수정 시작 - user_id: {user_id}")
 
         # 사용자 조회
-        user = (
-            db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-        )
+        user = (db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -597,9 +547,7 @@ async def update_user(
 
         # 관리자 권한 확인
         if not PermissionChecker.check_admin_permission(current_user, db):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
 
         # 유효성 검사: 실명/핸디캡/평균 스코어 (관리자 수정에도 동일 정책 적용)
         try:
@@ -649,11 +597,7 @@ async def update_user(
 
         # 이메일 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.email and user_data.email != user.email:
-            existing_user = (
-                db.query(User)
-                .filter(User.email == user_data.email, User.id != user_id)
-                .first()
-            )
+            existing_user = (db.query(User).filter(User.email == user_data.email, User.id != user_id).first())
             if existing_user:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -662,11 +606,7 @@ async def update_user(
 
         # 닉네임 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.nickname and user_data.nickname != user.nickname:
-            existing_nickname = (
-                db.query(User)
-                .filter(User.nickname == user_data.nickname, User.id != user_id)
-                .first()
-            )
+            existing_nickname = (db.query(User).filter(User.nickname == user_data.nickname, User.id != user_id).first())
             if existing_nickname:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -675,11 +615,8 @@ async def update_user(
 
         # 전화번호 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.phone_number and user_data.phone_number != user.phone_number:
-            existing_phone = (
-                db.query(User)
-                .filter(User.phone_number == user_data.phone_number, User.id != user_id)
-                .first()
-            )
+            existing_phone = (db.query(User).filter(User.phone_number == user_data.phone_number, User.id
+                                                    != user_id).first())
             if existing_phone:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -755,18 +692,16 @@ async def update_user(
 
 @router.delete("/{user_id}", response_model=MessageResponse)
 async def delete_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 삭제 (관리자만 가능)"""
     try:
         logger.info(f"사용자 삭제 시작 - user_id: {user_id}")
 
         # 사용자 조회
-        user = (
-            db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-        )
+        user = (db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -775,9 +710,7 @@ async def delete_user(
 
         # 관리자 권한 확인
         if not PermissionChecker.check_admin_permission(current_user, db):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
 
         # 소프트 삭제 (deleted_at 설정)
         from datetime import datetime
@@ -802,18 +735,12 @@ async def delete_user(
 
 # 마이페이지 관련 API들
 @router.get("/profile", response_model=UserResponse)
-async def get_my_profile(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def get_my_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """내 프로필 조회"""
     try:
         logger.info(f"내 프로필 조회 시작 - user_id: {current_user.id}")
 
-        user = (
-            db.query(User)
-            .filter(User.id == current_user.id, User.deleted_at.is_(None))
-            .first()
-        )
+        user = (db.query(User).filter(User.id == current_user.id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -854,30 +781,27 @@ async def get_my_profile(
 
 
 @router.get("/my-clubs", response_model=List[dict])
-async def get_my_clubs(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def get_my_clubs(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """내 클럽 목록 조회"""
     try:
         logger.info(f"내 클럽 목록 조회 시작 - user_id: {current_user.id}")
 
-        from models import ClubMembership, Club
+        from models import ClubMembership, Club, ClubRegion
 
         # 사용자가 가입한 클럽 조회
-        memberships = (
-            db.query(ClubMembership, Club)
-            .join(Club, ClubMembership.club_id == Club.id)
-            .filter(
-                ClubMembership.user_id == current_user.id, Club.deleted_at.is_(None)
-            )
-            .all()
-        )
+        memberships = (db.query(ClubMembership, Club).join(Club, ClubMembership.club_id == Club.id).filter(
+            ClubMembership.user_id == current_user.id, Club.deleted_at.is_(None)).all())
 
         clubs = []
         for membership, club in memberships:
+            gungu_codes = [
+                region.gungu_code for region in db.query(ClubRegion).filter(ClubRegion.club_id == club.id).all()
+            ]
             club_data = {
                 "id": club.id,
                 "name": club.name,
+                "sido_code": club.sido_code,
+                "gungu_codes": gungu_codes,
                 "type": club.type.value if club.type else None,
                 "description": club.description,
                 "member_count": club.member_count,
@@ -902,14 +826,14 @@ async def get_my_clubs(
 
 @router.get("/my-meetings", response_model=PaginatedResponse)
 async def get_my_meetings(
-    page: int = 1,
-    limit: int = 10,
-    status_filter: Optional[str] = None,
-    meeting_type_filter: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        page: int = 1,
+        limit: int = 10,
+        status_filter: Optional[str] = None,
+        meeting_type_filter: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """내 모임 목록 조회"""
     try:
@@ -924,12 +848,9 @@ async def get_my_meetings(
         offset = (page - 1) * limit
 
         # 사용자가 참가한 모임 조회 (삭제되지 않은 모임만)
-        query = (
-            db.query(MeetingParticipant, Meeting, Club)
-            .join(Meeting, MeetingParticipant.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(MeetingParticipant.user_id == current_user.id)
-        )
+        query = (db.query(MeetingParticipant, Meeting,
+                          Club).join(Meeting, MeetingParticipant.meeting_id == Meeting.id).join(
+                              Club, Meeting.club_id == Club.id).filter(MeetingParticipant.user_id == current_user.id))
 
         # 상태 필터 적용
         if status_filter:
@@ -953,42 +874,29 @@ async def get_my_meetings(
             try:
                 # 종료일은 하루 끝까지 포함하도록 설정
                 end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
-                end_datetime = end_datetime.replace(
-                    hour=23, minute=59, second=59, microsecond=999999
-                )
+                end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
                 query = query.filter(Meeting.meeting_time <= end_datetime)
             except ValueError:
                 logger.warning(f"잘못된 종료 날짜 형식: {end_date}")
 
         total = query.count()
         logger.info(f"내 모임 목록 조회 - 총 {total}개 모임 발견")
-        results = (
-            query.order_by(Meeting.meeting_time.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        results = (query.order_by(Meeting.meeting_time.desc()).offset(offset).limit(limit).all())
         logger.info(f"내 모임 목록 조회 - 페이지네이션 후 {len(results)}개 모임 반환")
 
         meetings = []
         for participant, meeting, club in results:
             # 참가자 수 조회
-            participant_count = (
-                db.query(MeetingParticipant)
-                .filter(
-                    MeetingParticipant.meeting_id == meeting.id,
-                    MeetingParticipant.status == "CONFIRMED",
-                )
-                .count()
-            )
+            participant_count = (db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting.id,
+                MeetingParticipant.status == "CONFIRMED",
+            ).count())
 
             # 팀 정보 조회
             from models import Team
 
             teams = db.query(Team).filter(Team.meeting_id == meeting.id).all()
-            teams_data = (
-                [{"id": team.id, "name": team.name} for team in teams] if teams else []
-            )
+            teams_data = ([{"id": team.id, "name": team.name} for team in teams] if teams else [])
 
             meeting_data = {
                 "id": meeting.id,
@@ -1018,9 +926,7 @@ async def get_my_meetings(
         # PaginatedResponse 형식으로 반환
         total_pages = (total + limit - 1) // limit if limit > 0 else 1
 
-        logger.info(
-            f"내 모임 목록 조회 완료 - 총 {total}개, 페이지 {page}/{total_pages}"
-        )
+        logger.info(f"내 모임 목록 조회 완료 - 총 {total}개, 페이지 {page}/{total_pages}")
         return {
             "data": meetings,
             "total": total,
@@ -1038,19 +944,13 @@ async def get_my_meetings(
 
 
 @router.delete("/account", response_model=MessageResponse)
-async def delete_my_account(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def delete_my_account(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """회원 탈퇴"""
     try:
         logger.info(f"회원 탈퇴 시작 - user_id: {current_user.id}")
 
         # 사용자 조회
-        user = (
-            db.query(User)
-            .filter(User.id == current_user.id, User.deleted_at.is_(None))
-            .first()
-        )
+        user = (db.query(User).filter(User.id == current_user.id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1080,12 +980,12 @@ async def delete_my_account(
 
 @router.get("/notifications", response_model=List[NotificationResponse])
 async def get_my_notifications(
-    page: int = 1,
-    limit: int = 20,
-    status_filter: Optional[str] = None,
-    type_filter: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        page: int = 1,
+        limit: int = 20,
+        status_filter: Optional[str] = None,
+        type_filter: Optional[str] = None,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """내 알림 목록 조회"""
     try:
@@ -1102,43 +1002,26 @@ async def get_my_notifications(
 
         if status_filter:
             # DB에 저장된 값은 문자열이므로 Enum.value로 비교
-            status_value = (
-                NotificationStatus(status_filter).value
-                if hasattr(NotificationStatus(status_filter), "value")
-                else str(NotificationStatus(status_filter))
-            )
+            status_value = (NotificationStatus(status_filter).value if hasattr(
+                NotificationStatus(status_filter), "value") else str(NotificationStatus(status_filter)))
             query = query.filter(Notification.status == status_value)
 
         if type_filter:
             # DB에 저장된 값은 문자열이므로 Enum.value로 비교
-            type_value = (
-                NotificationType(type_filter).value
-                if hasattr(NotificationType(type_filter), "value")
-                else str(NotificationType(type_filter))
-            )
+            type_value = (NotificationType(type_filter).value
+                          if hasattr(NotificationType(type_filter), "value") else str(NotificationType(type_filter)))
             query = query.filter(Notification.type == type_value)
 
         total = query.count()
-        notifications = (
-            query.order_by(Notification.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        notifications = (query.order_by(Notification.created_at.desc()).offset(offset).limit(limit).all())
 
         notification_responses = []
         for notification in notifications:
             # type과 status는 String으로 저장되므로 .value 불필요
-            type_value = (
-                notification.type.value
-                if hasattr(notification.type, "value")
-                else str(notification.type) if notification.type else None
-            )
-            status_value = (
-                notification.status.value
-                if hasattr(notification.status, "value")
-                else str(notification.status) if notification.status else None
-            )
+            type_value = (notification.type.value if hasattr(notification.type, "value") else
+                          str(notification.type) if notification.type else None)
+            status_value = (notification.status.value if hasattr(notification.status, "value") else
+                            str(notification.status) if notification.status else None)
 
             notification_response = NotificationResponse(
                 id=notification.id,
@@ -1167,9 +1050,9 @@ async def get_my_notifications(
 
 @router.put("/notifications/{notification_id}/read", response_model=MessageResponse)
 async def mark_notification_as_read(
-    notification_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        notification_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """알림을 읽음으로 표시"""
     try:
@@ -1180,19 +1063,13 @@ async def mark_notification_as_read(
         from datetime import datetime
 
         # 알림 조회
-        notification = (
-            db.query(Notification)
-            .filter(
-                Notification.id == notification_id,
-                Notification.user_id == current_user.id,
-            )
-            .first()
-        )
+        notification = (db.query(Notification).filter(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        ).first())
 
         if not notification:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="알림을 찾을 수 없습니다"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="알림을 찾을 수 없습니다")
 
         # 읽음 처리
         notification.status = NotificationStatus.READ.value
@@ -1215,9 +1092,9 @@ async def mark_notification_as_read(
 
 @router.delete("/notifications/{notification_id}", response_model=MessageResponse)
 async def delete_notification(
-    notification_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        notification_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """알림 삭제"""
     try:
@@ -1226,19 +1103,13 @@ async def delete_notification(
         from models import Notification
 
         # 알림 조회
-        notification = (
-            db.query(Notification)
-            .filter(
-                Notification.id == notification_id,
-                Notification.user_id == current_user.id,
-            )
-            .first()
-        )
+        notification = (db.query(Notification).filter(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        ).first())
 
         if not notification:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="알림을 찾을 수 없습니다"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="알림을 찾을 수 없습니다")
 
         # 알림 삭제
         db.delete(notification)
@@ -1258,9 +1129,8 @@ async def delete_notification(
 
 
 @router.put("/notifications/read-all", response_model=MessageResponse)
-async def mark_all_notifications_as_read(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def mark_all_notifications_as_read(db: Session = Depends(get_db),
+                                         current_user: User = Depends(get_current_active_user)):
     """모든 알림을 읽음으로 표시"""
     try:
         logger.info(f"모든 알림 읽음 처리 시작 - user_id: {current_user.id}")
@@ -1270,14 +1140,10 @@ async def mark_all_notifications_as_read(
         from datetime import datetime
 
         # 사용자의 모든 읽지 않은 알림 조회
-        notifications = (
-            db.query(Notification)
-            .filter(
-                Notification.user_id == current_user.id,
-                Notification.status == NotificationStatus.UNREAD.value,
-            )
-            .all()
-        )
+        notifications = (db.query(Notification).filter(
+            Notification.user_id == current_user.id,
+            Notification.status == NotificationStatus.UNREAD.value,
+        ).all())
 
         # 모든 알림을 읽음으로 처리
         for notification in notifications:
@@ -1303,9 +1169,7 @@ async def mark_all_notifications_as_read(
 
 
 @router.get("/notification-settings", response_model=NotificationSettingsResponse)
-async def get_notification_settings(
-    db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
-):
+async def get_notification_settings(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """알림 설정 조회"""
     try:
         logger.info(f"알림 설정 조회 시작 - user_id: {current_user.get('id')}")
@@ -1313,11 +1177,8 @@ async def get_notification_settings(
         from models import NotificationSettings
 
         # 알림 설정 조회
-        settings = (
-            db.query(NotificationSettings)
-            .filter(NotificationSettings.user_id == current_user.get("id"))
-            .first()
-        )
+        settings = (db.query(NotificationSettings).filter(
+            NotificationSettings.user_id == current_user.get("id")).first())
 
         # 설정이 없으면 기본값으로 생성
         if not settings:
@@ -1327,9 +1188,7 @@ async def get_notification_settings(
             chars = string.ascii_lowercase + string.digits
             settings_id = "".join(secrets.choice(chars) for _ in range(20))
 
-            settings = NotificationSettings(
-                id=settings_id, user_id=current_user.get("id")
-            )
+            settings = NotificationSettings(id=settings_id, user_id=current_user.get("id"))
             db.add(settings)
             db.commit()
             db.refresh(settings)
@@ -1365,9 +1224,9 @@ async def get_notification_settings(
 
 @router.put("/notification-settings", response_model=NotificationSettingsResponse)
 async def update_notification_settings(
-    settings_data: NotificationSettingsUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        settings_data: NotificationSettingsUpdate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """알림 설정 수정"""
     try:
@@ -1376,11 +1235,8 @@ async def update_notification_settings(
         from models import NotificationSettings
 
         # 알림 설정 조회
-        settings = (
-            db.query(NotificationSettings)
-            .filter(NotificationSettings.user_id == current_user.get("id"))
-            .first()
-        )
+        settings = (db.query(NotificationSettings).filter(
+            NotificationSettings.user_id == current_user.get("id")).first())
 
         # 설정이 없으면 생성
         if not settings:
@@ -1390,9 +1246,7 @@ async def update_notification_settings(
             chars = string.ascii_lowercase + string.digits
             settings_id = "".join(secrets.choice(chars) for _ in range(20))
 
-            settings = NotificationSettings(
-                id=settings_id, user_id=current_user.get("id")
-            )
+            settings = NotificationSettings(id=settings_id, user_id=current_user.get("id"))
             db.add(settings)
 
         # 설정 업데이트
@@ -1434,11 +1288,11 @@ async def update_notification_settings(
 
 @router.get("/payments", response_model=List[PaymentResponse])
 async def get_my_payments(
-    page: int = 1,
-    limit: int = 20,
-    status_filter: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        page: int = 1,
+        limit: int = 20,
+        status_filter: Optional[str] = None,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """내 결제 내역 조회"""
     try:
@@ -1456,9 +1310,7 @@ async def get_my_payments(
             query = query.filter(Payment.status == PaymentStatus(status_filter))
 
         total = query.count()
-        payments = (
-            query.order_by(Payment.created_at.desc()).offset(offset).limit(limit).all()
-        )
+        payments = (query.order_by(Payment.created_at.desc()).offset(offset).limit(limit).all())
 
         payment_responses = []
         for payment in payments:
@@ -1469,9 +1321,7 @@ async def get_my_payments(
                 amount=float(payment.amount) if payment.amount else 0.0,
                 currency=payment.currency,
                 status=payment.status.value if payment.status else None,
-                payment_method=(
-                    payment.payment_method.value if payment.payment_method else None
-                ),
+                payment_method=(payment.payment_method.value if payment.payment_method else None),
                 payment_key=payment.payment_key,
                 order_id=payment.order_id,
                 order_name=payment.order_name,
@@ -1497,9 +1347,7 @@ async def get_my_payments(
 
 
 @router.get("/subscriptions", response_model=List[SubscriptionResponse])
-async def get_my_subscriptions(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def get_my_subscriptions(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """내 구독/요금제 이용내역 조회"""
     try:
         logger.info(f"내 구독 내역 조회 시작 - user_id: {current_user.id}")
@@ -1507,13 +1355,8 @@ async def get_my_subscriptions(
         from models import Subscription, Plan
 
         # 구독 내역 조회
-        subscriptions = (
-            db.query(Subscription, Plan)
-            .join(Plan, Subscription.plan_id == Plan.id)
-            .filter(Subscription.user_id == current_user.id)
-            .order_by(Subscription.created_at.desc())
-            .all()
-        )
+        subscriptions = (db.query(Subscription, Plan).join(Plan, Subscription.plan_id == Plan.id).filter(
+            Subscription.user_id == current_user.id).order_by(Subscription.created_at.desc()).all())
 
         subscription_responses = []
         for subscription, plan in subscriptions:
@@ -1545,9 +1388,7 @@ async def get_my_subscriptions(
 
 
 @router.get("/payment-methods", response_model=List[dict])
-async def get_my_payment_methods(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def get_my_payment_methods(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """내 결제 수단 목록 조회"""
     try:
         logger.info(f"내 결제 수단 조회 시작 - user_id: {current_user.id}")
@@ -1558,33 +1399,22 @@ async def get_my_payment_methods(
         from models import Payment, PaymentMethod, PaymentStatus
 
         # 최근 결제에서 사용된 결제 수단들 조회
-        recent_payments = (
-            db.query(Payment)
-            .filter(
-                Payment.user_id == current_user.id,
-                Payment.status == PaymentStatus.SUCCEEDED,
-            )
-            .order_by(Payment.created_at.desc())
-            .limit(10)
-            .all()
-        )
+        recent_payments = (db.query(Payment).filter(
+            Payment.user_id == current_user.id,
+            Payment.status == PaymentStatus.SUCCEEDED,
+        ).order_by(Payment.created_at.desc()).limit(10).all())
 
         payment_methods = []
         seen_methods = set()
 
         for payment in recent_payments:
-            if (
-                payment.payment_method
-                and payment.payment_method.value not in seen_methods
-            ):
+            if (payment.payment_method and payment.payment_method.value not in seen_methods):
                 method_data = {
                     "id": f"method_{payment.id}",
                     "type": payment.payment_method.value,
                     "last_used": payment.paid_at or payment.created_at,
                     "is_default": len(payment_methods) == 0,  # 첫 번째를 기본으로 설정
-                    "masked_info": _mask_payment_info(
-                        payment.payment_method.value, payment.payment_key
-                    ),
+                    "masked_info": _mask_payment_info(payment.payment_method.value, payment.payment_key),
                 }
                 payment_methods.append(method_data)
                 seen_methods.add(payment.payment_method.value)
@@ -1614,17 +1444,15 @@ def _mask_payment_info(payment_method: str, payment_key: str = None) -> str:
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 상세 조회"""
     try:
         logger.info(f"사용자 상세 조회 시작 - user_id: {user_id}")
 
-        user = (
-            db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-        )
+        user = (db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first())
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1667,9 +1495,9 @@ async def get_user(
 # 핸디캡 관련 API
 @router.get("/{user_id}/handicap", response_model=HandicapResponse)
 async def get_user_handicap(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 핸디캡 조회"""
     try:
@@ -1681,18 +1509,10 @@ async def get_user_handicap(
             )
 
         # 새로운 핸디캡 시스템 필드 사용
-        initial_handicap = (
-            float(user.initial_handicap) if user.initial_handicap else None
-        )
-        calculated_handicap = (
-            float(user.calculated_handicap) if user.calculated_handicap else None
-        )
-        handicap_update_method = (
-            user.handicap_update_method.value if user.handicap_update_method else None
-        )
-        handicap_calculation_count = (
-            user.handicap_calculation_count if user.handicap_calculation_count else 0
-        )
+        initial_handicap = (float(user.initial_handicap) if user.initial_handicap else None)
+        calculated_handicap = (float(user.calculated_handicap) if user.calculated_handicap else None)
+        handicap_update_method = (user.handicap_update_method.value if user.handicap_update_method else None)
+        handicap_calculation_count = (user.handicap_calculation_count if user.handicap_calculation_count else 0)
 
         # 하위 호환성을 위한 계산
         # calculated_handicap이 있으면 자동 계산된 것으로 간주
@@ -1722,10 +1542,10 @@ async def get_user_handicap(
 
 @router.put("/{user_id}/handicap", response_model=MessageResponse)
 async def update_user_handicap(
-    user_id: int,
-    handicap_data: HandicapUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        user_id: int,
+        handicap_data: HandicapUpdate,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """사용자 핸디캡 수정 (본인 또는 관리자만 가능)"""
     logger.info(
@@ -1735,23 +1555,16 @@ async def update_user_handicap(
         # 권한 확인
         current_user_id = current_user.id
 
-        logger.info(
-            f"권한 확인 - current_user_id: {current_user_id}, user_id: {user_id}"
-        )
+        logger.info(f"권한 확인 - current_user_id: {current_user_id}, user_id: {user_id}")
 
         # 관리자 확인
         from models import Admin
 
-        admin = (
-            db.query(Admin)
-            .filter(Admin.id == current_user_id, Admin.deleted_at.is_(None))
-            .first()
-        )
+        admin = (db.query(Admin).filter(Admin.id == current_user_id, Admin.deleted_at.is_(None)).first())
 
         if current_user_id != user_id and not admin:
             logger.warning(
-                f"권한 없음 - current_user_id: {current_user_id}, user_id: {user_id}, is_admin: {admin is not None}"
-            )
+                f"권한 없음 - current_user_id: {current_user_id}, user_id: {user_id}, is_admin: {admin is not None}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="핸디캡을 수정할 권한이 없습니다.",
@@ -1777,9 +1590,7 @@ async def update_user_handicap(
                     detail="평균 타수는 55 이상 144 이하여야 합니다.",
                 )
 
-            calculated_handicap = calculate_initial_handicap_from_average(
-                handicap_data.average_score
-            )
+            calculated_handicap = calculate_initial_handicap_from_average(handicap_data.average_score)
             if calculated_handicap is not None:
                 logger.info(
                     f"평균 타수로부터 핸디캡 자동 계산 - user_id: {user_id}, average_score: {handicap_data.average_score}, calculated_handicap: {calculated_handicap}"
@@ -1793,9 +1604,7 @@ async def update_user_handicap(
             try:
                 handicap_float = float(handicap_data.initial_handicap)
             except (ValueError, TypeError) as e:
-                logger.error(
-                    f"핸디캡 값 변환 실패: {handicap_data.initial_handicap}, 에러: {e}"
-                )
+                logger.error(f"핸디캡 값 변환 실패: {handicap_data.initial_handicap}, 에러: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"핸디캡 값이 유효하지 않습니다: {handicap_data.initial_handicap}",
@@ -1812,9 +1621,7 @@ async def update_user_handicap(
             rounded_value = round(handicap_float, 1)
             handicap_decimal = Decimal(str(rounded_value))
 
-            logger.info(
-                f"핸디캡 직접 입력 - user_id: {user_id}, initial_handicap: {handicap_decimal}"
-            )
+            logger.info(f"핸디캡 직접 입력 - user_id: {user_id}, initial_handicap: {handicap_decimal}")
             user.initial_handicap = handicap_decimal
             user.handicap_update_method = HandicapUpdateMethod.MANUAL
         else:
@@ -1841,9 +1648,7 @@ async def update_user_handicap(
                 detail=f"핸디캡을 수정하는 중 데이터베이스 오류가 발생했습니다: {str(db_error)}",
             )
 
-        return MessageResponse(
-            message="초기 핸디캡이 성공적으로 업데이트되었습니다.", success=True
-        )
+        return MessageResponse(message="초기 핸디캡이 성공적으로 업데이트되었습니다.", success=True)
 
     except HTTPException:
         raise
@@ -1858,9 +1663,9 @@ async def update_user_handicap(
 
 @router.get("/handicap/calculate/{user_id}", response_model=HandicapResponse)
 async def calculate_handicap(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
 ):
     """사용자 핸디캡 자동 계산 (평균타수 기반)"""
     try:
@@ -1913,10 +1718,10 @@ class ScoreHistoryResponse(BaseModel):
 
 @router.get("/{user_id}/score-history", response_model=List[ScoreHistoryResponse])
 async def get_user_score_history(
-    user_id: int,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        user_id: int,
+        limit: int = 10,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """최근 경기 스코어 조회"""
     try:
@@ -1930,12 +1735,7 @@ async def get_user_score_history(
 
         # 권한 확인 (본인 또는 관리자)
         # Admin 모델 존재 여부로 관리자 확인
-        is_admin = (
-            db.query(Admin)
-            .filter(Admin.id == current_user.id, Admin.deleted_at.is_(None))
-            .first()
-            is not None
-        )
+        is_admin = (db.query(Admin).filter(Admin.id == current_user.id, Admin.deleted_at.is_(None)).first() is not None)
 
         if current_user.id != user_id and not is_admin:
             raise HTTPException(
@@ -1953,11 +1753,7 @@ async def get_user_score_history(
         results = []
         for score_history in score_history_list:
             try:
-                meeting = (
-                    db.query(Meeting)
-                    .filter(Meeting.id == score_history.meeting_id)
-                    .first()
-                )
+                meeting = (db.query(Meeting).filter(Meeting.id == score_history.meeting_id).first())
                 meeting_name = meeting.name if meeting else None
 
                 # Decimal 타입을 float로 안전하게 변환
@@ -1985,12 +1781,9 @@ async def get_user_score_history(
                         handicap_used=handicap_used_value,
                         played_at=score_history.played_at,
                         created_at=score_history.created_at,
-                    )
-                )
+                    ))
             except Exception as item_error:
-                logger.error(
-                    f"스코어 히스토리 항목 처리 실패 (id: {score_history.id}): {item_error}"
-                )
+                logger.error(f"스코어 히스토리 항목 처리 실패 (id: {score_history.id}): {item_error}")
                 continue
 
         return results
@@ -2019,13 +1812,11 @@ class MeetingResultResponse(BaseModel):
     created_at: datetime
 
 
-@router.get(
-    "/{user_id}/last-meeting-result", response_model=Optional[MeetingResultResponse]
-)
+@router.get("/{user_id}/last-meeting-result", response_model=Optional[MeetingResultResponse])
 async def get_last_meeting_result(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """직전 대회 성적 조회"""
     try:
@@ -2040,11 +1831,7 @@ async def get_last_meeting_result(
         # 권한 확인 (본인 또는 관리자)
         from models import Admin
 
-        admin = (
-            db.query(Admin)
-            .filter(Admin.id == current_user.id, Admin.deleted_at.is_(None))
-            .first()
-        )
+        admin = (db.query(Admin).filter(Admin.id == current_user.id, Admin.deleted_at.is_(None)).first())
 
         if current_user.id != user_id and not admin:
             raise HTTPException(
@@ -2056,17 +1843,11 @@ async def get_last_meeting_result(
         from models import UserScoreHistory
         from sqlalchemy import desc
 
-        result_query = (
-            db.query(MeetingResult, UserScoreHistory)
-            .join(
-                UserScoreHistory,
-                (UserScoreHistory.meeting_id == MeetingResult.meeting_id)
-                & (UserScoreHistory.user_id == MeetingResult.user_id),
-            )
-            .filter(MeetingResult.user_id == user_id)
-            .order_by(desc(MeetingResult.completed_at))
-            .first()
-        )
+        result_query = (db.query(MeetingResult, UserScoreHistory).join(
+            UserScoreHistory,
+            (UserScoreHistory.meeting_id == MeetingResult.meeting_id)
+            & (UserScoreHistory.user_id == MeetingResult.user_id),
+        ).filter(MeetingResult.user_id == user_id).order_by(desc(MeetingResult.completed_at)).first())
 
         if not result_query:
             return None
@@ -2171,10 +1952,10 @@ class UserScheduleResponse(BaseModel):
 
 @router.get("/me/schedule", response_model=UserScheduleResponse)
 async def get_my_schedule(
-    start_date: Optional[str] = None,  # YYYY-MM-DD 형식
-    end_date: Optional[str] = None,  # YYYY-MM-DD 형식
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        start_date: Optional[str] = None,  # YYYY-MM-DD 형식
+        end_date: Optional[str] = None,  # YYYY-MM-DD 형식
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """내 일정표 조회 (참가 확정된 모임만, 날짜별로 그룹화)"""
     try:
@@ -2184,15 +1965,12 @@ async def get_my_schedule(
 
         # 사용자가 참가 확정된 모임 조회
         query = (
-            db.query(MeetingParticipant, Meeting, Club)
-            .join(Meeting, MeetingParticipant.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(
-                MeetingParticipant.user_id == current_user.id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
-                Meeting.meeting_time.isnot(None),  # 일정 시간이 있는 모임만
-            )
-        )
+            db.query(MeetingParticipant, Meeting, Club).join(Meeting, MeetingParticipant.meeting_id == Meeting.id).join(
+                Club, Meeting.club_id == Club.id).filter(
+                    MeetingParticipant.user_id == current_user.id,
+                    MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
+                    Meeting.meeting_time.isnot(None),  # 일정 시간이 있는 모임만
+                ))
 
         # 날짜 필터 적용
         if start_date:
@@ -2209,9 +1987,7 @@ async def get_my_schedule(
             try:
                 end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
                 # 종료일은 하루 끝까지 포함
-                end_datetime = end_datetime.replace(
-                    hour=23, minute=59, second=59, microsecond=999999
-                )
+                end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
                 query = query.filter(Meeting.meeting_time <= end_datetime)
             except ValueError:
                 raise HTTPException(
@@ -2249,21 +2025,13 @@ async def get_my_schedule(
                         status=str(meeting.status) if meeting.status else None,
                         club_id=club.id,
                         club_name=club.name,
-                        participant_status=(
-                            str(participant.status) if participant.status else None
-                        ),
-                        participant_role=(
-                            str(participant.role) if participant.role else None
-                        ),
-                    )
-                )
+                        participant_status=(str(participant.status) if participant.status else None),
+                        participant_role=(str(participant.role) if participant.role else None),
+                    ))
 
         # 날짜별로 정렬된 리스트 생성
         sorted_dates = sorted(schedules_by_date.keys())
-        schedules = [
-            DateScheduleItem(date=date_key, meetings=schedules_by_date[date_key])
-            for date_key in sorted_dates
-        ]
+        schedules = [DateScheduleItem(date=date_key, meetings=schedules_by_date[date_key]) for date_key in sorted_dates]
 
         # 날짜 범위 정보 구성
         date_range = None
@@ -2273,9 +2041,7 @@ async def get_my_schedule(
                 "end": date_range_end.strftime("%Y-%m-%d"),
             }
 
-        return UserScheduleResponse(
-            total_meetings=len(results), date_range=date_range, schedules=schedules
-        )
+        return UserScheduleResponse(total_meetings=len(results), date_range=date_range, schedules=schedules)
 
     except HTTPException:
         raise
@@ -2299,11 +2065,11 @@ class RoundingStatsResponse(BaseModel):
 
 @router.get("/me/rounding-meetings", response_model=RoundingMeetingsResponse)
 async def get_my_rounding_meetings(
-    score_status: Optional[str] = None,  # all, missing, completed
-    page: int = 1,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+        score_status: Optional[str] = None,  # all, missing, completed
+        page: int = 1,
+        limit: int = 10,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_active_user),
 ):
     """라운딩 종료된 모임 목록 조회 (점수 입력 상태 필터링 가능)"""
     try:
@@ -2313,16 +2079,13 @@ async def get_my_rounding_meetings(
         offset = (page - 1) * limit
 
         # 기본 쿼리: 라운딩 종료된 모임만, 본인 참가 모임만
-        query = (
-            db.query(MeetingParticipant, Meeting, Club)
-            .join(Meeting, MeetingParticipant.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(
-                MeetingParticipant.user_id == current_user.id,
-                Meeting.meeting_type == MeetingType.ROUND,
-                Meeting.rounding_completed_at.isnot(None),
-            )
-        )
+        query = (db.query(MeetingParticipant, Meeting, Club).join(Meeting,
+                                                                  MeetingParticipant.meeting_id == Meeting.id).join(
+                                                                      Club, Meeting.club_id == Club.id).filter(
+                                                                          MeetingParticipant.user_id == current_user.id,
+                                                                          Meeting.meeting_type == MeetingType.ROUND,
+                                                                          Meeting.rounding_completed_at.isnot(None),
+                                                                      ))
 
         # 점수 입력 상태 필터링
         if score_status == "missing":
@@ -2344,23 +2107,14 @@ async def get_my_rounding_meetings(
         total = query.count()
 
         # 결과 조회 (최신순)
-        results = (
-            query.order_by(Meeting.rounding_completed_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        results = (query.order_by(Meeting.rounding_completed_at.desc()).offset(offset).limit(limit).all())
 
         # 점수 정보 조회
         meeting_ids = [meeting.id for _, meeting, _ in results]
-        score_histories = (
-            db.query(UserScoreHistory)
-            .filter(
-                UserScoreHistory.user_id == current_user.id,
-                UserScoreHistory.meeting_id.in_(meeting_ids),
-            )
-            .all()
-        )
+        score_histories = (db.query(UserScoreHistory).filter(
+            UserScoreHistory.user_id == current_user.id,
+            UserScoreHistory.meeting_id.in_(meeting_ids),
+        ).all())
 
         score_map = {sh.meeting_id: sh for sh in score_histories}
 
@@ -2377,13 +2131,8 @@ async def get_my_rounding_meetings(
                     rounding_completed_at=meeting.rounding_completed_at,
                     has_score=score_history is not None,
                     gross_score=score_history.gross_score if score_history else None,
-                    net_score=(
-                        float(score_history.net_score)
-                        if score_history and score_history.net_score
-                        else None
-                    ),
-                )
-            )
+                    net_score=(float(score_history.net_score) if score_history and score_history.net_score else None),
+                ))
 
         # 총 페이지 수 계산
         total_pages = (total + limit - 1) // limit
@@ -2407,9 +2156,7 @@ async def get_my_rounding_meetings(
 
 
 @router.get("/me/rounding-stats", response_model=RoundingStatsResponse)
-async def get_my_rounding_stats(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)
-):
+async def get_my_rounding_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """라운딩 기록 통계 조회"""
     try:
         from utils.handicap_calculator import (
@@ -2419,12 +2166,8 @@ async def get_my_rounding_stats(
         from sqlalchemy import func
 
         # 사용자의 모든 라운딩 점수 기록 조회 (점수가 입력된 것만)
-        all_scores = (
-            db.query(UserScoreHistory)
-            .filter(UserScoreHistory.user_id == current_user.id)
-            .order_by(UserScoreHistory.played_at.desc())
-            .all()
-        )
+        all_scores = (db.query(UserScoreHistory).filter(UserScoreHistory.user_id == current_user.id).order_by(
+            UserScoreHistory.played_at.desc()).all())
 
         # 통계 계산
         total_games = len(all_scores)
@@ -2510,9 +2253,7 @@ class UserStatsResponse(BaseModel):
 
 
 @router.get("/stats", response_model=UserStatsResponse)
-async def get_user_statistics(
-    db: Session = Depends(get_db), current_user: dict = Depends(require_admin())
-):
+async def get_user_statistics(db: Session = Depends(get_db), current_user: dict = Depends(require_admin())):
     """사용자 통계 조회 (관리자만 가능)"""
     try:
         logger.info(f"사용자 통계 조회 시작 - user_id: {current_user.get('id')}")
@@ -2525,17 +2266,10 @@ async def get_user_statistics(
         total_users = db.query(User).filter(User.deleted_at.is_(None)).count()
 
         # 상태별 사용자 수
-        active_users = (
-            db.query(User)
-            .filter(User.deleted_at.is_(None), User.status == UserStatus.ACTIVE)
-            .count()
-        )
+        active_users = (db.query(User).filter(User.deleted_at.is_(None), User.status == UserStatus.ACTIVE).count())
 
-        inactive_users = (
-            db.query(User)
-            .filter(User.deleted_at.is_(None), User.status == UserStatus.DEACTIVATED)
-            .count()
-        )
+        inactive_users = (db.query(User).filter(User.deleted_at.is_(None),
+                                                User.status == UserStatus.DEACTIVATED).count())
 
         deleted_users = db.query(User).filter(User.deleted_at.isnot(None)).count()
 
@@ -2547,12 +2281,10 @@ async def get_user_statistics(
         regular_users = db.query(User).filter(User.deleted_at.is_(None)).count()
 
         # 성별 별 사용자 수
-        gender_stats = (
-            db.query(User.gender, func.count(User.id).label("count"))
-            .filter(User.deleted_at.is_(None), User.gender.isnot(None))
-            .group_by(User.gender)
-            .all()
-        )
+        gender_stats = (db.query(User.gender,
+                                 func.count(User.id).label("count")).filter(User.deleted_at.is_(None),
+                                                                            User.gender.isnot(None)).group_by(
+                                                                                User.gender).all())
 
         users_by_gender = {}
         for gender, count in gender_stats:
@@ -2560,12 +2292,10 @@ async def get_user_statistics(
                 users_by_gender[gender.value] = count
 
         # 제공자별 사용자 수
-        provider_stats = (
-            db.query(User.provider, func.count(User.id).label("count"))
-            .filter(User.deleted_at.is_(None), User.provider.isnot(None))
-            .group_by(User.provider)
-            .all()
-        )
+        provider_stats = (db.query(User.provider,
+                                   func.count(User.id).label("count")).filter(User.deleted_at.is_(None),
+                                                                              User.provider.isnot(None)).group_by(
+                                                                                  User.provider).all())
 
         users_by_provider = {}
         for provider, count in provider_stats:
@@ -2576,46 +2306,29 @@ async def get_user_statistics(
         current_date = datetime.now()
         twelve_months_ago = current_date - timedelta(days=365)
 
-        monthly_stats = (
-            db.query(
-                extract("year", User.created_at).label("year"),
-                extract("month", User.created_at).label("month"),
-                func.count(User.id).label("count"),
-            )
-            .filter(User.deleted_at.is_(None), User.created_at >= twelve_months_ago)
-            .group_by(
-                extract("year", User.created_at), extract("month", User.created_at)
-            )
-            .order_by(
-                extract("year", User.created_at), extract("month", User.created_at)
-            )
-            .all()
-        )
+        monthly_stats = (db.query(
+            extract("year", User.created_at).label("year"),
+            extract("month", User.created_at).label("month"),
+            func.count(User.id).label("count"),
+        ).filter(User.deleted_at.is_(None), User.created_at
+                 >= twelve_months_ago).group_by(extract("year", User.created_at),
+                                                extract("month",
+                                                        User.created_at)).order_by(extract("year", User.created_at),
+                                                                                   extract("month",
+                                                                                           User.created_at)).all())
 
         users_by_month = []
         for year, month, count in monthly_stats:
-            users_by_month.append(
-                {"year": int(year), "month": int(month), "count": count}
-            )
+            users_by_month.append({"year": int(year), "month": int(month), "count": count})
 
         # 핸디캡 통계
-        handicap_stats = (
-            db.query(
-                func.avg(User.handicap).label("avg_handicap"),
-                func.count(User.handicap).label("users_with_handicap"),
-            )
-            .filter(User.deleted_at.is_(None), User.handicap.isnot(None))
-            .first()
-        )
+        handicap_stats = (db.query(
+            func.avg(User.handicap).label("avg_handicap"),
+            func.count(User.handicap).label("users_with_handicap"),
+        ).filter(User.deleted_at.is_(None), User.handicap.isnot(None)).first())
 
-        average_handicap = (
-            float(handicap_stats.avg_handicap) if handicap_stats.avg_handicap else None
-        )
-        users_with_handicap = (
-            handicap_stats.users_with_handicap
-            if handicap_stats.users_with_handicap
-            else 0
-        )
+        average_handicap = (float(handicap_stats.avg_handicap) if handicap_stats.avg_handicap else None)
+        users_with_handicap = (handicap_stats.users_with_handicap if handicap_stats.users_with_handicap else 0)
         users_without_handicap = total_users - users_with_handicap
 
         stats_response = UserStatsResponse(
