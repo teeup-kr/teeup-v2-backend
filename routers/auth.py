@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, Union, Literal
 from datetime import datetime, timedelta
 from utils.datetime_utils import get_kst_now, get_kst_date
 import hashlib
@@ -23,6 +23,30 @@ logger = logging.getLogger(__name__)
 
 # 인증 관련 유틸리티 함수들
 security = HTTPBearer()
+
+def get_user_role_from_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """JWT 토큰에서 사용자 역할(role) 추출"""
+    try:
+        token = credentials.credentials
+        payload = jwt_auth.verify_token(token, "access")
+        # role 또는 type 필드에서 역할 확인
+        role = payload.get("role", "USER")
+        token_type = payload.get("type", "user")
+        
+        # type이 "admin"이면 ADMIN 반환
+        if token_type == "admin" or role == "ADMIN":
+            return "ADMIN"
+        return "USER"
+    except Exception:
+        return "USER"  # 기본값
+
+def is_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
+    """현재 사용자가 관리자인지 확인"""
+    try:
+        role = get_user_role_from_token(credentials)
+        return role == "ADMIN"
+    except Exception:
+        return False
 
 # 유효성 검사 함수들
 def validate_email(email: str) -> bool:
@@ -113,9 +137,20 @@ def validate_birthdate(birthdate: str) -> dict:
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """현재 사용자 조회 (JWT 토큰 검증 포함)"""
+    db: Session = Depends(get_db),
+    required_type: Optional[Literal["user", "admin"]] = "user",
+    check_status: bool = True
+) -> Union[User, Admin]:
+    """
+    통합 사용자/관리자 인증 함수
+    
+    Args:
+        required_type: "user" (User만), "admin" (Admin만), None (둘 다 허용)
+        check_status: True면 상태 확인 (DELETED, DEACTIVATED 체크), False면 상태 확인 안함
+    
+    Returns:
+        User 또는 Admin 객체
+    """
     try:
         # JWT 토큰 검증
         token = credentials.credentials
@@ -129,7 +164,53 @@ def get_current_user(
                 detail="토큰에 사용자 정보가 없습니다."
             )
         
-        # 사용자 조회
+        # 토큰 타입 확인 (User/Admin 구분)
+        token_role = payload.get("role", "USER")  # 기본값은 USER
+        token_type = payload.get("type", "user")  # 하위 호환성
+        is_admin_token = token_role == "ADMIN" or token_type == "admin"
+        
+        # required_type에 따른 검증
+        if required_type == "user" and is_admin_token:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="일반 사용자 전용 엔드포인트입니다. 관리자 계정으로는 접근할 수 없습니다."
+            )
+        elif required_type == "admin" and not is_admin_token:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="관리자 권한이 필요합니다."
+            )
+        
+        # Admin 토큰인 경우
+        if is_admin_token:
+            admin = db.query(Admin).filter(
+                Admin.id == user_id,
+                Admin.deleted_at.is_(None)
+            ).first()
+            
+            if not admin:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="관리자를 찾을 수 없습니다."
+                )
+            
+            # 상태 확인 (check_status가 True인 경우만)
+            if check_status:
+                if admin.status == UserStatus.DELETED:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="삭제된 관리자 계정입니다."
+                    )
+                
+                if admin.status == UserStatus.DEACTIVATED:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="비활성화된 관리자 계정입니다."
+                    )
+            
+            return admin
+        
+        # User 토큰인 경우
         user = db.query(User).filter(
             User.id == user_id,
             User.deleted_at.is_(None)
@@ -141,20 +222,20 @@ def get_current_user(
                 detail="사용자를 찾을 수 없습니다."
             )
         
-        # 사용자 상태 확인
-        if user.status == UserStatus.DELETED:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="탈퇴한 사용자입니다."
-            )
+        # 상태 확인 (check_status가 True인 경우만)
+        if check_status:
+            if user.status == UserStatus.DELETED:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="탈퇴한 사용자입니다."
+                )
+            
+            if user.status == UserStatus.DEACTIVATED:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="관리자에 의해 비활성화 처리된 회원입니다."
+                )
         
-        if user.status == UserStatus.DEACTIVATED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="관리자에 의해 비활성화 처리된 회원입니다."
-            )
-        
-        # User 객체 반환
         return user
         
     except HTTPException:
@@ -177,181 +258,9 @@ def get_current_active_user(
         )
     return current_user
 
-def get_current_admin_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> Admin:
-    """현재 관리자 사용자 조회"""
-    try:
-        token = credentials.credentials
-        payload = jwt_auth.verify_token(token, "access")
-        admin_id = payload.get("id")
-        user_type = payload.get("type", "user")
-        
-        if not admin_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="유효하지 않은 토큰입니다."
-            )
-        
-        # 관리자 타입 확인
-        if user_type != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="관리자 권한이 필요합니다."
-            )
-        
-        # 관리자 조회
-        admin = db.query(Admin).filter(
-            Admin.id == admin_id,
-            Admin.deleted_at.is_(None)
-        ).first()
-        
-        if not admin:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="관리자를 찾을 수 없습니다."
-            )
-        
-        return admin
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 인증 중 오류: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="토큰 검증 중 오류가 발생했습니다."
-        )
-
-def get_current_admin_user_jwt(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> Admin:
-    """JWT 토큰을 사용한 관리자 사용자 조회"""
-    try:
-        token = credentials.credentials
-        
-        # JWT 토큰 검증
-        payload = jwt_auth.verify_token(token, "access")
-        admin_id = payload.get("id")
-        user_type = payload.get("type", "user")
-        
-        if not admin_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="유효하지 않은 토큰입니다."
-            )
-        
-        # 관리자 타입 확인
-        if user_type != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="관리자 권한이 필요합니다."
-            )
-        
-        # 관리자 조회
-        admin = db.query(Admin).filter(
-            Admin.id == admin_id,
-            Admin.deleted_at.is_(None)
-        ).first()
-        
-        if not admin:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="관리자를 찾을 수 없습니다."
-            )
-        
-        # 관리자 상태 확인
-        if admin.status == UserStatus.DELETED:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="삭제된 관리자 계정입니다."
-            )
-        
-        if admin.status == UserStatus.DEACTIVATED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="비활성화된 관리자 계정입니다."
-            )
-        
-        return admin
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 인증 중 오류: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="토큰 검증 중 오류가 발생했습니다."
-        )
-
-def get_current_user_or_admin(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """관리자 또는 일반 사용자 인증 (JWT 기반)"""
-    try:
-        token = credentials.credentials
-        
-        # JWT 토큰 검증
-        payload = jwt_auth.verify_token(token, "access")
-        user_id = payload.get("id")
-        
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="유효하지 않은 토큰입니다."
-            )
-        
-        # 사용자 조회
-        user = db.query(User).filter(
-            User.id == user_id,
-            User.deleted_at.is_(None)
-        ).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="사용자를 찾을 수 없습니다."
-            )
-        
-        # 사용자 상태 확인
-        if user.status == UserStatus.DELETED:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="탈퇴한 사용자입니다."
-            )
-        
-        if user.status == UserStatus.DEACTIVATED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="관리자에 의해 비활성화 처리된 회원입니다."
-            )
-        
-        # 활성 사용자만 허용
-        if user.status != UserStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="비활성화된 사용자입니다."
-            )
-        
-        return user
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"사용자 인증 중 오류: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="토큰 검증 중 오류가 발생했습니다."
-        )
 
 # 간단한 로그인 스키마
 from pydantic import BaseModel
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
 
 class LoginResponse(BaseModel):
     access_token: str
@@ -359,83 +268,6 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: dict
-
-@router.post("/login", response_model=LoginResponse)
-async def login(
-    login_data: LoginRequest,
-    db: Session = Depends(get_db)
-):
-    """로그인"""
-    try:
-        # 사용자 조회 (삭제 여부와 관계없이 조회)
-        user = db.query(User).filter(User.email == login_data.email).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="이메일 또는 비밀번호가 올바르지 않습니다."
-            )
-        
-        # 삭제된 사용자 체크 (먼저 확인)
-        if user.status == UserStatus.DELETED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="사용할 수 없는 계정입니다."
-            )
-        
-        # 비활성화된 사용자 체크
-        if user.status == UserStatus.DEACTIVATED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="관리자에 의해 비활성화 처리된 회원입니다."
-            )
-        
-        # 활성 사용자만 로그인 가능
-        if user.status != UserStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="로그인할 수 없는 계정 상태입니다."
-            )
-        
-        # 비밀번호 확인 (간단한 해시 비교)
-        password_hash = hashlib.sha256(login_data.password.encode()).hexdigest()
-        if user.password != password_hash:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="이메일 또는 비밀번호가 올바르지 않습니다."
-            )
-        
-        # JWT 토큰 생성
-        user_data = {
-            "id": user.id,
-            "email": user.email,
-            "nickname": user.nickname,
-            "type": "user"  # 일반 사용자 타입
-        }
-        
-        access_token = jwt_auth.create_access_token(user_data)
-        refresh_token = jwt_auth.create_refresh_token(user_data)
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": 3600,  # 1시간
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "nickname": user.nickname,
-                "type": "user"
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="서버 내부 오류가 발생했습니다."
-        )
 
 @router.get("/me")
 async def get_current_user_info(
@@ -451,197 +283,6 @@ async def get_current_user_info(
             "status": current_user.status.value if current_user.status else None
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="서버 내부 오류가 발생했습니다."
-        )
-
-# 회원가입 스키마
-class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    nickname: str
-    average_score: Optional[int] = None
-    # 약관동의
-    terms_agreement: bool  # 서비스이용약관 (필수)
-    privacy_policy: bool   # 개인정보처리방침 (필수)
-    privacy_collection: bool  # 개인정보 수집 및 이용동의 (필수)
-    marketing_consent: Optional[bool] = False  # 마케팅정보 수신동의 (선택)
-
-@router.post("/register", response_model=LoginResponse)
-async def register(
-    register_data: RegisterRequest,
-    db: Session = Depends(get_db)
-):
-    """회원가입"""
-    try:
-        # 이메일 유효성 검사
-        if not validate_email(register_data.email):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="올바른 이메일 형식이 아닙니다."
-            )
-        
-        # 이메일 중복 확인
-        existing_user = db.query(User).filter(
-            User.email == register_data.email,
-            User.status != UserStatus.DELETED
-        ).first()
-        if existing_user:
-            # OAuth 사용자인 경우 특별한 메시지
-            if existing_user.provider != Provider.LOCAL:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"이미 {existing_user.provider.value} 계정으로 가입된 이메일입니다. 소셜 로그인을 이용해주세요."
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="이미 사용 중인 이메일입니다."
-                )
-        
-        # 닉네임 유효성 검사
-        if not validate_nickname(register_data.nickname):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="닉네임은 영문 대소문자, 한글, 숫자만 사용 가능하며 2-20자여야 합니다."
-            )
-        
-        # 닉네임 중복 확인
-        existing_nickname = db.query(User).filter(
-            User.nickname == register_data.nickname,
-            User.status != UserStatus.DELETED
-        ).first()
-        if existing_nickname:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="이미 사용 중인 닉네임입니다."
-            )
-        
-        # 삭제된 사용자의 이메일 확인 (영구 재사용 불가)
-        deleted_email_user = db.query(User).filter(
-            User.email == register_data.email,
-            User.status == UserStatus.DELETED,
-            User.deleted_at.isnot(None)
-        ).first()
-        if deleted_email_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="탈퇴한 사용자의 이메일은 재사용할 수 없습니다."
-            )
-        
-        # 탈퇴한 사용자의 닉네임 락 확인
-        deleted_user = db.query(User).filter(
-            User.original_nickname == register_data.nickname,
-            User.status == UserStatus.DELETED,
-            User.nickname_locked_until.isnot(None)
-        ).first()
-        
-        if deleted_user:
-            # 7일 락이 아직 유효한지 확인
-            if deleted_user.nickname_locked_until > get_kst_now():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="사용할 수 없는 닉네임입니다. (탈퇴 후 7일간 사용 불가)"
-                )
-        
-        # 비밀번호 유효성 검사
-        password_validation = validate_password(register_data.password)
-        if not password_validation["is_valid"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="; ".join(password_validation["errors"])
-            )
-        
-        # 평균타수 유효성 검사 (제공된 경우)
-        if register_data.average_score is not None and not validate_average_score(register_data.average_score):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="평균타수는 55타 이상 144타 이하여야 합니다."
-            )
-        
-        # 필수 약관동의 검증
-        if not register_data.terms_agreement:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="서비스이용약관에 동의해야 합니다."
-            )
-        
-        if not register_data.privacy_policy:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="개인정보처리방침에 동의해야 합니다."
-            )
-        
-        if not register_data.privacy_collection:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="개인정보 수집 및 이용동의에 동의해야 합니다."
-            )
-        
-        # 비밀번호 해시화
-        password_hash = hashlib.sha256(register_data.password.encode()).hexdigest()
-        
-        # 평균 타수로부터 초기 핸디캡 자동 계산
-        from utils.handicap_calculator import calculate_initial_handicap_from_average
-        from models import HandicapUpdateMethod
-        
-        initial_handicap = None
-        if register_data.average_score is not None:
-            initial_handicap = calculate_initial_handicap_from_average(register_data.average_score)
-        
-        # 사용자 생성 (id는 자동 생성)
-        user = User(
-            email=register_data.email,
-            password=password_hash,
-            nickname=register_data.nickname,
-            realname=None,  # 회원가입 시 실명은 None으로 설정
-            phone_number=None,  # 회원가입 시 전화번호는 None으로 설정
-            birthdate=None,  # 회원가입 시 생년월일은 None으로 설정
-            gender=None,  # 회원가입 시 성별은 None으로 설정
-            handicap=None,  # 회원가입 시 핸디캡은 None으로 설정 (하위 호환성)
-            average_score=register_data.average_score,
-            initial_handicap=initial_handicap,  # 평균 타수로부터 자동 계산
-            handicap_update_method=HandicapUpdateMethod.MANUAL if initial_handicap else None,
-            status=UserStatus.ACTIVE,
-            provider=Provider.LOCAL,  # 로컬 회원가입
-            needs_terms_agreement=True,  # 회원가입 시 약관 동의 필요
-            # 약관동의 정보 저장
-            terms_agreement=register_data.terms_agreement,
-            privacy_policy=register_data.privacy_policy,
-            privacy_collection=register_data.privacy_collection,
-            marketing_consent=register_data.marketing_consent or False
-        )
-        
-        db.add(user)
-        db.commit()
-        
-        # 회원가입 후 자동 로그인을 위해 토큰 생성
-        access_token = jwt_auth.create_access_token(data={"sub": user.id})
-        refresh_token = jwt_auth.create_refresh_token(data={"sub": user.id})
-        
-        # 사용자 정보 반환 (비밀번호 제외)
-        user_data = {
-            "id": user.id,
-            "email": user.email,
-            "nickname": user.nickname,
-            "type": "user",
-            "status": user.status.value,
-            "created_at": user.created_at.isoformat() if user.created_at else None
-        }
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "Bearer",
-            "expires_in": 3600,  # 1시간
-            "user": user_data
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
@@ -796,25 +437,6 @@ async def check_nickname_duplicate(
             detail="서버 내부 오류가 발생했습니다."
         )
 
-@router.post("/validate-password")
-async def validate_password_strength(
-    password: str = Query(..., description="검사할 비밀번호")
-):
-    """비밀번호 유효성 검사"""
-    try:
-        result = validate_password(password)
-        return {
-            "is_valid": result["is_valid"],
-            "strength": result["strength"],
-            "errors": result["errors"],
-            "message": "비밀번호가 유효합니다." if result["is_valid"] else "비밀번호가 유효하지 않습니다."
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="서버 내부 오류가 발생했습니다."
-        )
-
 @router.post("/validate-average-score")
 async def validate_average_score_value(
     score: int = Query(..., description="검사할 평균타수")
@@ -827,71 +449,6 @@ async def validate_average_score_value(
             "message": "유효한 평균타수입니다." if is_valid else "평균타수는 55타 이상 144타 이하여야 합니다."
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="서버 내부 오류가 발생했습니다."
-        )
-
-@router.put("/change-password")
-async def change_password(
-    current_password: str = Query(..., description="현재 비밀번호"),
-    new_password: str = Query(..., description="새 비밀번호"),
-    confirm_password: str = Query(..., description="새 비밀번호 확인"),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """비밀번호 변경"""
-    try:
-        # 새 비밀번호와 확인 비밀번호 일치 확인
-        if new_password != confirm_password:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="새 비밀번호와 확인 비밀번호가 일치하지 않습니다."
-            )
-        
-        # 새 비밀번호 유효성 검사
-        password_validation = validate_password(new_password)
-        if not password_validation["is_valid"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="; ".join(password_validation["errors"])
-            )
-        
-        # 현재 사용자 조회
-        user = db.query(User).filter(User.id == current_user.id).first()
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="사용자를 찾을 수 없습니다."
-            )
-        
-        # 현재 비밀번호 확인
-        current_password_hash = hashlib.sha256(current_password.encode()).hexdigest()
-        if user.password != current_password_hash:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="현재 비밀번호가 올바르지 않습니다."
-            )
-        
-        # 새 비밀번호 해시화 및 저장
-        new_password_hash = hashlib.sha256(new_password.encode()).hexdigest()
-        user.password = new_password_hash
-        user.updated_at = get_kst_now()
-        
-        db.commit()
-        
-        return {
-            "message": "비밀번호가 성공적으로 변경되었습니다.",
-            "success": True
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"비밀번호 변경 중 오류: {str(e)}")
-        import traceback
-        logger.error(f"상세 오류: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
@@ -1456,207 +1013,3 @@ def get_default_terms_content(terms_type: str) -> str:
     return contents.get(terms_type, '<p>약관 내용을 입력해주세요.</p>')
 
 # 비밀번호 재설정 관련 스키마
-class PasswordResetRequest(BaseModel):
-    nickname: str
-    email: str
-
-class PasswordResetTokenRequest(BaseModel):
-    token: str
-    new_password: str
-
-@router.post("/request-password-reset", response_model=MessageResponse)
-async def request_password_reset(
-    request_data: PasswordResetRequest,
-    db: Session = Depends(get_db)
-):
-    """비밀번호 재설정 요청 (닉네임+이메일 확인 후 인증 링크 전송)"""
-    try:
-        nickname = request_data.nickname.strip()
-        email = request_data.email.strip()
-        
-        # 입력값 유효성 검사
-        if not nickname or not email:
-            # 보안을 위해 항상 성공 메시지 반환
-            logger.warning("비밀번호 재설정 요청: 입력값 누락")
-            return MessageResponse(
-                success=True,
-                message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
-            )
-        
-        if not validate_email(email):
-            # 보안을 위해 항상 성공 메시지 반환
-            logger.warning(f"비밀번호 재설정 요청: 잘못된 이메일 형식 - {email}")
-            return MessageResponse(
-                success=True,
-                message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
-            )
-        
-        # 닉네임과 이메일이 일치하는 사용자 확인
-        user = db.query(User).filter(
-            User.nickname == nickname,
-            User.email == email,
-            User.status == UserStatus.ACTIVE,
-            User.deleted_at.is_(None),
-            User.provider == Provider.LOCAL  # 일반 회원가입 사용자만
-        ).first()
-        
-        # 사용자가 존재하는 경우에만 이메일 전송
-        if user:
-            try:
-                # 재설정 토큰 생성 (1시간 유효)
-                from datetime import timedelta
-                token_data = {
-                    "id": user.id,
-                    "email": user.email,
-                    "nickname": user.nickname,
-                    "type": "password_reset"
-                }
-                reset_token = jwt_auth.create_access_token(
-                    token_data,
-                    expires_delta=timedelta(hours=1)
-                )
-                
-                # 이메일 전송
-                from utils.email_service import send_password_reset_email
-                await send_password_reset_email(
-                    to=user.email,
-                    nickname=user.nickname,
-                    reset_token=reset_token
-                )
-                
-                logger.info(f"비밀번호 재설정 이메일 전송 성공: {user.email}")
-            except Exception as e:
-                logger.error(f"비밀번호 재설정 이메일 전송 실패: {str(e)}")
-                # 이메일 전송 실패해도 성공 메시지 반환 (보안)
-        
-        # 보안을 위해 항상 성공 메시지 반환 (사용자 존재 여부 노출 방지)
-        return MessageResponse(
-            success=True,
-            message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"비밀번호 재설정 요청 처리 중 오류: {str(e)}")
-        # 보안을 위해 항상 성공 메시지 반환
-        return MessageResponse(
-            success=True,
-            message="이메일이 발송되었습니다. 받은편지함을 확인해주세요."
-        )
-
-@router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(
-    request_data: PasswordResetTokenRequest,
-    db: Session = Depends(get_db)
-):
-    """비밀번호 재설정 (토큰 기반)"""
-    try:
-        token = request_data.token
-        new_password = request_data.new_password
-        
-        if not token:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="토큰이 필요합니다."
-            )
-        
-        if not new_password:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="새 비밀번호를 입력해주세요."
-            )
-        
-        # 토큰 검증
-        try:
-            # password_reset 토큰은 type 체크를 건너뛰고 검증
-            # verify_token은 type이 "access"가 아니면 실패하므로, 
-            # decode_token을 사용하여 검증 없이 디코딩 후 수동으로 검증
-            payload = jwt_auth.decode_token(token)
-            
-            # 만료 시간 확인
-            exp = payload.get("exp")
-            if exp:
-                from datetime import timezone
-                exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
-                current_utc = get_kst_now().astimezone(timezone.utc)
-                if current_utc > exp_datetime:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="토큰이 만료되었습니다. 비밀번호 찾기를 다시 시도해주세요."
-                    )
-            
-            # 토큰 타입 확인
-            if payload.get("type") != "password_reset":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="유효하지 않은 토큰입니다."
-                )
-            
-            user_id = payload.get("id")
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="유효하지 않은 토큰입니다."
-                )
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="토큰이 만료되었습니다. 비밀번호 찾기를 다시 시도해주세요."
-            )
-        except jwt.InvalidTokenError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="유효하지 않은 토큰입니다."
-            )
-        except Exception as e:
-            logger.error(f"토큰 검증 실패: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="유효하지 않은 토큰입니다."
-            )
-        
-        # 사용자 조회
-        user = db.query(User).filter(
-            User.id == user_id,
-            User.status == UserStatus.ACTIVE,
-            User.deleted_at.is_(None)
-        ).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="사용자를 찾을 수 없습니다."
-            )
-        
-        # 새 비밀번호 유효성 검사
-        password_validation = validate_password(new_password)
-        if not password_validation["is_valid"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="; ".join(password_validation["errors"])
-            )
-        
-        # 비밀번호 해시화 및 저장
-        new_password_hash = hashlib.sha256(new_password.encode()).hexdigest()
-        user.password = new_password_hash
-        user.updated_at = get_kst_now()
-        
-        db.commit()
-        
-        logger.info(f"비밀번호 재설정 완료: user_id={user_id}")
-        
-        return MessageResponse(
-            success=True,
-            message="비밀번호가 성공적으로 재설정되었습니다."
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"비밀번호 재설정 중 오류: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="서버 내부 오류가 발생했습니다."
-        )

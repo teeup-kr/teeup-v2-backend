@@ -155,6 +155,7 @@ class GoogleOAuth:
             #         detail="Google OAuth 설정이 완료되지 않았습니다"
             #     )
             
+            # PKCE를 사용하는 경우 client_secret은 선택사항
             data = {
                 "client_id": self.client_id,
                 "grant_type": "authorization_code",
@@ -162,8 +163,13 @@ class GoogleOAuth:
                 "code_verifier": codeVerifier,
                 "redirect_uri": self.redirect_uri,
             }
+            
+            # PKCE를 사용하지 않는 경우에만 client_secret 추가
+            # (일부 구글 OAuth 설정에서는 필요할 수 있음)
+            if self.client_secret:
+                data["client_secret"] = self.client_secret
 
-            # logger.info(f"Google OAuth 토큰 교환 요청: {data}")
+            logger.info(f"Google OAuth 토큰 교환 요청 - redirect_uri: {self.redirect_uri}, client_id: {self.client_id[:10]}...")
             
             response = requests.post(self.token_url, data=data)
             
@@ -171,6 +177,7 @@ class GoogleOAuth:
             logger.info(f"Google OAuth 응답 상태: {response.status_code}")
             if response.status_code != 200:
                 logger.error(f"Google OAuth 응답 내용: {response.text}")
+                logger.error(f"요청 데이터 (client_secret 제외): { {k: v for k, v in data.items() if k != 'client_secret'} }")
             
             response.raise_for_status()
             

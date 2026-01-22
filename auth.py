@@ -4,17 +4,11 @@
 
 from routers.auth import (
     get_current_user,
-    get_current_active_user,
-    get_current_admin_user,
-    get_current_admin_user_jwt,
-    get_current_user_or_admin
+    get_current_active_user
 )
 
 # 하위 호환성을 위해 함수들을 재export
 __all__ = [
     "get_current_user",
-    "get_current_active_user",
-    "get_current_admin_user",
-    "get_current_admin_user_jwt",
-    "get_current_user_or_admin"
+    "get_current_active_user"
 ]

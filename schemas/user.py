@@ -48,7 +48,7 @@ class UserResponse(BaseModel):
     gender: Optional[str] = None
     handicap: Optional[float] = None
     average_score: Optional[int] = None
-    role: str
+    role: str = "USER"  # User는 항상 USER 역할
     status: str
     provider: Optional[str] = None
     email_verified: Optional[datetime] = None
