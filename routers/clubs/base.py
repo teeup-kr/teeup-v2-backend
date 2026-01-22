@@ -20,6 +20,15 @@ from utils.datetime_utils import get_kst_now
 
 router = APIRouter(prefix="/clubs", tags=["클럽 관리"])
 
+@router.post("/register", response_model=ClubResponse)
+async def register_club(
+    club_data: ClubCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """클럽 등록 (바로 활성화)"""
+    return await create_club(club_data, db, current_user)
+
 @router.post("/", response_model=ClubResponse)
 async def create_club(
     club_data: ClubCreate,

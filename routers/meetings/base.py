@@ -29,7 +29,6 @@ from schemas import (
     SimpleScoreCreate, SimpleScoreResponse
 )
 from routers.auth import get_current_user, get_current_active_user
-from routers.auth import get_current_user_or_admin
 # admin_auth는 JWT 기반으로 변경됨
 from utils.permissions import require_admin, MEMBERSHIP_ACTIVE_STATUSES
 from utils.cuid import generate_cuid
