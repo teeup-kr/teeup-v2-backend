@@ -93,7 +93,7 @@ async def google_oauth_callback(
             "id": user.id,
             "email": user.email,
             "nickname": user.nickname,
-            "role": user.role.value if user.role else None,
+            "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
             "provider": user.provider.value if user.provider else None
         }
         
@@ -110,8 +110,8 @@ async def google_oauth_callback(
             "user": {
                 "id": user.id,                "email": user.email,
                 "nickname": user.nickname,
-                "role": user.role.value,
-                "status": user.status.value,
+                "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
+                "status": user.status.value if user.status else "ACTIVE",
                 "provider": user.provider.value,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
@@ -192,7 +192,7 @@ async def google_oauth_callback_post(
             "id": user.id,
             "email": user.email,
             "nickname": user.nickname,
-            "role": user.role.value if user.role else None,
+            "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
             "provider": user.provider.value if user.provider else None
         }
         
@@ -209,8 +209,8 @@ async def google_oauth_callback_post(
             "user": {
                 "id": user.id,                "email": user.email,
                 "nickname": user.nickname,
-                "role": user.role.value,
-                "status": user.status.value,
+                "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
+                "status": user.status.value if user.status else "ACTIVE",
                 "provider": user.provider.value,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
