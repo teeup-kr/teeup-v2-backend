@@ -36,21 +36,7 @@ import logging
 
 from config import settings
 from database import get_db, init_database, test_connection
-from routers import (
-    auth,
-    plans,
-    payments,
-    payment_methods,
-    subscriptions,
-    users,
-    terms,
-    notices,
-    inquiries,
-    upload,
-    admin,
-    oauth,
-    faq,
-)
+from routers import (auth, plans, payments, payment_methods, region, subscriptions, users, terms, notices, inquiries, upload, admin, oauth, faq)
 from routers.clubs import (
     base_router as clubs_router,
     notices_router as clubs_notices_router,
@@ -91,18 +77,37 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     default_response_class=JSONResponse,
     openapi_tags=[
-        {"name": "auth", "description": "인증 관련 API"},
-        {"name": "users", "description": "사용자 관리 API"},
-        {"name": "clubs", "description": "골프 클럽 관리 API"},
-        {"name": "meetings", "description": "모임 관리 API"},
-        {"name": "scores", "description": "점수 관리 API"},
-        {"name": "payments", "description": "결제 관리 API"},
+        {
+            "name": "auth",
+            "description": "인증 관련 API"
+        },
+        {
+            "name": "users",
+            "description": "사용자 관리 API"
+        },
+        {
+            "name": "clubs",
+            "description": "골프 클럽 관리 API"
+        },
+        {
+            "name": "meetings",
+            "description": "모임 관리 API"
+        },
+        {
+            "name": "scores",
+            "description": "점수 관리 API"
+        },
+        {
+            "name": "payments",
+            "description": "결제 관리 API"
+        },
     ],
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RawRequestLogMiddleware(BaseHTTPMiddleware):
+
     async def dispatch(self, request: Request, call_next):
         body = await request.body()
 
@@ -130,13 +135,9 @@ app.add_middleware(RawRequestLogMiddleware)
 
 # CORS 설정 - 가장 먼저 추가해야 함 (미들웨어는 역순으로 실행됨)
 # 개발 환경을 위한 localhost 기본값 (하드코딩된 도메인 제거)
-default_dev_origins = [
-    "http://localhost:8081"
-]
+default_dev_origins = ["http://localhost:8081"]
 # CORS_ORIGINS 환경 변수 필수 (프로덕션 도메인은 환경 변수로 설정)
-allowed_origins = (
-    settings.cors_origins_list if settings.cors_origins_list else default_dev_origins
-)
+allowed_origins = (settings.cors_origins_list if settings.cors_origins_list else default_dev_origins)
 logger.info(f"CORS origins: {allowed_origins}")
 app.add_middleware(
     CORSMiddleware,
@@ -176,9 +177,7 @@ app.include_router(workflow_router, prefix="/api/v1")  # /meetings - 워크플�
 app.include_router(settlement_router, prefix="/api/v1")  # /meetings - 정산
 app.include_router(teams_router, prefix="/api/v1")  # /teams - 팀 관리
 app.include_router(scores_router, prefix="/api/v1")  # /scores - 점수 관리
-app.include_router(
-    meeting_score_router, prefix="/api/v1"
-)  # /meetings - 모임 스코어 관리
+app.include_router(meeting_score_router, prefix="/api/v1")  # /meetings - 모임 스코어 관리
 app.include_router(expenses_router, prefix="/api/v1")  # /expenses - 비용 관리
 app.include_router(rounds_router, prefix="/api/v1")  # /rounds - 라운딩 전용
 app.include_router(socials_router, prefix="/api/v1")  # /socials - 소셜 모임 전용
@@ -193,6 +192,9 @@ app.include_router(upload.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(faq.admin_router, prefix="/api/v1")
 app.include_router(faq.client_router, prefix="/api/v1")
+
+# 외부 데이터 관련 API 라우터
+app.include_router(region.region_router, prefix="/api/v1")
 
 # 보안 미들웨어 설정
 # Rate Limiting (개발 환경에서는 비활성화)
@@ -244,9 +246,7 @@ async def startup_event():
 
 @app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
 def swagger_ui():
-    return get_swagger_ui_html(
-        openapi_url="/openapi.json", title="FastAPI - Swagger UI"
-    )
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="FastAPI - Swagger UI")
 
 
 @app.get("/redoc", include_in_schema=False, response_class=HTMLResponse)
