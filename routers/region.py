@@ -1,44 +1,21 @@
-from collections import defaultdict
-import logging
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models.region import Sido, Gungu
-from utils.region import fetch_all_regions, sync_regions
-
-logger = logging.getLogger(__name__)
+from utils.region import fetch_all_regions, sync_regions, get_active_sido_list, get_active_gungu_list, validate_sido_code
 
 # 저장된 리스트 조회 라우터
 region_router = APIRouter(prefix="", tags=["region"])
 
 
-@region_router.get("/region-list")
-def get_region_list(db: Session = Depends(get_db)):
-    # 1. 활성 시도 전체
-    sidos = (db.query(Sido).filter(Sido.is_active == True).order_by(Sido.code).all())
+@region_router.get("/sido-list")
+def get_sido_list(db: Session = Depends(get_db)):
+    return get_active_sido_list(db)
 
-    # 2. 활성 시군구 전체
-    sigungus = (db.query(Gungu).filter(Gungu.is_active == True).order_by(Gungu.code).all())
 
-    # 3. 시도코드 기준으로 시군구 묶기
-    sigungu_map = defaultdict(list)
-    for s in sigungus:
-        sigungu_map[s.sido_code].append({
-            "code": s.code,
-            "name": s.name,
-        })
-
-    # 4. 계층화 결과 생성
-    result = []
-    for sido in sidos:
-        result.append({
-            "code": sido.code,
-            "name": sido.name,
-            "sigungu": sigungu_map.get(sido.code, []),
-        })
-
-    return result
+@region_router.get("/gungu-list")
+def get_gungu_list(sido_code: str = Query(..., description="시도 코드"), db: Session = Depends(get_db)):
+    validate_sido_code(db, sido_code)
+    return get_active_gungu_list(db, sido_code)
 
 
 # 테스트용

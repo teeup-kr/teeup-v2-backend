@@ -17,6 +17,7 @@
 13. [결제 (Payments)](#13-결제-payments)
 14. [결제 수단 (Payment Methods)](#14-결제-수단-payment-methods)
 15. [구독 (Subscriptions)](#15-구독-subscriptions)
+16. [지역 (Region)](#16-지역-region)
 
 ---
 
@@ -605,6 +606,20 @@
 
 ---
 
+## 16. 지역 (Region)
+
+**파일:** `routers/region.py`  
+**Prefix:** `/api/v1`  
+**태그:** `region`
+
+| Method | Path | 설명 | Request | Response | 인증 필요 |
+|--------|------|------|---------|----------|----------|
+| GET | `/sido-list` | 시도 목록 조회 | - | `List`[{code, name}] | ❌ |
+| GET | `/gungu-list` | 시군구 목록 조회 | Query: `sido_code` | `List`[{code, name}] | ❌ |
+| POST | `/region-list` | [TEST]공공 API 기반 지역 데이터 동기화 | - | `{success: bool, fetchedCount: int, syncedCount: int?, message: str}` | ❌ |
+
+---
+
 ## 📝 참고사항
 
 - 모든 API는 `/api/v1` prefix를 사용합니다.
@@ -812,6 +827,7 @@
 #### ClubCreate
 
 **type**: `string` → enum: [ClubType](#clubtype)
+**필수**: `sido_code` (1개), `gungu_codes` (1~4개)
 
 **사용되는 엔드포인트:**
 - [POST `/api/v1/clubs/`](#4-클럽-clubs) - 클럽 생성
@@ -825,7 +841,6 @@
   "type": "REGULAR",
   "description": string,
   "member_count": int,
-  "location": string,
   "contact_info": string,
   "representative_name": string,
   "additional_info": string
@@ -838,14 +853,15 @@
 - [PUT `/api/v1/clubs/{club_id}`](#4-클럽-clubs) - 클럽 수정
 - [PUT `/api/v1/admin/clubs/{club_id}`](#3-관리자-admin) - 클럽 수정
 
+**필수**: `sido_code` (1개), `gungu_codes` (1~4개)
+
 ```json
 {
   "name": string,
   "sido_code": string,
   "gungu_codes": [string], // 1~4개
   "description": string,
-  "member_count": int,
-  "location": string
+  "member_count": int
 }
 ```
 
@@ -883,7 +899,6 @@
   "description": string (optional),
   "member_count": int (optional),
   "current_member_count": int (optional),
-  "location": string (optional),
   "contact_info": string (optional),
   "representative_name": string (optional),
   "additional_info": string (optional),

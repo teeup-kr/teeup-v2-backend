@@ -20,6 +20,7 @@ import schemas
 from utils.jwt_auth import jwt_auth
 from utils import generate_id
 from utils.display_id_generator import generate_club_display_id
+from utils.region import validate_gungu_codes
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -29,26 +30,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # 일회용 토큰 추적을 위한 메모리 캐시 (스레드 안전)
 _used_tokens = set()
 _token_lock = threading.Lock()
-
-
-def _validate_gungu_codes(db: Session, sido_code: str, gungu_codes: list[str]) -> list[str]:
-    unique_codes = list(dict.fromkeys(gungu_codes))
-    if not (1 <= len(unique_codes) <= 4):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="최소 1개를 선택하셔야하며, 최대 4개까지 선택하실 수 있습니다.")
-
-    from models import Gungu
-    gungus = db.query(Gungu).filter(Gungu.code.in_(unique_codes)).all()
-    found_codes = {gungu.code for gungu in gungus}
-    missing = [code for code in unique_codes if code not in found_codes]
-    if missing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"존재하지 않는 gungu_code가 있습니다: {missing}")
-
-    invalid = [gungu.code for gungu in gungus if gungu.sido_code != sido_code]
-    if invalid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"sido_code 하위가 아닌 gungu_code가 있습니다: {invalid}")
-
-    return unique_codes
 
 
 def mark_token_as_used(token_jti: str):
@@ -1278,6 +1259,9 @@ async def create_admin_club(club_data: dict,
         if not club_data.get("sido_code"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
 
+        gungu_codes = club_data.get("gungu_codes") or []
+        unique_gungu_codes = validate_gungu_codes(db, club_data.get("sido_code"), gungu_codes)
+
         # 클럽 생성 (관리자가 생성하므로 바로 승인)
         club = Club(
             display_id=display_id,
@@ -1297,8 +1281,6 @@ async def create_admin_club(club_data: dict,
         db.commit()
         db.refresh(club)
 
-        gungu_codes = club_data.get("gungu_codes") or []
-        unique_gungu_codes = _validate_gungu_codes(db, club.sido_code, gungu_codes)
         for gungu_code in unique_gungu_codes:
             db.add(ClubRegion(club_id=club.id, gungu_code=gungu_code))
 
@@ -1899,7 +1881,7 @@ async def update_admin_club(club_id: str,
             if not target_sido_code:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
             gungu_codes = club_data.get("gungu_codes") or []
-            unique_gungu_codes = _validate_gungu_codes(db, target_sido_code, gungu_codes)
+            unique_gungu_codes = validate_gungu_codes(db, target_sido_code, gungu_codes)
             db.query(ClubRegion).filter(ClubRegion.club_id == club.id).delete(synchronize_session=False)
             for gungu_code in unique_gungu_codes:
                 db.add(ClubRegion(club_id=club.id, gungu_code=gungu_code))

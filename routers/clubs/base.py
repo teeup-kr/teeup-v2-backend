@@ -8,32 +8,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 from database import get_db
-from models import User, Club, ClubMembership, ClubRegion, Gungu
+from models import User, Club, ClubMembership, ClubRegion
 from schemas import (ClubCreate, ClubUpdate, ClubResponse, ClubMembersResponse, ClubMembershipResponse,
                      PaginatedResponse, MessageResponse, ClubRole, ClubStatus, MembershipStatus)
 from routers.auth import get_current_user, get_current_active_user
 from utils.datetime_utils import get_kst_now
+from utils.region import validate_gungu_codes
 
 router = APIRouter(prefix="/clubs", tags=["클럽 관리"])
 
-
-def _validate_gungu_codes(db: Session, sido_code: str, gungu_codes: List[str]) -> List[str]:
-    unique_codes = list(dict.fromkeys(gungu_codes))
-    if not (1 <= len(unique_codes) <= 4):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="최소 1개를 선택하셔야하며, 최대 4개까지 선택하실 수 있습니다.")
-
-    gungus = db.query(Gungu).filter(Gungu.code.in_(unique_codes)).all()
-    found_codes = {gungu.code for gungu in gungus}
-    missing = [code for code in unique_codes if code not in found_codes]
-    if missing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"존재하지 않는 gungu_code가 있습니다: {missing}")
-
-    invalid = [gungu.code for gungu in gungus if gungu.sido_code != sido_code]
-    if invalid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"sido_code 하위가 아닌 gungu_code가 있습니다: {invalid}")
-
-    return unique_codes
 
 @router.post("/register", response_model=ClubResponse)
 async def register_club(
@@ -57,6 +40,9 @@ async def create_club(club_data: ClubCreate,
 
         if not club_data.sido_code:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
+
+        # 시도/군구 유효성 검사 (등록 전)
+        unique_gungu_codes = validate_gungu_codes(db, club_data.sido_code, club_data.gungu_codes)
 
         # 클럽 생성 (바로 활성 상태로 생성)
         club = Club(display_id=display_id,
@@ -86,7 +72,6 @@ async def create_club(club_data: ClubCreate,
             user_id = current_user.id
 
         # 선택한 군구 저장
-        unique_gungu_codes = _validate_gungu_codes(db, club_data.sido_code, club_data.gungu_codes)
         for gungu_code in unique_gungu_codes:
             db.add(ClubRegion(club_id=club.id, gungu_code=gungu_code))
 
@@ -478,7 +463,7 @@ async def update_club(club_id: str,
             target_sido_code = club_data.sido_code if club_data.sido_code is not None else club.sido_code
             if not target_sido_code:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
-            unique_gungu_codes = _validate_gungu_codes(db, target_sido_code, club_data.gungu_codes)
+            unique_gungu_codes = validate_gungu_codes(db, target_sido_code, club_data.gungu_codes)
             db.query(ClubRegion).filter(ClubRegion.club_id == club.id).delete(synchronize_session=False)
             for gungu_code in unique_gungu_codes:
                 db.add(ClubRegion(club_id=club.id, gungu_code=gungu_code))
