@@ -18,7 +18,10 @@ def get_active_sido_list(db: Session) -> list[dict]:
 
 
 def get_active_gungu_list(db: Session, sido_code: str) -> list[dict]:
-    gungus = (db.query(Gungu).filter(Gungu.is_active == True, Gungu.sido_code == sido_code).order_by(Gungu.code).all())
+    gungus = (db.query(Gungu)
+              .filter(Gungu.is_active == True, Gungu.code.like(f"{sido_code}%"))
+              .order_by(Gungu.code)
+              .all())
     return [{"code": gungu.code, "name": gungu.name} for gungu in gungus]
 
 
@@ -45,7 +48,7 @@ def validate_gungu_codes(db: Session, sido_code: str, gungu_codes: list[str]) ->
     if missing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"존재하지 않는 gungu_code가 있습니다: {missing}")
 
-    invalid = [gungu.code for gungu in gungus if gungu.sido_code != sido_code]
+    invalid = [gungu.code for gungu in gungus if not gungu.code.startswith(sido_code)]
     if invalid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"sido_code 하위가 아닌 gungu_code가 있습니다: {invalid}")
@@ -116,10 +119,6 @@ def _to_str(value) -> Optional[str]:
     return value if value != "" else None
 
 
-def _derive_sido_name(locatadd_nm: str) -> str:
-    return locatadd_nm.split(" ")[0] if locatadd_nm else ""
-
-
 # db 갱신
 def sync_regions(db: Session, rows: list[dict]) -> dict:
     now = datetime.utcnow()
@@ -139,15 +138,16 @@ def sync_regions(db: Session, rows: list[dict]) -> dict:
         if level == "1":
             sido_rows.append(row)
         elif level == "2":
+            sgg_cd = _to_str(row.get("sgg_cd"))
+            # sgg_cd 끝자리가 0인 상위 시군구만 저장
+            if not sgg_cd or sgg_cd[-1] != "0":
+                continue
             gungu_rows.append(row)
 
     for row in sido_rows:
-        region_cd = row["region_cd"]
         sido_cd = row["sido_cd"]
-        sgg_cd = row["sgg_cd"]
-        umd_cd = row["umd_cd"]
-        ri_cd = row["ri_cd"]
         full_name = row["locatadd_nm"]
+        adpt_de = _to_str(row.get("adpt_de"))
 
         key = sido_cd
         sido = db.get(Sido, key)
@@ -155,19 +155,8 @@ def sync_regions(db: Session, rows: list[dict]) -> dict:
         if not sido:
             sido = Sido(
                 code=key,
-                region_cd=region_cd,
-                sido_cd=sido_cd,
-                sgg_cd=sgg_cd,
-                umd_cd=umd_cd,
-                ri_cd=ri_cd,
                 name=full_name,
-                locatjumin_cd=_to_str(row.get("locatjumin_cd")),
-                locatjijuk_cd=_to_str(row.get("locatjijuk_cd")),
-                locat_order=_to_str(row.get("locat_order")),
-                locat_rm=_to_str(row.get("locat_rm")),
-                locathigh_cd=_to_str(row.get("locathigh_cd")),
-                locallow_nm=_to_str(row.get("locallow_nm")),
-                adpt_de=_to_str(row.get("adpt_de")),
+                adpt_de=adpt_de,
                 is_active=True,
                 updated_at=now,
             )
@@ -177,53 +166,30 @@ def sync_regions(db: Session, rows: list[dict]) -> dict:
             if not sido.is_active:
                 reactivated_sido += 1
 
-            if sido.name != full_name:
+            if sido.name != full_name or sido.adpt_de != adpt_de:
                 updated_sido += 1
 
-            sido.region_cd = region_cd
-            sido.sido_cd = sido_cd
-            sido.sgg_cd = sgg_cd
-            sido.umd_cd = umd_cd
-            sido.ri_cd = ri_cd
             sido.name = full_name
-            sido.locatjumin_cd = _to_str(row.get("locatjumin_cd"))
-            sido.locatjijuk_cd = _to_str(row.get("locatjijuk_cd"))
-            sido.locat_order = _to_str(row.get("locat_order"))
-            sido.locat_rm = _to_str(row.get("locat_rm"))
-            sido.locathigh_cd = _to_str(row.get("locathigh_cd"))
-            sido.locallow_nm = _to_str(row.get("locallow_nm"))
-            sido.adpt_de = _to_str(row.get("adpt_de"))
+            sido.adpt_de = adpt_de
             sido.is_active = True
             sido.updated_at = now
 
     db.flush()
 
     for row in gungu_rows:
-        region_cd = row["region_cd"]
         sido_cd = row["sido_cd"]
         sgg_cd = row["sgg_cd"]
-        umd_cd = row["umd_cd"]
-        ri_cd = row["ri_cd"]
         full_name = row["locatadd_nm"]
+        name = _to_str(row.get("locallow_nm"))
+        adpt_de = _to_str(row.get("adpt_de"))
 
         # 시도 행이 누락된 경우(순서/데이터 미포함), 최소 정보로 시도 생성
         if not db.get(Sido, sido_cd):
-            sido_name = _derive_sido_name(full_name)
+            sido_name = full_name.split(" ")[0] if full_name else ""
             sido = Sido(
                 code=sido_cd,
-                region_cd=_to_str(row.get("locathigh_cd")) or f"{sido_cd}00000000",
-                sido_cd=sido_cd,
-                sgg_cd="000",
-                umd_cd="000",
-                ri_cd="00",
                 name=sido_name,
-                locatjumin_cd=None,
-                locatjijuk_cd=None,
-                locat_order=None,
-                locat_rm=None,
-                locathigh_cd=None,
-                locallow_nm=sido_name,
-                adpt_de=None,
+                adpt_de=_to_str(row.get("adpt_de")),
                 is_active=True,
                 updated_at=now,
             )
@@ -236,20 +202,8 @@ def sync_regions(db: Session, rows: list[dict]) -> dict:
         if not sigungu:
             sigungu = Gungu(
                 code=key,
-                sido_code=sido_cd,
-                region_cd=region_cd,
-                sido_cd=sido_cd,
-                sgg_cd=sgg_cd,
-                umd_cd=umd_cd,
-                ri_cd=ri_cd,
-                name=full_name,
-                locatjumin_cd=_to_str(row.get("locatjumin_cd")),
-                locatjijuk_cd=_to_str(row.get("locatjijuk_cd")),
-                locat_order=_to_str(row.get("locat_order")),
-                locat_rm=_to_str(row.get("locat_rm")),
-                locathigh_cd=_to_str(row.get("locathigh_cd")),
-                locallow_nm=_to_str(row.get("locallow_nm")),
-                adpt_de=_to_str(row.get("adpt_de")),
+                name=name,
+                adpt_de=adpt_de,
                 is_active=True,
                 updated_at=now,
             )
@@ -259,22 +213,11 @@ def sync_regions(db: Session, rows: list[dict]) -> dict:
             if not sigungu.is_active:
                 reactivated_sigungu += 1
 
-            if sigungu.name != full_name:
+            if sigungu.name != name or sigungu.adpt_de != adpt_de:
                 updated_sigungu += 1
 
-            sigungu.region_cd = region_cd
-            sigungu.sido_cd = sido_cd
-            sigungu.sgg_cd = sgg_cd
-            sigungu.umd_cd = umd_cd
-            sigungu.ri_cd = ri_cd
-            sigungu.name = full_name
-            sigungu.locatjumin_cd = _to_str(row.get("locatjumin_cd"))
-            sigungu.locatjijuk_cd = _to_str(row.get("locatjijuk_cd"))
-            sigungu.locat_order = _to_str(row.get("locat_order"))
-            sigungu.locat_rm = _to_str(row.get("locat_rm"))
-            sigungu.locathigh_cd = _to_str(row.get("locathigh_cd"))
-            sigungu.locallow_nm = _to_str(row.get("locallow_nm"))
-            sigungu.adpt_de = _to_str(row.get("adpt_de"))
+            sigungu.name = name
+            sigungu.adpt_de = adpt_de
             sigungu.is_active = True
             sigungu.updated_at = now
 
