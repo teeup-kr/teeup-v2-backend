@@ -5,9 +5,10 @@ from sqlalchemy.sql import func
 from database import Base
 from .enums import Provider, UserStatus
 
+
 class Admin(Base):
     __tablename__ = "admins"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     email = Column(String(255), unique=True, nullable=False)
     password = Column(String(255), nullable=False)

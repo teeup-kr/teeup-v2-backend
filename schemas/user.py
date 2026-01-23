@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 from .enums import UserStatus, NotificationType, NotificationStatus, Provider
+
+
 class UserCreate(BaseModel):
     email: str = Field(..., description="이메일")
     realname: str = Field(..., description="실명")
@@ -13,13 +15,14 @@ class UserCreate(BaseModel):
     gender: Optional[str] = Field(None, description="성별")
     handicap: Optional[float] = Field(None, description="핸디캡")
     average_score: Optional[int] = Field(None, description="평균 점수")
-    role: Optional[str] = Field(None, description="역할")
+    # role: Optional[str] = Field(None, description="역할")
     status: Optional[str] = Field(None, description="상태")
     needs_terms_agreement: Optional[bool] = Field(None, description="약관 동의 필요")
     terms_agreement: Optional[bool] = Field(None, description="약관 동의")
     privacy_policy: Optional[bool] = Field(None, description="개인정보 처리방침")
     privacy_collection: Optional[bool] = Field(None, description="개인정보 수집")
     marketing_consent: Optional[bool] = Field(None, description="마케팅 동의")
+
 
 class UserUpdate(BaseModel):
     email: Optional[str] = Field(None, description="이메일")
@@ -30,13 +33,14 @@ class UserUpdate(BaseModel):
     gender: Optional[str] = Field(None, description="성별")
     handicap: Optional[float] = Field(None, description="핸디캡")
     average_score: Optional[int] = Field(None, description="평균 점수")
-    role: Optional[str] = Field(None, description="역할")
+    # role: Optional[str] = Field(None, description="역할")
     status: Optional[str] = Field(None, description="상태")
     needs_terms_agreement: Optional[bool] = Field(None, description="약관 동의 필요")
     terms_agreement: Optional[bool] = Field(None, description="약관 동의")
     privacy_policy: Optional[bool] = Field(None, description="개인정보 처리방침")
     privacy_collection: Optional[bool] = Field(None, description="개인정보 수집")
     marketing_consent: Optional[bool] = Field(None, description="마케팅 동의")
+
 
 class UserResponse(BaseModel):
     id: int
@@ -48,7 +52,7 @@ class UserResponse(BaseModel):
     gender: Optional[str] = None
     handicap: Optional[float] = None
     average_score: Optional[int] = None
-    role: str = "USER"  # User는 항상 USER 역할
+    # role: str
     status: str
     provider: Optional[str] = None
     email_verified: Optional[datetime] = None
@@ -61,8 +65,9 @@ class UserResponse(BaseModel):
     deactivated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
-    
+
     model_config = {"from_attributes": True}
+
 
 class NotificationResponse(BaseModel):
     id: int
@@ -73,8 +78,9 @@ class NotificationResponse(BaseModel):
     status: str
     read_at: Optional[datetime] = None
     created_at: datetime
-    
+
     model_config = {"from_attributes": True}
+
 
 class NotificationSettingsResponse(BaseModel):
     user_id: int
@@ -84,8 +90,9 @@ class NotificationSettingsResponse(BaseModel):
     payment_notifications: bool
     club_updates: bool
     marketing_emails: bool
-    
+
     model_config = {"from_attributes": True}
+
 
 class NotificationSettingsUpdate(BaseModel):
     push_enabled: Optional[bool] = Field(None, description="푸시 알림 활성화")
@@ -94,4 +101,3 @@ class NotificationSettingsUpdate(BaseModel):
     payment_notifications: Optional[bool] = Field(None, description="결제 알림")
     club_updates: Optional[bool] = Field(None, description="클럽 업데이트")
     marketing_emails: Optional[bool] = Field(None, description="마케팅 이메일")
-

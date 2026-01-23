@@ -22,3 +22,6 @@ class OAuthUserInfo(BaseModel):
 class GoogleOAuthBody(BaseModel):
     authorizationCode: str = Field(..., description="Google OAuth 인증 코드")
     codeVerifier: str = Field(..., description="PKCE 코드 검증자")
+    redirectUri: Optional[str] = Field(
+        None, description="OAuth 리다이렉트 URI"
+    )
