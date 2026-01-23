@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-from io import TextIOWrapper
 import io
-from pprint import pprint
 import sys
 import locale
 from typing import cast
@@ -30,7 +28,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import (
     get_swagger_ui_html,
     get_redoc_html,
-    get_swagger_ui_oauth2_redirect_html,
 )
 
 from sqlalchemy.orm import Session
