@@ -827,6 +827,7 @@
 #### ClubCreate
 
 **type**: `string` → enum: [ClubType](#clubtype)
+**필수**: `sido_code` (1개), `gungu_codes` (1~4개)
 
 **사용되는 엔드포인트:**
 - [POST `/api/v1/clubs/`](#4-클럽-clubs) - 클럽 생성
@@ -840,7 +841,6 @@
   "type": "REGULAR",
   "description": string,
   "member_count": int,
-  "location": string,
   "contact_info": string,
   "representative_name": string,
   "additional_info": string
@@ -853,14 +853,15 @@
 - [PUT `/api/v1/clubs/{club_id}`](#4-클럽-clubs) - 클럽 수정
 - [PUT `/api/v1/admin/clubs/{club_id}`](#3-관리자-admin) - 클럽 수정
 
+**필수**: `sido_code` (1개), `gungu_codes` (1~4개)
+
 ```json
 {
   "name": string,
   "sido_code": string,
   "gungu_codes": [string], // 1~4개
   "description": string,
-  "member_count": int,
-  "location": string
+  "member_count": int
 }
 ```
 
@@ -898,7 +899,6 @@
   "description": string (optional),
   "member_count": int (optional),
   "current_member_count": int (optional),
-  "location": string (optional),
   "contact_info": string (optional),
   "representative_name": string (optional),
   "additional_info": string (optional),
