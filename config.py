@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    FRONTEND_BASE_URL: str = ""
+    API_VERSION: str = ""
     # Database Configuration
     DATABASE_URL: str = ""
 
@@ -32,7 +34,8 @@ class Settings(BaseSettings):
         if not self.CORS_ORIGINS:
             return []
         return [
-            origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()
+            origin.strip() for origin in self.CORS_ORIGINS.split(",")
+            if origin.strip()
         ]
 
     # File Upload
@@ -45,9 +48,17 @@ class Settings(BaseSettings):
     TOSS_PAYMENTS_BASE_URL: str = "https://api.tosspayments.com/v1"
 
     # Google OAuth Configuration
-    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_WEB_CLIENT_ID: str = ""
+    GOOGLE_WEB_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
+    GOOGLE_ANDROID_CLIENT_ID: str = ""
+    GOOGLE_ANDROID_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
+    GOOGLE_IOS_CLIENT_ID: str = ""
+    GOOGLE_IOS_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+    GOOGLE_IOS_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
+
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_REDIRECT_URI: str = (
         ""  # 드라이브 전용 토큰 발급 콜백(프런트) (환경 변수 필수)
@@ -60,8 +71,7 @@ class Settings(BaseSettings):
     )
     # OAuth 토큰 저장 경로(절대경로): 백엔드 폴더의 token.json
     GOOGLE_TOKEN_FILE: str = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "token.json")
-    )
+        os.path.join(os.path.dirname(__file__), "token.json"))
 
     # Email Configuration (SMTP)
     MAIL_USERNAME: str = ""  # Gmail 주소
@@ -72,6 +82,10 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = True  # STARTTLS 사용 여부
     MAIL_SSL_TLS: bool = False  # SSL/TLS 사용 여부 (MAIL_PORT가 465일 때 True)
     FRONTEND_BASE_URL: str = ""  # 프론트엔드 기본 URL (환경 변수 필수)
+
+    # 공공 API
+    ADMIN_REGION_API_URL: str = ""
+    DATA_GO_KR_API_KEY: str = ""
 
     @property
     def database_url(self) -> str:
@@ -94,8 +108,7 @@ class Settings(BaseSettings):
             port = int(self.BACKEND_PORT)
             if port <= 0:
                 raise ValueError(
-                    f"BACKEND_PORT가 유효하지 않습니다: {self.BACKEND_PORT}"
-                )
+                    f"BACKEND_PORT가 유효하지 않습니다: {self.BACKEND_PORT}")
             return port
         except ValueError as e:
             if "유효하지 않습니다" in str(e):
@@ -104,7 +117,8 @@ class Settings(BaseSettings):
 
     class Config:
         # 프로젝트 루트의 .env 파일을 절대경로로 지정 (실행 위치 무관)
-        env_file = os.path.abspath(os.path.join(os.path.dirname(__file__), ".env"))
+        env_file = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), ".env"))
         case_sensitive = False
         extra = "ignore"  # 추가 필드 허용
 

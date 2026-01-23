@@ -122,7 +122,7 @@ class TeamMember(Base):
     
     # 제약조건: user_id와 guest_id 중 하나만 있어야 함
     __table_args__ = (
-        CheckConstraint('(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)', name='check_user_or_guest'),
+        CheckConstraint('(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)', name='check_team_member_user_or_guest'),
     )
     
     # 관계 설정

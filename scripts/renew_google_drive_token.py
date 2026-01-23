@@ -41,7 +41,7 @@ def main():
     if choice == "1":
         # 1단계: 인증 URL 생성
         params = {
-            'client_id': settings.GOOGLE_CLIENT_ID,
+            'client_id': settings.GOOGLE_WEB_CLIENT_ID,
             'redirect_uri': settings.GOOGLE_DRIVE_REDIRECT_URI,
             'response_type': 'code',
             'scope': ' '.join(SCOPES),
@@ -82,7 +82,7 @@ def main():
         # HTTP POST로 토큰 요청
         data = {
             'code': code,
-            'client_id': settings.GOOGLE_CLIENT_ID,
+            'client_id': settings.GOOGLE_WEB_CLIENT_ID,
             'client_secret': settings.GOOGLE_CLIENT_SECRET,
             'redirect_uri': settings.GOOGLE_DRIVE_REDIRECT_URI,
             'grant_type': 'authorization_code'
@@ -101,7 +101,7 @@ def main():
                     token=result.get('access_token'),
                     refresh_token=result.get('refresh_token'),
                     token_uri='https://oauth2.googleapis.com/token',
-                    client_id=settings.GOOGLE_CLIENT_ID,
+                    client_id=settings.GOOGLE_WEB_CLIENT_ID,
                     client_secret=settings.GOOGLE_CLIENT_SECRET,
                     scopes=SCOPES
                 )
@@ -137,4 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

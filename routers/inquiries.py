@@ -13,7 +13,7 @@ from schemas import (
     InquiryListResponse, InquiryResponseCreate, InquiryResponseUpdate,
     InquiryResponseResponse, InquiryDetailResponse
 )
-from routers.auth import get_current_user, get_current_admin_user
+from routers.auth import get_current_user
 from utils import generate_id
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def get_inquiries(
     priority: Optional[int] = Query(None, description="우선순위"),
     search: Optional[str] = Query(None, description="제목 검색"),
     user_id: Optional[int] = Query(None, description="사용자 ID (관리자만)"),
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 목록 조회 (관리자)"""
@@ -148,7 +148,7 @@ async def create_inquiry(
 @router.get("/{inquiry_id}", response_model=InquiryDetailResponse)
 async def get_inquiry(
     inquiry_id: int,
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 상세 조회 (관리자)"""
@@ -202,7 +202,7 @@ async def get_inquiry(
 async def update_inquiry(
     inquiry_id: int,
     inquiry_data: InquiryUpdate,
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 수정 (관리자)"""
@@ -249,7 +249,7 @@ async def update_inquiry(
 async def create_inquiry_response(
     inquiry_id: int,
     response_data: InquiryResponseCreate,
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 답변 등록 (관리자)"""
@@ -299,7 +299,7 @@ async def update_inquiry_response(
     inquiry_id: int,
     response_id: int,
     response_data: InquiryResponseUpdate,
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 답변 수정 (관리자)"""
@@ -342,7 +342,7 @@ async def update_inquiry_response(
 async def delete_inquiry_response(
     inquiry_id: int,
     response_id: int,
-    current_user = Depends(get_current_admin_user),
+    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
     db: Session = Depends(get_db)
 ):
     """문의 답변 삭제 (관리자)"""
