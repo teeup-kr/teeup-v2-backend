@@ -13,7 +13,6 @@ class ClubCreate(BaseModel):
     type: ClubType = Field(default=ClubType.REGULAR, description="클럽 타입")
     description: Optional[str] = Field(None, description="클럽 설명")
     member_count: int = Field(..., ge=1, description="예상 멤버 수")
-    location: Optional[str] = Field(None, max_length=255, description="클럽 위치")
     contact_info: Optional[str] = Field(None, max_length=255, description="연락처")
     representative_name: Optional[str] = Field(None, max_length=255, description="대표자 이름")
     additional_info: Optional[str] = Field(None, description="추가 정보")
@@ -26,7 +25,6 @@ class ClubUpdate(BaseModel):
     type: Optional[ClubType] = Field(None, description="클럽 타입")
     description: Optional[str] = Field(None, description="클럽 설명")
     member_count: Optional[int] = Field(None, ge=1, description="예상 멤버 수")
-    location: Optional[str] = Field(None, max_length=255, description="클럽 위치")
     contact_info: Optional[str] = Field(None, max_length=255, description="연락처")
     representative_name: Optional[str] = Field(None, max_length=255, description="대표자 이름")
     additional_info: Optional[str] = Field(None, description="추가 정보")
@@ -43,7 +41,6 @@ class ClubResponse(BaseModel):
     description: Optional[str]
     member_count: Optional[int]  # 예상 멤버 수 (레거시)
     current_member_count: Optional[int] = None  # 실제 멤버 수 (ACTIVE/APPROVED 상태)
-    location: Optional[str]
     contact_info: Optional[str]
     representative_name: Optional[str]
     additional_info: Optional[str]
