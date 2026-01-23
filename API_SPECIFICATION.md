@@ -17,6 +17,7 @@
 13. [결제 (Payments)](#13-결제-payments)
 14. [결제 수단 (Payment Methods)](#14-결제-수단-payment-methods)
 15. [구독 (Subscriptions)](#15-구독-subscriptions)
+16. [지역 (Region)](#16-지역-region)
 
 ---
 
@@ -602,6 +603,20 @@
 | PUT | `/{subscription_id}` | 구독 수정 | [SubscriptionUpdate](#subscriptionupdate) | [SubscriptionResponse](#subscriptionresponse) | ✅ |
 | DELETE | `/{subscription_id}` | 구독 취소 | - | [MessageResponse](#messageresponse) | ✅ |
 | POST | `/{subscription_id}/renew` | 구독 갱신 | - | [SubscriptionResponse](#subscriptionresponse) | ✅ |
+
+---
+
+## 16. 지역 (Region)
+
+**파일:** `routers/region.py`  
+**Prefix:** `/api/v1`  
+**태그:** `region`
+
+| Method | Path | 설명 | Request | Response | 인증 필요 |
+|--------|------|------|---------|----------|----------|
+| GET | `/sido-list` | 시도 목록 조회 | - | `List`[{code, name}] | ❌ |
+| GET | `/gungu-list` | 시군구 목록 조회 | Query: `sido_code` | `List`[{code, name}] | ❌ |
+| POST | `/region-list` | [TEST]공공 API 기반 지역 데이터 동기화 | - | `{success: bool, fetchedCount: int, syncedCount: int?, message: str}` | ❌ |
 
 ---
 

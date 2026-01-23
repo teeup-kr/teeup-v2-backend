@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 import requests
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -9,6 +10,47 @@ from models.region import Sido, Gungu
 
 ADMIN_REGION_API_URL = settings.ADMIN_REGION_API_URL
 DATA_GO_KR_API_KEY = settings.DATA_GO_KR_API_KEY
+
+
+def get_active_sido_list(db: Session) -> list[dict]:
+    sidos = db.query(Sido).filter(Sido.is_active == True).order_by(Sido.code).all()
+    return [{"code": sido.code, "name": sido.name} for sido in sidos]
+
+
+def get_active_gungu_list(db: Session, sido_code: str) -> list[dict]:
+    gungus = (db.query(Gungu).filter(Gungu.is_active == True, Gungu.sido_code == sido_code).order_by(Gungu.code).all())
+    return [{"code": gungu.code, "name": gungu.name} for gungu in gungus]
+
+
+def validate_sido_code(db: Session, sido_code: str) -> None:
+    if not sido_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
+
+    sido = db.query(Sido).filter(Sido.code == sido_code, Sido.is_active == True).first()
+    if not sido:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="존재하지 않는 sido_code입니다.")
+
+
+def validate_gungu_codes(db: Session, sido_code: str, gungu_codes: list[str]) -> list[str]:
+    validate_sido_code(db, sido_code)
+
+    unique_codes = list(dict.fromkeys(gungu_codes))
+    if not (1 <= len(unique_codes) <= 4):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="최소 1개를 선택하셔야하며, 최대 4개까지 선택하실 수 있습니다.")
+
+    gungus = db.query(Gungu).filter(Gungu.code.in_(unique_codes), Gungu.is_active == True).all()
+    found_codes = {gungu.code for gungu in gungus}
+    missing = [code for code in unique_codes if code not in found_codes]
+    if missing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"존재하지 않는 gungu_code가 있습니다: {missing}")
+
+    invalid = [gungu.code for gungu in gungus if gungu.sido_code != sido_code]
+    if invalid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"sido_code 하위가 아닌 gungu_code가 있습니다: {invalid}")
+
+    return unique_codes
 
 
 # 전체 정보 조회
