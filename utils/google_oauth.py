@@ -284,7 +284,8 @@ class GoogleOAuth:
             logger.info(f"Google OAuth 응답 상태: {response.status_code}")
             if response.status_code != 200:
                 logger.error(f"Google OAuth 응답 내용: {response.text}")
-
+                logger.error(f"요청 데이터 (client_secret 제외): { {k: v for k, v in data.items() if k != 'client_secret'} }")
+            
             response.raise_for_status()
 
             token_data = response.json()

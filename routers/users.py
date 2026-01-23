@@ -145,7 +145,7 @@ async def get_users(
                 average_score=user.average_score,
                 provider=user.provider.value if user.provider else None,
                 email_verified=user.email_verified,
-                role=user.role.value if user.role else None,
+                role="USER",  # User는 항상 USER 역할
                 status=user.status.value if user.status else None,
                 deactivated_at=user.deactivated_at,
                 needs_terms_agreement=user.needs_terms_agreement,
@@ -338,7 +338,7 @@ async def create_user(
             average_score=user.average_score,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role=user.role.value if user.role else None,
+            role="USER",  # User는 항상 USER 역할
             status=user.status.value if user.status else None,
             deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
@@ -376,8 +376,8 @@ async def update_my_profile(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="사용자를 찾을 수 없습니다",
             )
-
-        # 유효성 검사: 실명/핸디캡/평균 스코어
+        
+        # 유효성 검사: 실명/핸디캡/평균 스코어/생년월일
         try:
             # 실명: 한글만(공백 불가) 또는 영문과 공백만, 2자 이상
             if user_data.realname is not None:
@@ -416,6 +416,17 @@ async def update_my_profile(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="평균 스코어는 55-144 사이여야 합니다",
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="평균 스코어는 55-144 사이여야 합니다")
+            
+            # 생년월일: 유효성 검사 및 변환
+            if user_data.birthdate is not None:
+                from routers.auth import validate_birthdate
+                from datetime import datetime
+                birthdate_validation = validate_birthdate(user_data.birthdate)
+                if not birthdate_validation["is_valid"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="; ".join(birthdate_validation["errors"])
                     )
         except HTTPException:
             raise
@@ -487,6 +498,17 @@ async def update_my_profile(
             elif field == "average_score":
                 # average_score는 위에서 처리했으므로 여기서는 건너뜀
                 setattr(user, field, value)
+            elif field == "birthdate" and value:
+                # birthdate 문자열을 datetime으로 변환
+                from datetime import datetime
+                try:
+                    birthdate_datetime = datetime.strptime(value, '%Y-%m-%d')
+                    setattr(user, field, birthdate_datetime)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="생년월일 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요."
+                    )
             else:
                 setattr(user, field, value)
 
@@ -505,7 +527,7 @@ async def update_my_profile(
             average_score=user.average_score,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role=user.role.value if user.role else None,
+            role="USER",  # User는 항상 USER 역할
             status=user.status.value if user.status else None,
             deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
@@ -669,7 +691,7 @@ async def update_user(
             average_score=user.average_score,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role=user.role.value if user.role else None,
+            role="USER",  # User는 항상 USER 역할
             status=user.status.value if user.status else None,
             deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
@@ -1471,7 +1493,7 @@ async def get_user(
             average_score=user.average_score,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role=user.role.value if user.role else None,
+            role="USER",  # User는 항상 USER 역할
             status=user.status.value if user.status else None,
             deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,

@@ -20,7 +20,9 @@ from schemas import (
     ScoreCreate, ScoreUpdate, ScoreResponse, ScoreListResponse, ScoreStats, MessageResponse,
     SimpleScoreCreate, SimpleScoreResponse
 )
-from routers.auth import get_current_active_user
+from routers.auth import get_current_active_user, get_user_role_from_token
+from fastapi.security import HTTPAuthorizationCredentials
+from utils.jwt_auth import security
 from utils.handicap_calculator import (
     get_user_handicap_for_formation,
     save_score_to_history,
@@ -265,7 +267,8 @@ async def update_score(
     score_id: int,
     score_data: ScoreUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """스코어 수정"""
     try:
@@ -278,8 +281,9 @@ async def update_score(
             )
         
         # 권한 확인 (관리자는 모든 스코어 수정 가능)
-        user = db.query(User).filter(User.id == current_user["id"]).first()
-        if not user or user.role != "ADMIN":
+        # JWT 토큰에서 role 확인
+        user_role = get_user_role_from_token(credentials)
+        if user_role != "ADMIN":
             if not check_score_permission(current_user["id"], score.participant_id, db):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -324,7 +328,8 @@ async def update_score(
 async def delete_score(
     score_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """스코어 삭제"""
     try:
@@ -337,8 +342,8 @@ async def delete_score(
             )
         
         # 권한 확인 (관리자는 모든 스코어 삭제 가능)
-        user = db.query(User).filter(User.id == current_user["id"]).first()
-        if not user or user.role != "ADMIN":
+        user_role = get_user_role_from_token(credentials)
+        if user_role != "ADMIN":
             if not check_score_permission(current_user["id"], score.participant_id, db):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
