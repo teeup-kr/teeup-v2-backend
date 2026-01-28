@@ -110,6 +110,8 @@ async def create_club(club_data: ClubCreate,
 async def get_clubs(page: int = 1,
                     limit: int = 10,
                     status_filter: Optional[ClubStatus] = None,
+                    sido_code: Optional[str] = Query(None, description="시도 코드"),
+                    gungu_codes: Optional[List[str]] = Query(None, description="군구 코드 목록"),
                     db: Session = Depends(get_db),
                     current_user: User = Depends(get_current_active_user)):
     """클럽 목록 조회"""
@@ -123,6 +125,22 @@ async def get_clubs(page: int = 1,
         # 클럽 조회 쿼리
         clubs_query = db.query(Club).filter(Club.deleted_at.is_(None))
         print(f"기본 쿼리 생성 완료")
+
+        # 지역 필터 적용 (gungu_codes가 있으면 sido_code는 무시)
+        filtered_gungu_codes = [code for code in (gungu_codes or []) if code]
+        if filtered_gungu_codes:
+            from sqlalchemy import or_
+            like_filters = [
+                ClubRegion.gungu_code.like(f"{code}%") for code in filtered_gungu_codes
+            ]
+            matching_club_ids = db.query(ClubRegion.club_id).filter(
+                or_(*like_filters)
+            ).subquery()
+            clubs_query = clubs_query.filter(Club.id.in_(matching_club_ids))
+            print(f"군구 필터 적용: {filtered_gungu_codes}")
+        elif sido_code:
+            clubs_query = clubs_query.filter(Club.sido_code == sido_code)
+            print(f"시도 필터 적용: {sido_code}")
 
         # status_filter가 있으면 해당 상태만 필터링
         if status_filter:
