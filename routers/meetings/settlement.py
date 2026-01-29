@@ -127,6 +127,10 @@ def can_manage_settlement(meeting_id: int, user_id: int, db: Session) -> bool:
         if not meeting:
             return False
         
+        # 프라이빗 라운딩 생성자인 경우 권한 부여
+        if meeting.is_private and meeting.created_by == user_id:
+            return True
+        
         # 1. 주최자 확인: 참가자 목록에서 ORGANIZER 역할 확인
         organizer = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
@@ -575,25 +579,49 @@ async def get_meeting_settlement(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 관리자가 아닌 경우에만 클럽 멤버십 확인
-        from models import Admin
-        admin = db.query(Admin).filter(
-            Admin.id == current_user.id,
-            Admin.deleted_at.is_(None)
-        ).first()
-        
-        if not admin:
-            membership = db.query(ClubMembership).filter(
-                ClubMembership.club_id == meeting.club_id,
-                ClubMembership.user_id == current_user.id,
-                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        # 프라이빗 라운딩인 경우 권한 체크
+        if meeting.is_private:
+            # 관리자는 접근 가능
+            from models import Admin
+            admin = db.query(Admin).filter(
+                Admin.id == current_user.id,
+                Admin.deleted_at.is_(None)
             ).first()
             
-            if not membership:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="클럽 멤버만 정산을 조회할 수 있습니다."
-                )
+            if not admin:
+                # 참가자 또는 생성자인지 확인
+                is_participant = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    MeetingParticipant.user_id == current_user.id
+                ).first()
+                
+                is_creator = meeting.created_by == current_user.id
+                
+                if not is_participant and not is_creator:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="프라이빗 라운딩의 정산 정보는 참가자 또는 생성자만 조회할 수 있습니다."
+                    )
+        else:
+            # 일반 라운딩: 관리자가 아닌 경우에만 클럽 멤버십 확인
+            from models import Admin
+            admin = db.query(Admin).filter(
+                Admin.id == current_user.id,
+                Admin.deleted_at.is_(None)
+            ).first()
+            
+            if not admin:
+                membership = db.query(ClubMembership).filter(
+                    ClubMembership.club_id == meeting.club_id,
+                    ClubMembership.user_id == current_user.id,
+                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+                ).first()
+                
+                if not membership:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="클럽 멤버만 정산을 조회할 수 있습니다."
+                    )
         
         # 정산 조회
         expense = db.query(Expense).filter(Expense.meeting_id == meeting_id).first()

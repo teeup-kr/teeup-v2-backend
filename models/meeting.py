@@ -56,11 +56,14 @@ class Meeting(Base):
     settlement_confirmed = Column(Boolean, default=False)
     social_cost = Column(DECIMAL(10, 2))
     social_notes = Column(Text)
+    is_private = Column(Boolean, default=False, nullable=False, comment="프라이빗 라운딩 여부")
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="라운딩 생성자 ID")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # 관계 설정
     club = relationship("Club", backref="meetings")
+    creator = relationship("User", foreign_keys=[created_by], backref="created_meetings")
 
 class MeetingParticipant(Base):
     __tablename__ = "meeting_participants"

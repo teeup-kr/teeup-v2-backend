@@ -1051,17 +1051,14 @@ def add_guest_to_meeting(
     db.flush()  # id를 얻기 위해 flush
     
     # 게스트용 MeetingParticipant 생성
+    from schemas import ParticipantType, MeetingParticipantStatus, MeetingParticipantRole
     guest_participant = MeetingParticipant(
         meeting_id=meeting_id,
         user_id=None,  # 게스트는 user_id가 없음
         guest_id=guest.id,  # Guest ID 사용
-        is_guest=True,
-        # 하위 호환성을 위해 게스트 필드도 채움
-        guest_name=guest_name,
-        guest_handicap=guest_handicap,
-        guest_birthdate=guest_birthdate_dt,
-        guest_gender=guest_gender,
-        status="CONFIRMED"
+        participant_type=ParticipantType.GUEST,
+        status=MeetingParticipantStatus.CONFIRMED,
+        role=MeetingParticipantRole.PARTICIPANT
     )
     
     db.add(guest_participant)

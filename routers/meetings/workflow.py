@@ -497,13 +497,18 @@ async def start_team_formation(
             )
         
         # 매니저/리더 권한 확인
+        # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 권한 확인
+        from utils.permissions import is_meeting_organizer_or_manager
+        user_id = current_user.get('id') if isinstance(current_user, dict) else current_user.id
+        is_creator = meeting.created_by == user_id
+        
         participant = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.user_id == user_id,
             MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
         ).first()
         
-        if not participant:
+        if not participant and not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="매니저/리더만 팀 편성을 시작할 수 있습니다."
@@ -588,13 +593,18 @@ async def auto_form_teams(
             )
         
         # 매니저/리더 권한 확인
+        # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 권한 확인
+        from utils.permissions import is_meeting_organizer_or_manager
+        user_id = current_user.get('id') if isinstance(current_user, dict) else current_user.id
+        is_creator = meeting.created_by == user_id
+        
         participant = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.user_id == user_id,
             MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
         ).first()
         
-        if not participant:
+        if not participant and not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="매니저/리더만 팀을 편성할 수 있습니다."
@@ -768,13 +778,18 @@ async def confirm_team_formation(
             )
         
         # 매니저/리더 권한 확인
+        # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 권한 확인
+        from utils.permissions import is_meeting_organizer_or_manager
+        user_id = current_user.get('id') if isinstance(current_user, dict) else current_user.id
+        is_creator = meeting.created_by == user_id
+        
         participant = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.user_id == user_id,
             MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
         ).first()
         
-        if not participant:
+        if not participant and not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="매니저/리더만 팀 편성을 확정할 수 있습니다."
