@@ -190,7 +190,7 @@
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
 | POST | `/` | 클럽 생성 | [ClubCreate](#clubcreate) | [ClubResponse](#clubresponse) | ✅ |
-| GET | `/` | 클럽 목록 조회 | Query: `page?, limit?, search?` | `{clubs: [], total: int}` | ✅ |
+| GET | `/` | 클럽 목록 조회 | Query: `page?, limit?, status_filter?, sido_code?, gungu_codes?` | `{clubs: [], total: int}` | ✅ |
 | GET | `/my` | 내 클럽 목록 조회 | - | `{clubs: []}` | ✅ |
 | GET | `/{club_id}` | 클럽 상세 조회 | - | [ClubResponse](#clubresponse) | ✅ |
 | PUT | `/{club_id}` | 클럽 수정 | [ClubUpdate](#clubupdate) | [ClubResponse](#clubresponse) | ✅ |
