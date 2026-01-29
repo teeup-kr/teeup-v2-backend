@@ -5,6 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from typing import List, Optional
@@ -18,13 +19,32 @@ from models import Terms, TermsAgreement, User, Notification, Admin
 from schemas import TermsType, NotificationType, NotificationStatus
 from schemas import (
     TermsCreate, TermsUpdate, TermsResponse, TermsListResponse,
-    TermsAgreementCreate, TermsAgreementResponse
+    TermsAgreementCreate, TermsAgreementResponse,
+    TermsAgreementBulkCreate, TermsAgreementBulkResponse
 )
 from routers.auth import get_current_user
+
+# 인증 관련
+security = HTTPBearer()
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/terms", tags=["terms"])
+
+
+# 약관 동의 API용 인증 함수 (약관 동의 체크 제외)
+def get_current_user_for_terms_agreement(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """약관 동의 API용 인증 함수 (약관 동의 체크 제외)"""
+    return get_current_user(
+        credentials=credentials,
+        db=db,
+        required_type="user",
+        check_status=True,
+        check_terms_agreement=False
+    )
 
 
 def generate_id(length=20):
@@ -258,6 +278,7 @@ async def update_terms(
 
 @router.get("/types/", response_model=List[dict])
 async def get_terms_types(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """약관 타입 목록 조회"""
@@ -276,6 +297,7 @@ async def get_terms_types(
             type_name_map = {
                 TermsType.SERVICE: "서비스이용약관",
                 TermsType.PRIVACY: "개인정보처리방침",
+                TermsType.PRIVACY_COLLECTION: "개인정보 수집 및 이용동의",
                 TermsType.MARKETING: "마케팅정보수신동의"
             }
             
@@ -305,11 +327,28 @@ async def get_active_terms(
         
         # 타입 필터 적용
         if type_filter:
+            # 프론트엔드 타입 이름을 백엔드 enum으로 매핑
+            type_mapping = {
+                "TERMS_OF_SERVICE": "SERVICE",
+                "SERVICE": "SERVICE",
+                "PRIVACY_POLICY": "PRIVACY",
+                "PRIVACY": "PRIVACY",
+                "PRIVACY_COLLECTION": "PRIVACY_COLLECTION",
+                "MARKETING": "MARKETING",
+                "MARKETING_OPT_IN": "MARKETING"  # 프론트엔드에서 사용하는 타입
+            }
+            
+            # 매핑된 타입 이름 가져오기
+            mapped_type = type_mapping.get(type_filter.upper(), type_filter.upper())
+            
             try:
-                terms_type = TermsType(type_filter)
+                terms_type = TermsType(mapped_type)
                 query = query.filter(Terms.type == terms_type.value)
             except ValueError:
-                raise HTTPException(status_code=400, detail="유효하지 않은 약관 타입입니다")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"유효하지 않은 약관 타입입니다. 지원되는 타입: SERVICE, PRIVACY, PRIVACY_COLLECTION, MARKETING"
+                )
         
         # 최신 버전만 조회 (타입별로 최신 버전)
         terms = query.order_by(Terms.type, Terms.published_at.desc()).all()
@@ -379,7 +418,7 @@ async def get_user_terms_agreements(
 async def create_terms_agreement(
     agreement_data: TermsAgreementCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_for_terms_agreement)
 ):
     """약관 동의 등록"""
     try:
@@ -402,19 +441,49 @@ async def create_terms_agreement(
         # 약관 동의 등록
         new_agreement = TermsAgreement(
             user_id=current_user.id,
-            terms_id=agreement_data.terms_id
+            terms_id=agreement_data.terms_id,
+            agreed_at=agreement_data.agreed_at,
+            ip_address=agreement_data.ip_address,
+            user_agent=agreement_data.user_agent
         )
         
         db.add(new_agreement)
+        
+        # User 테이블의 약관 필드 업데이트
+        # 약관 타입에 따라 해당 필드 업데이트
+        if terms.type == TermsType.SERVICE:
+            current_user.terms_agreement = True
+        elif terms.type == TermsType.PRIVACY:
+            current_user.privacy_policy = True
+        elif terms.type == TermsType.PRIVACY_COLLECTION:
+            current_user.privacy_collection = True
+        elif terms.type == TermsType.MARKETING:
+            current_user.marketing_consent = True
+        
+        # 필수 약관 3개 모두 동의했는지 확인
+        if (current_user.terms_agreement and 
+            current_user.privacy_policy and 
+            current_user.privacy_collection):
+            current_user.needs_terms_agreement = False
+            logger.info(f"사용자 {current_user.id}의 모든 필수 약관 동의 완료")
+        
         db.commit()
         db.refresh(new_agreement)
+        db.refresh(current_user)
         
-        logger.info(f"약관 동의 등록됨: {new_agreement.id} (사용자: {current_user.id}, 약관: {agreement_data.terms_id})")
+        logger.info(
+            f"약관 동의 등록됨: {new_agreement.id} "
+            f"(사용자: {current_user.id}, 약관: {agreement_data.terms_id}, 타입: {terms.type.value})"
+        )
         
         return TermsAgreementResponse(
-            id=new_agreement.id,            user_id=new_agreement.user_id,
+            id=new_agreement.id,
+            user_id=new_agreement.user_id,
             terms_id=new_agreement.terms_id,
             terms_title=terms.title,
+            agreed_at=new_agreement.agreed_at,
+            ip_address=new_agreement.ip_address,
+            user_agent=new_agreement.user_agent,
             created_at=new_agreement.created_at
         )
         
@@ -424,6 +493,110 @@ async def create_terms_agreement(
         logger.error(f"약관 동의 등록 중 오류 발생: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail="약관 동의 등록 중 오류가 발생했습니다")
+
+
+@router.post("/agreements/bulk", response_model=TermsAgreementBulkResponse)
+async def create_terms_agreements_bulk(
+    agreement_data: TermsAgreementBulkCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_for_terms_agreement)
+):
+    """여러 약관을 한 번에 동의 등록 (OAuth 가입 후 약관 동의용)"""
+    try:
+        if not agreement_data.terms_ids:
+            raise HTTPException(status_code=400, detail="약관 ID 목록이 비어있습니다")
+        
+        # 동의 시간 설정
+        agreed_at = agreement_data.agreed_at or datetime.now()
+        
+        # 약관 조회 및 검증
+        terms_list = db.query(Terms).filter(Terms.id.in_(agreement_data.terms_ids)).all()
+        if len(terms_list) != len(agreement_data.terms_ids):
+            raise HTTPException(status_code=404, detail="일부 약관을 찾을 수 없습니다")
+        
+        # 이미 동의한 약관 확인
+        existing_agreements = db.query(TermsAgreement).filter(
+            and_(
+                TermsAgreement.user_id == current_user.id,
+                TermsAgreement.terms_id.in_(agreement_data.terms_ids)
+            )
+        ).all()
+        
+        existing_terms_ids = {ag.terms_id for ag in existing_agreements}
+        new_terms_ids = [tid for tid in agreement_data.terms_ids if tid not in existing_terms_ids]
+        
+        if not new_terms_ids:
+            raise HTTPException(status_code=400, detail="모든 약관에 이미 동의했습니다")
+        
+        # 약관 동의 등록
+        new_agreements = []
+        for terms_id in new_terms_ids:
+            terms = next(t for t in terms_list if t.id == terms_id)
+            
+            new_agreement = TermsAgreement(
+                user_id=current_user.id,
+                terms_id=terms_id,
+                agreed_at=agreed_at,
+                ip_address=agreement_data.ip_address,
+                user_agent=agreement_data.user_agent
+            )
+            db.add(new_agreement)
+            new_agreements.append((new_agreement, terms))
+            
+            # User 테이블의 약관 필드 업데이트
+            if terms.type == TermsType.SERVICE:
+                current_user.terms_agreement = True
+            elif terms.type == TermsType.PRIVACY:
+                current_user.privacy_policy = True
+            elif terms.type == TermsType.PRIVACY_COLLECTION:
+                current_user.privacy_collection = True
+            elif terms.type == TermsType.MARKETING:
+                current_user.marketing_consent = True
+        
+        # 필수 약관 3개 모두 동의했는지 확인
+        all_required_agreed = (
+            current_user.terms_agreement and 
+            current_user.privacy_policy and 
+            current_user.privacy_collection
+        )
+        
+        if all_required_agreed:
+            current_user.needs_terms_agreement = False
+            logger.info(f"사용자 {current_user.id}의 모든 필수 약관 동의 완료 (일괄)")
+        
+        db.commit()
+        
+        # 응답 데이터 생성
+        agreement_responses = []
+        for new_agreement, terms in new_agreements:
+            db.refresh(new_agreement)
+            agreement_responses.append(TermsAgreementResponse(
+                id=new_agreement.id,
+                user_id=new_agreement.user_id,
+                terms_id=new_agreement.terms_id,
+                terms_title=terms.title,
+                agreed_at=new_agreement.agreed_at,
+                ip_address=new_agreement.ip_address,
+                user_agent=new_agreement.user_agent,
+                created_at=new_agreement.created_at
+            ))
+        
+        logger.info(
+            f"약관 일괄 동의 등록됨: {len(agreement_responses)}개 "
+            f"(사용자: {current_user.id}, 약관 IDs: {new_terms_ids})"
+        )
+        
+        return TermsAgreementBulkResponse(
+            agreements=agreement_responses,
+            all_required_agreed=all_required_agreed
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"약관 일괄 동의 등록 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="약관 일괄 동의 등록 중 오류가 발생했습니다")
 
 
 async def send_terms_updated_notification(terms_id: int, db: Session):

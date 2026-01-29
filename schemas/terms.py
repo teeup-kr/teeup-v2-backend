@@ -54,3 +54,15 @@ class TermsAgreementResponse(BaseModel):
     
     model_config = {"from_attributes": True}
 
+class TermsAgreementBulkCreate(BaseModel):
+    """여러 약관을 한 번에 동의"""
+    terms_ids: List[int] = Field(..., description="약관 ID 목록")
+    agreed_at: datetime = Field(default_factory=datetime.now, description="동의 시간")
+    ip_address: Optional[str] = Field(None, description="IP 주소")
+    user_agent: Optional[str] = Field(None, description="사용자 에이전트")
+
+class TermsAgreementBulkResponse(BaseModel):
+    """여러 약관 동의 응답"""
+    agreements: List[TermsAgreementResponse]
+    all_required_agreed: bool = Field(..., description="모든 필수 약관 동의 완료 여부")
+

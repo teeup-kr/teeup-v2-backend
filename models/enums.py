@@ -79,6 +79,7 @@ class BillingCycle(str, enum.Enum):
 class TermsType(str, enum.Enum):
     SERVICE = "SERVICE"
     PRIVACY = "PRIVACY"
+    PRIVACY_COLLECTION = "PRIVACY_COLLECTION"
     MARKETING = "MARKETING"
 
 class InquiryStatus(str, enum.Enum):

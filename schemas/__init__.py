@@ -62,7 +62,8 @@ from .user import (
 # 약관 관련 스키마
 from .terms import (
     TermsCreate, TermsUpdate, TermsResponse, TermsListResponse,
-    TermsAgreementCreate, TermsAgreementResponse
+    TermsAgreementCreate, TermsAgreementResponse,
+    TermsAgreementBulkCreate, TermsAgreementBulkResponse
 )
 
 # 공지사항 관련 스키마
@@ -149,6 +150,7 @@ __all__ = [
     # Terms
     "TermsCreate", "TermsUpdate", "TermsResponse", "TermsListResponse",
     "TermsAgreementCreate", "TermsAgreementResponse",
+    "TermsAgreementBulkCreate", "TermsAgreementBulkResponse",
     # Notice
     "NoticeCreate", "NoticeUpdate", "NoticeResponse", "NoticeListResponse",
     # Inquiry

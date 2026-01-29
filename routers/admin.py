@@ -3167,7 +3167,12 @@ async def update_terms(terms_type: str,
     try:
 
         # 약관 타입 매핑
-        type_mapping = {'service': 'SERVICE', 'privacy': 'PRIVACY', 'marketing': 'MARKETING'}
+        type_mapping = {
+            'service': 'SERVICE', 
+            'privacy': 'PRIVACY', 
+            'privacy_collection': 'PRIVACY_COLLECTION',
+            'marketing': 'MARKETING'
+        }
 
         if terms_type not in type_mapping:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 약관 타입입니다")
@@ -4008,7 +4013,12 @@ async def get_terms(terms_type: str, db: Session = Depends(get_db), current_user
 
         # 약관 타입 검증
         # 약관 타입 매핑
-        type_mapping = {'service': 'SERVICE', 'privacy': 'PRIVACY', 'marketing': 'MARKETING'}
+        type_mapping = {
+            'service': 'SERVICE', 
+            'privacy': 'PRIVACY', 
+            'privacy_collection': 'PRIVACY_COLLECTION',
+            'marketing': 'MARKETING'
+        }
 
         if terms_type not in type_mapping:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 약관 타입입니다")

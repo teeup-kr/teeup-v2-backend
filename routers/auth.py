@@ -139,7 +139,8 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
     required_type: Optional[Literal["user", "admin"]] = "user",
-    check_status: bool = True
+    check_status: bool = True,
+    check_terms_agreement: bool = True
 ) -> Union[User, Admin]:
     """
     통합 사용자/관리자 인증 함수
@@ -147,6 +148,7 @@ def get_current_user(
     Args:
         required_type: "user" (User만), "admin" (Admin만), None (둘 다 허용)
         check_status: True면 상태 확인 (DELETED, DEACTIVATED 체크), False면 상태 확인 안함
+        check_terms_agreement: True면 필수 약관 동의 확인, False면 확인 안함 (약관 동의 API용)
     
     Returns:
         User 또는 Admin 객체
@@ -235,6 +237,27 @@ def get_current_user(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="관리자에 의해 비활성화 처리된 회원입니다."
                 )
+        
+        # 필수 약관 동의 확인 (check_terms_agreement가 True인 경우만)
+        if check_terms_agreement and not is_admin_token:
+            # 약관 동의 전용 토큰인 경우 체크 제외 (약관 동의 API에만 사용 가능)
+            terms_agreement_only = payload.get("terms_agreement_only", False)
+            if not terms_agreement_only:
+                terms_agreed = getattr(user, 'terms_agreement', False)
+                privacy_agreed = getattr(user, 'privacy_policy', False)
+                collection_agreed = getattr(user, 'privacy_collection', False)
+                
+                if not (terms_agreed and privacy_agreed and collection_agreed):
+                    logger.warning(
+                        f"필수 약관 미동의로 API 접근 차단: user_id={user.id}, "
+                        f"terms_agreement={terms_agreed}, "
+                        f"privacy_policy={privacy_agreed}, "
+                        f"privacy_collection={collection_agreed}"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="필수 약관에 동의하지 않아 서비스를 이용할 수 없습니다. 약관 동의를 완료해주세요."
+                    )
         
         return user
         

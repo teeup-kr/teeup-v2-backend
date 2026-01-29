@@ -413,8 +413,11 @@ async def update_my_profile(
             # 평균 스코어: 55-144
             if user_data.average_score is not None:
                 if user_data.average_score < 55 or user_data.average_score > 144:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="평균 스코어는 55-144 사이여야 합니다")
-
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="평균 스코어는 55-144 사이여야 합니다"
+                    )
+            
             # 생년월일: 유효성 검사 및 변환
             if user_data.birthdate is not None:
                 from routers.auth import validate_birthdate
