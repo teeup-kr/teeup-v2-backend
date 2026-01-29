@@ -12,7 +12,7 @@ import logging
 
 from database import get_db
 from models import (
-    User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, Guest, ParticipantType
+    User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, Guest, ParticipantType, Gender
 )
 from schemas import (
     MeetingType, MeetingSubtype, SettlementMethod,
@@ -60,6 +60,31 @@ async def get_rounds(
         and_(
             Meeting.meeting_type == MeetingType.ROUND,
             Meeting.club_id.in_(user_club_ids)
+        )
+    )
+    
+    # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
+    # 사용자가 참가한 프라이빗 라운딩 ID 목록
+    user_participant_meeting_ids = db.query(MeetingParticipant.meeting_id).filter(
+        MeetingParticipant.user_id == current_user.id
+    ).subquery()
+    
+    # 사용자가 생성한 프라이빗 라운딩 ID 목록
+    user_created_meeting_ids = db.query(Meeting.id).filter(
+        Meeting.created_by == current_user.id
+    ).subquery()
+    
+    # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자인 경우
+    query = query.filter(
+        or_(
+            Meeting.is_private == False,  # 일반 라운딩
+            and_(
+                Meeting.is_private == True,
+                or_(
+                    Meeting.id.in_(user_participant_meeting_ids),
+                    Meeting.id.in_(user_created_meeting_ids)
+                )
+            )
         )
     )
     
@@ -118,10 +143,23 @@ async def get_rounds(
                 hour, minute = map(int, tee_time_str.split(':'))
                 tee_time = time(hour, minute)
         
+        # 생성자 정보 조회
+        created_by_name = None
+        if meeting.created_by:
+            creator = db.query(User).filter(User.id == meeting.created_by).first()
+            if creator:
+                created_by_name = creator.nickname or creator.name
+        
+        meeting_dict = {**meeting.__dict__}
+        meeting_dict.pop("_sa_instance_state", None)
+        meeting_dict["tee_times"] = meeting.tee_times or []
+        
         meeting_responses.append(MeetingResponse(
-            **meeting.__dict__,
+            **meeting_dict,
             club_name=meeting.club.name,
             participant_count=participant_count,
+            created_by=meeting.created_by,
+            created_by_name=created_by_name,
             tee_time=tee_time
         ))
     
@@ -171,8 +209,18 @@ async def create_round(
             detail="라운딩은 클럽 리더/매니저만 생성할 수 있습니다."
         )
     
+    # 프라이빗 라운딩인 경우 참가자 선택 검증
+    is_private = meeting_data.is_private or False
+    if is_private:
+        if not meeting_data.selected_participants or len(meeting_data.selected_participants) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="프라이빗 라운딩은 최소 1명 이상의 참가자를 선택해야 합니다."
+            )
+    
     # 모임 생성
-    meeting = Meeting(        name=meeting_data.name,
+    meeting = Meeting(
+        name=meeting_data.name,
         description=meeting_data.description,
         location=meeting_data.location,
         meeting_time=meeting_data.meeting_time,
@@ -192,26 +240,136 @@ async def create_round(
         team_formation_mode=meeting_data.team_formation_mode,
         team_size=meeting_data.team_size,
         club_id=club_id,
-        status=MeetingStatus.SCHEDULED
+        status=MeetingStatus.SCHEDULED,
+        is_private=is_private,
+        created_by=current_user.id
     )
     
     db.add(meeting)
     db.commit()
     db.refresh(meeting)
     
-    # 생성자를 매니저로 자동 참가
-    participant = MeetingParticipant(
-        meeting_id=meeting.id,
-        user_id=current_user.id,
-        participant_type=ParticipantType.USER,
-        status=MeetingParticipantStatus.CONFIRMED,
-        role=MeetingParticipantRole.ORGANIZER
-    )
-    db.add(participant)
-    db.commit()
+    participant_count = 0
+    
+    # 프라이빗 라운딩인 경우
+    if is_private:
+        # 선택된 참가자들을 PENDING 상태로 추가
+        if meeting_data.selected_participants:
+            # 참가자 검증: 모두 해당 클럽의 활성 멤버인지 확인
+            for user_id in meeting_data.selected_participants:
+                member_check = db.query(ClubMembership).filter(
+                    and_(
+                        ClubMembership.user_id == user_id,
+                        ClubMembership.club_id == club_id,
+                        ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+                    )
+                ).first()
+                
+                if not member_check:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"user_id {user_id}는 해당 클럽의 활성 멤버가 아닙니다."
+                    )
+                
+                # 중복 체크
+                existing_participant = db.query(MeetingParticipant).filter(
+                    and_(
+                        MeetingParticipant.meeting_id == meeting.id,
+                        MeetingParticipant.user_id == user_id
+                    )
+                ).first()
+                
+                if not existing_participant:
+                    participant = MeetingParticipant(
+                        meeting_id=meeting.id,
+                        user_id=user_id,
+                        participant_type=ParticipantType.USER,
+                        status=MeetingParticipantStatus.PENDING,
+                        role=MeetingParticipantRole.PARTICIPANT
+                    )
+                    db.add(participant)
+                    participant_count += 1
+        
+        # 게스트 추가
+        if meeting_data.selected_guests:
+            from utils.team_formation import add_guest_to_meeting
+            from decimal import Decimal
+            
+            for guest_data in meeting_data.selected_guests:
+                try:
+                    # Gender enum 변환
+                    guest_gender_enum = None
+                    if guest_data.gender:
+                        guest_gender_enum = Gender(guest_data.gender)
+                    
+                    # 핸디캡 변환
+                    guest_handicap_decimal = None
+                    if guest_data.handicap is not None:
+                        guest_handicap_decimal = Decimal(str(guest_data.handicap))
+                    
+                    # 게스트 추가 (CONFIRMED 상태로)
+                    guest_participant = add_guest_to_meeting(
+                        meeting_id=meeting.id,
+                        guest_name=guest_data.name,
+                        guest_handicap=guest_handicap_decimal,
+                        average_score=guest_data.average_score,
+                        guest_birthdate=guest_data.birthdate,
+                        guest_gender=guest_gender_enum,
+                        db=db
+                    )
+                    participant_count += 1
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"게스트 정보 오류: {str(e)}"
+                    )
+        
+        db.commit()
+        
+        # 선택된 참가자들에게 프라이빗 라운딩 초대 알림 전송
+        if meeting_data.selected_participants:
+            try:
+                from utils.notification_service import create_notification
+                from models import NotificationType
+                
+                for user_id in meeting_data.selected_participants:
+                    try:
+                        create_notification(
+                            db=db,
+                            user_id=user_id,
+                            notification_type=NotificationType.MEETING_REMINDER,  # 적절한 타입으로 변경 가능
+                            title="프라이빗 라운딩 초대",
+                            content=f"'{club.name}' 클럽의 프라이빗 라운딩 '{meeting_data.name}'에 초대되었습니다.\n일시: {meeting_data.meeting_time.strftime('%Y년 %m월 %d일 %H:%M') if meeting_data.meeting_time else '미정'}\n장소: {meeting_data.location or '미정'}"
+                        )
+                    except Exception as e:
+                        logger.error(f"프라이빗 라운딩 초대 알림 전송 실패 - user_id: {user_id}, error: {str(e)}")
+                        # 알림 실패해도 계속 진행
+            except Exception as e:
+                logger.error(f"프라이빗 라운딩 알림 전송 중 오류: {str(e)}")
+                # 알림 실패해도 계속 진행
+    
+    else:
+        # 일반 라운딩: 생성자를 매니저로 자동 참가
+        participant = MeetingParticipant(
+            meeting_id=meeting.id,
+            user_id=current_user.id,
+            participant_type=ParticipantType.USER,
+            status=MeetingParticipantStatus.CONFIRMED,
+            role=MeetingParticipantRole.ORGANIZER
+        )
+        db.add(participant)
+        db.commit()
+        participant_count = 1
     
     # 클럽 정보 조회
     club = db.query(Club).filter(Club.id == meeting.club_id).first()
+    
+    # 생성자 정보 조회
+    created_by_name = None
+    if meeting.created_by:
+        creator = db.query(User).filter(User.id == meeting.created_by).first()
+        if creator:
+            created_by_name = creator.nickname or creator.name
     
     # tee_times에서 첫 번째 시간을 tee_time으로 설정
     tee_time = None
@@ -222,10 +380,16 @@ async def create_round(
             hour, minute = map(int, tee_time_str.split(':'))
             tee_time = time(hour, minute)
     
+    meeting_dict = {**meeting.__dict__}
+    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict["tee_times"] = meeting.tee_times or []
+    
     return MeetingResponse(
-        **meeting.__dict__,
+        **meeting_dict,
         club_name=club.name,
-        participant_count=1,
+        participant_count=participant_count,
+        created_by=meeting.created_by,
+        created_by_name=created_by_name,
         tee_time=tee_time
     )
 
@@ -255,27 +419,53 @@ async def get_round(
             detail="라운딩을 찾을 수 없습니다."
         )
     
-    # 클럽 멤버십 확인 (관리자는 제외)
-    from models import Admin
-    admin = db.query(Admin).filter(
-        Admin.id == current_user.id,
-        Admin.deleted_at.is_(None)
-    ).first()
-    
-    if not admin:
-        membership = db.query(ClubMembership).filter(
-            and_(
-                ClubMembership.user_id == current_user.id,
-                ClubMembership.club_id == meeting.club_id,
-                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
-            )
+    # 프라이빗 라운딩인 경우 권한 체크
+    if meeting.is_private:
+        # 관리자는 접근 가능
+        from models import Admin
+        admin = db.query(Admin).filter(
+            Admin.id == current_user.id,
+            Admin.deleted_at.is_(None)
         ).first()
         
-        if not membership:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="해당 클럽의 멤버가 아닙니다."
-            )
+        if not admin:
+            # 참가자 또는 생성자인지 확인
+            is_participant = db.query(MeetingParticipant).filter(
+                and_(
+                    MeetingParticipant.meeting_id == meeting.id,
+                    MeetingParticipant.user_id == current_user.id
+                )
+            ).first()
+            
+            is_creator = meeting.created_by == current_user.id
+            
+            if not is_participant and not is_creator:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="프라이빗 라운딩은 참가자 또는 생성자만 조회할 수 있습니다."
+                )
+    else:
+        # 일반 라운딩: 클럽 멤버십 확인 (관리자는 제외)
+        from models import Admin
+        admin = db.query(Admin).filter(
+            Admin.id == current_user.id,
+            Admin.deleted_at.is_(None)
+        ).first()
+        
+        if not admin:
+            membership = db.query(ClubMembership).filter(
+                and_(
+                    ClubMembership.user_id == current_user.id,
+                    ClubMembership.club_id == meeting.club_id,
+                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+                )
+            ).first()
+            
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="해당 클럽의 멤버가 아닙니다."
+                )
     
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(
@@ -285,10 +475,23 @@ async def get_round(
         )
     ).count()
     
+    # 생성자 정보 조회
+    created_by_name = None
+    if meeting.created_by:
+        creator = db.query(User).filter(User.id == meeting.created_by).first()
+        if creator:
+            created_by_name = creator.nickname or creator.name
+    
+    meeting_dict = {**meeting.__dict__}
+    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict["tee_times"] = meeting.tee_times or []
+    
     return MeetingResponse(
-        **meeting.__dict__,
+        **meeting_dict,
         club_name=meeting.club.name,
-        participant_count=participant_count
+        participant_count=participant_count,
+        created_by=meeting.created_by,
+        created_by_name=created_by_name
     )
 
 # =============================================================================
@@ -319,12 +522,20 @@ async def update_round(
         )
     
     # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 수정 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
-    if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+    is_creator = meeting.created_by == current_user.id
+    if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db) and not is_creator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="라운딩 매니저만 수정할 수 있습니다."
         )
+    
+    # is_private 변경 여부 확인
+    was_private = meeting.is_private
+    is_private_changing = False
+    if meeting_data.is_private is not None and meeting_data.is_private != meeting.is_private:
+        is_private_changing = True
     
     # 수정 가능한 필드들만 업데이트
     update_data = meeting_data.dict(exclude_unset=True)
@@ -335,6 +546,10 @@ async def update_round(
     
     db.commit()
     db.refresh(meeting)
+    
+    # 프라이빗 → 공개 변경 시: 기존 참가자 유지, 클럽 전체 알림 전송하지 않음
+    # 공개 → 프라이빗 변경 시: 기존 참가자 유지, 일반 멤버에게는 숨김 처리
+    # (별도 처리 불필요, 필터링 로직에서 자동 처리됨)
     
     # 클럽 정보 조회
     club = db.query(Club).filter(Club.id == meeting.club_id).first()
@@ -347,10 +562,23 @@ async def update_round(
         )
     ).count()
     
+    # 생성자 정보 조회
+    created_by_name = None
+    if meeting.created_by:
+        creator = db.query(User).filter(User.id == meeting.created_by).first()
+        if creator:
+            created_by_name = creator.nickname or creator.name
+    
+    meeting_dict = {**meeting.__dict__}
+    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict["tee_times"] = meeting.tee_times or []
+    
     return MeetingResponse(
-        **meeting.__dict__,
+        **meeting_dict,
         club_name=club.name,
-        participant_count=participant_count
+        participant_count=participant_count,
+        created_by=meeting.created_by,
+        created_by_name=created_by_name
     )
 
 # =============================================================================
@@ -380,8 +608,10 @@ async def delete_round(
         )
     
     # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 삭제 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
-    if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+    is_creator = meeting.created_by == current_user.id
+    if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db) and not is_creator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="라운딩 매니저만 삭제할 수 있습니다."
@@ -535,22 +765,42 @@ async def get_round_participants(
                 detail="라운딩을 찾을 수 없습니다."
             )
         
-        # 클럽 멤버십 확인 (관리자는 제외)
+        # 프라이빗 라운딩인 경우 권한 체크
         user_role = get_user_role_from_token(credentials)
-        if user_role != "ADMIN":
-            membership = db.query(ClubMembership).filter(
-                and_(
-                    ClubMembership.user_id == current_user.id,
-                    ClubMembership.club_id == meeting.club_id,
-                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
-                )
-            ).first()
-            
-            if not membership:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="해당 클럽의 멤버가 아닙니다."
-                )
+        if meeting.is_private:
+            # 관리자는 접근 가능
+            if user_role != "ADMIN":
+                # 참가자 또는 생성자인지 확인
+                is_participant = db.query(MeetingParticipant).filter(
+                    and_(
+                        MeetingParticipant.meeting_id == meeting.id,
+                        MeetingParticipant.user_id == current_user.id
+                    )
+                ).first()
+                
+                is_creator = meeting.created_by == current_user.id
+                
+                if not is_participant and not is_creator:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="프라이빗 라운딩의 참가자 목록은 참가자 또는 생성자만 조회할 수 있습니다."
+                    )
+        else:
+            # 일반 라운딩: 클럽 멤버십 확인 (관리자는 제외)
+            if user_role != "ADMIN":
+                membership = db.query(ClubMembership).filter(
+                    and_(
+                        ClubMembership.user_id == current_user.id,
+                        ClubMembership.club_id == meeting.club_id,
+                        ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+                    )
+                ).first()
+                
+                if not membership:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="해당 클럽의 멤버가 아닙니다."
+                    )
         
         # 참가자 목록 조회 (게스트와 일반 사용자 모두 포함)
         participants = db.query(MeetingParticipant).filter(

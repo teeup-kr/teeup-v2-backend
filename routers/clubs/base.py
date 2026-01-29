@@ -41,6 +41,18 @@ async def create_club(club_data: ClubCreate,
         if not club_data.sido_code:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="시도를 선택하셔야 합니다.")
 
+        # 클럽 이름 중복 체크 (삭제되지 않은 클럽만)
+        existing_club = db.query(Club).filter(
+            Club.name == club_data.name,
+            Club.deleted_at.is_(None)
+        ).first()
+        
+        if existing_club:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"이미 사용 중인 클럽 이름입니다: '{club_data.name}'"
+            )
+
         # 시도/군구 유효성 검사 (등록 전)
         unique_gungu_codes = validate_gungu_codes(db, club_data.sido_code, club_data.gungu_codes)
 
@@ -452,6 +464,19 @@ async def update_club(club_id: str,
 
         # 클럽 정보 수정
         if club_data.name is not None:
+            # 클럽 이름 중복 체크 (현재 클럽 제외, 삭제되지 않은 클럽만)
+            existing_club = db.query(Club).filter(
+                Club.name == club_data.name,
+                Club.id != club.id,
+                Club.deleted_at.is_(None)
+            ).first()
+            
+            if existing_club:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"이미 사용 중인 클럽 이름입니다: '{club_data.name}'"
+                )
+            
             club.name = club_data.name
         if club_data.type is not None:
             club.type = club_data.type

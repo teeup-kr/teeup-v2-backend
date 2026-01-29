@@ -1,7 +1,7 @@
 # 모임 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text
+from sqlalchemy import text, or_, and_
 from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -263,10 +263,32 @@ async def get_rounding_meetings(
             )
         
         # 라운딩 모임 조회 (ROUNDING 타입) - DELETED 상태 제외
+        # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
+        # 사용자가 참가한 프라이빗 라운딩 ID 목록
+        user_participant_meeting_ids = db.query(MeetingParticipant.meeting_id).filter(
+            MeetingParticipant.user_id == current_user.id
+        ).subquery()
+        
+        # 사용자가 생성한 프라이빗 라운딩 ID 목록
+        user_created_meeting_ids = db.query(Meeting.id).filter(
+            Meeting.created_by == current_user.id
+        ).subquery()
+        
         query = db.query(Meeting).filter(
             Meeting.club_id.in_(club_ids),
             Meeting.meeting_type == MeetingType.ROUND,
-            Meeting.status != MeetingStatus.DELETED
+            Meeting.status != MeetingStatus.DELETED,
+            # 프라이빗 라운딩 필터링
+            or_(
+                Meeting.is_private == False,  # 일반 라운딩
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids)
+                    )
+                )
+            )
         )
         
         total = query.count()
@@ -298,7 +320,19 @@ async def get_rounding_meetings(
                     hour, minute = map(int, tee_time_str.split(':'))
                     tee_time = time(hour, minute)
             
+            # 생성자 정보 조회
+            created_by_name = None
+            if meeting.created_by:
+                creator = db.query(User).filter(User.id == meeting.created_by).first()
+                if creator:
+                    created_by_name = creator.nickname or creator.name
+            
+            meeting_dict = {**meeting.__dict__}
+            meeting_dict.pop("_sa_instance_state", None)
+            meeting_dict["tee_times"] = meeting.tee_times or []
+            
             meeting_responses.append(MeetingResponse(
+                **meeting_dict,
                 id=meeting.id,                name=meeting.name,
                 description=meeting.description,
                 location=meeting.location,
@@ -329,6 +363,8 @@ async def get_rounding_meetings(
                 club_id=meeting.club_id,
                 club_name=club_name,
                 participant_count=participant_count,
+                created_by=meeting.created_by,
+                created_by_name=created_by_name,
                 team_formation_confirmed_at=meeting.team_formation_confirmed_at,
                 rounding_started_at=meeting.rounding_started_at,
                 rounding_completed_at=meeting.rounding_completed_at,
@@ -482,6 +518,31 @@ async def get_meetings(
         if meeting_type_filter:
             meetings_query = meetings_query.filter(Meeting.meeting_type == meeting_type_filter)
         
+        # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
+        # 사용자가 참가한 프라이빗 라운딩 ID 목록
+        user_participant_meeting_ids = db.query(MeetingParticipant.meeting_id).filter(
+            MeetingParticipant.user_id == current_user.id
+        ).subquery()
+        
+        # 사용자가 생성한 프라이빗 라운딩 ID 목록
+        user_created_meeting_ids = db.query(Meeting.id).filter(
+            Meeting.created_by == current_user.id
+        ).subquery()
+        
+        # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자인 경우
+        meetings_query = meetings_query.filter(
+            or_(
+                Meeting.is_private == False,  # 일반 라운딩
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids)
+                    )
+                )
+            )
+        )
+        
         # 검색 기능 추가
         if search:
             search_term = f"%{search}%"
@@ -507,6 +568,18 @@ async def get_meetings(
             MeetingParticipant, 
             (MeetingParticipant.meeting_id == Meeting.id) & 
             (MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)
+        ).filter(
+            # 프라이빗 라운딩 필터링 재적용
+            or_(
+                Meeting.is_private == False,
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids)
+                    )
+                )
+            )
         ).group_by(
             Meeting.id, Club.name
         ).order_by(
@@ -566,10 +639,23 @@ async def get_my_meetings(
         # 페이지네이션 계산
         offset = (page - 1) * limit
         
-        # 내가 참가한 모임 조회
-        my_meetings_query = db.query(Meeting).join(MeetingParticipant).filter(
+        # 내가 참가한 모임 조회 (참가자이거나 생성자인 경우)
+        # 참가한 모임
+        participant_meetings = db.query(MeetingParticipant.meeting_id).filter(
             MeetingParticipant.user_id == current_user.id,
             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).subquery()
+        
+        # 생성한 모임 (프라이빗 라운딩 포함)
+        created_meetings = db.query(Meeting.id).filter(
+            Meeting.created_by == current_user.id
+        ).subquery()
+        
+        my_meetings_query = db.query(Meeting).filter(
+            or_(
+                Meeting.id.in_(participant_meetings),
+                Meeting.id.in_(created_meetings)
+            )
         )
         
         if status_filter:
@@ -673,6 +759,39 @@ async def get_meeting(
         
         meeting, club = meeting_with_club
         
+        # 프라이빗 라운딩인 경우 권한 체크
+        if meeting.is_private:
+            # 참가자 또는 생성자인지 확인
+            is_participant = db.query(MeetingParticipant).filter(
+                and_(
+                    MeetingParticipant.meeting_id == meeting.id,
+                    MeetingParticipant.user_id == current_user.id
+                )
+            ).first()
+            
+            is_creator = meeting.created_by == current_user.id
+            
+            if not is_participant and not is_creator:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="프라이빗 라운딩은 참가자 또는 생성자만 조회할 수 있습니다."
+                )
+        else:
+            # 일반 라운딩: 클럽 멤버십 확인
+            membership = db.query(ClubMembership).filter(
+                and_(
+                    ClubMembership.user_id == current_user.id,
+                    ClubMembership.club_id == meeting.club_id,
+                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+                )
+            ).first()
+            
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="해당 클럽의 멤버가 아닙니다."
+                )
+        
         # 참가자와 사용자 정보를 JOIN으로 한 번에 조회
         participants_with_users = db.query(
             MeetingParticipant,
@@ -704,8 +823,20 @@ async def get_meeting(
         
         participant_count = len([p for p in participants_with_users if p[0].status == MeetingParticipantStatus.CONFIRMED])
         
+        # 생성자 정보 조회
+        created_by_name = None
+        if meeting.created_by:
+            creator = db.query(User).filter(User.id == meeting.created_by).first()
+            if creator:
+                created_by_name = creator.nickname or creator.name
+        
+        meeting_dict = {**meeting.__dict__}
+        meeting_dict.pop("_sa_instance_state", None)
+        meeting_dict["tee_times"] = meeting.tee_times or []
+        
         return MeetingResponse(
-            id=meeting.id,            name=meeting.name,
+            **meeting_dict,
+            name=meeting.name,
             description=meeting.description,
             location=meeting.location,
             meeting_time=meeting.meeting_time,
@@ -731,6 +862,8 @@ async def get_meeting(
             club_id=meeting.club_id,
             club_name=club.name if club else None,
             participant_count=participant_count,
+            created_by=meeting.created_by,
+            created_by_name=created_by_name,
             social_cost=meeting.social_cost,
             social_notes=meeting.social_notes,
             team_formation_confirmed_at=meeting.team_formation_confirmed_at,

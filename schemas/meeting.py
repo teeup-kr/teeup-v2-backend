@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 from .enums import MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, ParticipantType
+from .team import GuestCreate
+
 class RoundingMeetingCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="모임 이름")
     description: Optional[str] = Field(None, description="모임 설명")
@@ -23,6 +25,9 @@ class RoundingMeetingCreate(BaseModel):
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
     team_formation_mode: Optional[str] = Field(None, max_length=50, description="팀 구성 방식")
     team_size: Optional[int] = Field(None, ge=1, description="팀 크기")
+    is_private: Optional[bool] = Field(False, description="프라이빗 라운딩 여부")
+    selected_participants: Optional[List[int]] = Field(None, description="선택된 참가자 user_id 목록 (프라이빗 라운딩일 때 필수)")
+    selected_guests: Optional[List[GuestCreate]] = Field(None, description="선택된 게스트 목록 (프라이빗 라운딩일 때 선택사항)")
     
     @field_validator('meeting_time', 'application_deadline', mode='before')
     @classmethod
@@ -62,6 +67,7 @@ class MeetingUpdate(BaseModel):
     venue_name: Optional[str] = Field(None, max_length=255, description="장소명")
     social_cost: Optional[float] = Field(None, ge=0, description="소셜 비용")
     social_notes: Optional[str] = Field(None, description="소셜 모임 메모")
+    is_private: Optional[bool] = Field(None, description="프라이빗 라운딩 여부")
 
 class MeetingResponse(BaseModel):
     id: int
@@ -100,6 +106,9 @@ class MeetingResponse(BaseModel):
     rounding_started_at: Optional[datetime] = None
     rounding_completed_at: Optional[datetime] = None
     settlement_confirmed: bool = False
+    is_private: bool = False
+    created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
     
     model_config = {"from_attributes": True}
 

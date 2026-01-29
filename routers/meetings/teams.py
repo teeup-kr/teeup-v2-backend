@@ -74,6 +74,23 @@ async def get_teams(
                 detail="모임을 찾을 수 없습니다"
             )
         
+        # 프라이빗 라운딩인 경우 권한 체크
+        if meeting.is_private:
+            user_id = current_user.get('id') if isinstance(current_user, dict) else current_user.id
+            # 참가자 또는 생성자인지 확인
+            is_participant = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.user_id == user_id
+            ).first()
+            
+            is_creator = meeting.created_by == user_id
+            
+            if not is_participant and not is_creator:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="프라이빗 라운딩의 팀 정보는 참가자 또는 생성자만 조회할 수 있습니다."
+                )
+        
         print(f"모임 정보 - id: {meeting.id}, name: {meeting.name}")
     except HTTPException:
         raise
