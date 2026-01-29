@@ -136,6 +136,7 @@ class SubscriptionStatus(str, Enum):
 class TermsType(str, Enum):
     SERVICE = "SERVICE"
     PRIVACY = "PRIVACY"
+    PRIVACY_COLLECTION = "PRIVACY_COLLECTION"
     MARKETING = "MARKETING"
 
 class UserRole(str, Enum):
