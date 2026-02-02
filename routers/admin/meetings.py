@@ -1,9 +1,12 @@
 """
 백오피스 모임 API
 """
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
+from sqlalchemy import func, extract
+from typing import Optional, List
 import logging
 
 from database import get_db
@@ -13,6 +16,20 @@ from .deps import get_admin_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin-meetings"])
+
+
+class MeetingStatsResponse(BaseModel):
+    total_meetings: int
+    active_meetings: int
+    canceled_meetings: int
+    completed_meetings: int
+    meetings_by_type: dict
+    meetings_by_month: List[dict]
+    total_participants: int
+    average_participants_per_meeting: float
+    meetings_by_club: List[dict]
+    upcoming_meetings_count: int
+    past_meetings_count: int
 
 
 @router.get("/meetings/rounding")
@@ -556,6 +573,77 @@ async def update_admin_meeting(meeting_id: int,
     except Exception as e:
         logger.error(f"관리자 모임 수정 중 오류: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="모임 수정 중 오류가 발생했습니다")
+
+
+@router.get("/meetings/stats", response_model=MeetingStatsResponse)
+async def get_meeting_statistics(
+        club_id: Optional[int] = Query(None, description="클럽 ID 필터"),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
+):
+    """모임 통계 조회 (관리자)"""
+    try:
+        from models import Meeting, Club, MeetingParticipant
+        from schemas import MeetingStatus, MeetingParticipantStatus
+
+        meetings_query = db.query(Meeting)
+        if club_id:
+            meetings_query = meetings_query.filter(Meeting.club_id == club_id)
+
+        total_meetings = meetings_query.count()
+        active_meetings = meetings_query.filter(Meeting.status == MeetingStatus.SCHEDULED).count()
+        canceled_meetings = meetings_query.filter(Meeting.status == MeetingStatus.CANCELED).count()
+        completed_meetings = meetings_query.filter(Meeting.status == MeetingStatus.COMPLETED).count()
+
+        type_stats = meetings_query.with_entities(Meeting.meeting_type,
+                                                  func.count(Meeting.id).label("count")).group_by(
+                                                      Meeting.meeting_type).all()
+        meetings_by_type = {t.value: c for t, c in type_stats if t}
+
+        twelve_months_ago = datetime.now() - timedelta(days=365)
+        monthly_stats = meetings_query.filter(Meeting.created_at >= twelve_months_ago).with_entities(
+            extract("year", Meeting.created_at).label("year"),
+            extract("month", Meeting.created_at).label("month"),
+            func.count(Meeting.id).label("count"),
+        ).group_by(extract("year", Meeting.created_at),
+                   extract("month", Meeting.created_at)).order_by(extract("year", Meeting.created_at),
+                                                                  extract("month", Meeting.created_at)).all()
+        meetings_by_month = [{"year": int(y), "month": int(m), "count": c} for y, m, c in monthly_stats]
+
+        participants_query = db.query(MeetingParticipant)
+        if club_id:
+            participants_query = participants_query.join(Meeting).filter(Meeting.club_id == club_id)
+        total_participants = participants_query.filter(
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED).count()
+        average_participants_per_meeting = round(total_participants / total_meetings, 2) if total_meetings > 0 else 0
+
+        club_stats = meetings_query.with_entities(Meeting.club_id, Club.name.label("club_name"),
+                                                  func.count(Meeting.id).label("count")).join(Club).group_by(
+                                                      Meeting.club_id, Club.name).all()
+        meetings_by_club = [{"club_id": cid, "club_name": cname, "count": c} for cid, cname, c in club_stats]
+
+        upcoming_meetings_count = meetings_query.filter(Meeting.meeting_time > datetime.now(),
+                                                        Meeting.status == MeetingStatus.SCHEDULED).count()
+        past_meetings_count = meetings_query.filter(Meeting.meeting_time <= datetime.now()).count()
+
+        return MeetingStatsResponse(
+            total_meetings=total_meetings,
+            active_meetings=active_meetings,
+            canceled_meetings=canceled_meetings,
+            completed_meetings=completed_meetings,
+            meetings_by_type=meetings_by_type,
+            meetings_by_month=meetings_by_month,
+            total_participants=total_participants,
+            average_participants_per_meeting=average_participants_per_meeting,
+            meetings_by_club=meetings_by_club,
+            upcoming_meetings_count=upcoming_meetings_count,
+            past_meetings_count=past_meetings_count,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모임 통계 조회 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.delete("/meetings/{meeting_id}")
