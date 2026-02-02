@@ -94,9 +94,6 @@ async def update_my_profile(
         # ---------------------------
         # 1. 입력값 유효성 검사
         # ---------------------------
-        # ---------------------------
-        # 1. 입력값 유효성 검사
-        # ---------------------------
         try:
             # 실명 검사
             if user_data.realname is not None:
@@ -124,17 +121,11 @@ async def update_my_profile(
             # 핸디캡 init (0~72)
             if user_data.handicap_init is not None:
                 if not (0 <= user_data.handicap_init <= 72):
-            # 핸디캡 init (0~72)
-            if user_data.handicap_init is not None:
-                if not (0 <= user_data.handicap_init <= 72):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="핸디캡은 0-72 사이여야 합니다",
                     )
 
-            # 평균 타수 init (55~144)
-            if user_data.average_score_init is not None:
-                if not (55 <= user_data.average_score_init <= 144):
             # 평균 타수 init (55~144)
             if user_data.average_score_init is not None:
                 if not (55 <= user_data.average_score_init <= 144):
@@ -147,14 +138,8 @@ async def update_my_profile(
             if user_data.birthdate is not None:
                 from routers.auth import validate_birthdate
 
-
                 birthdate_validation = validate_birthdate(user_data.birthdate)
                 if not birthdate_validation["is_valid"]:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="; ".join(birthdate_validation["errors"]),
-                    )
-
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="; ".join(birthdate_validation["errors"]),
