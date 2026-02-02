@@ -13,9 +13,9 @@ from pydantic import BaseModel
 import threading
 
 from database import get_db
-from models import Admin, User, Meeting, ClubMembership, Club, Terms, UserStatus, ClubStatus, ClubRole, ClubRegion, Sido, Gungu, Provider
+from models import Admin, User, Meeting, ClubMembership, Club, Terms, UserStatus, ClubStatus, ClubRole, ClubRegion, Sido, Gungu
 from schemas import MembershipStatus, TermsType
-from schemas import UserResponse, MessageResponse, PaginatedResponse, AdminResponse, AdminCreate, AdminUpdate, AdminPasswordUpdate
+from schemas import UserResponse, MessageResponse, PaginatedResponse
 import schemas
 from utils.jwt_auth import jwt_auth
 from utils import generate_id
@@ -129,7 +129,7 @@ def get_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security)
             logger.error(f"Admin auth - Admin status is DEACTIVATED")
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="비활성화된 관리자 계정입니다")
 
-        # 관리자 정보를 딕셔너리로 변환 (type 포함 - PermissionChecker.check_admin_permission용)
+        # 관리자 정보를 딕셔너리로 변환
         user_data = {
             "id": admin.id,
             "email": admin.email,
@@ -160,14 +160,16 @@ async def admin_login(login_data: AdminLoginRequest, db: Session = Depends(get_d
         # 관리자 인증
         admin = verify_admin_credentials(login_data.email, login_data.password, db)
 
-        # JWT 토큰 생성 (type은 access로 유지 - verify_token에서 필요)
-        token_payload = {
+        # JWT 토큰 생성
+        user_data = {
             "id": admin.id,
             "email": admin.email,
             "name": admin.name,
+            "type": "admin"  # 관리자 타입 표시
         }
-        access_token = jwt_auth.create_access_token(token_payload)
-        refresh_token = jwt_auth.create_refresh_token(token_payload)
+
+        access_token = jwt_auth.create_access_token(user_data)
+        refresh_token = jwt_auth.create_refresh_token(user_data)
 
         return AdminLoginResponse(access_token=access_token,
                                   refresh_token=refresh_token,
@@ -242,10 +244,9 @@ async def get_current_admin(current_user: dict = Depends(get_admin_user)):
         result = {
             "id": current_user["id"],
             "email": current_user["email"],
-            "name": current_user.get("name", ""),
-            "nickname": current_user.get("name", ""),  # 하위 호환: nickname = name
-            "role": "ADMIN",
-            "status": current_user.get("status", "ACTIVE")
+            "nickname": current_user["nickname"],
+            "role": current_user["role"],
+            "status": current_user["status"]
         }
         logger.info(f"관리자 정보 조회 성공: {result}")
         return result
