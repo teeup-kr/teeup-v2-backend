@@ -3,20 +3,17 @@
 """
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
-from typing import Optional, List
+from typing import Optional
 import logging
 
 from database import get_db
-from models import User, Club, ClubMembership, Admin
+from models import User, Club, ClubMembership
 from models import UserStatus
-from schemas import UserResponse, PaginatedResponse, MembershipStatus, UserCreate, UserUpdate
+from schemas import UserResponse, PaginatedResponse, MembershipStatus
 import schemas
 from utils.datetime_utils import get_kst_now
 from .deps import get_admin_user
-from services.user_admin_service import create_user_impl, update_user_impl
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +22,14 @@ router = APIRouter(tags=["admin-users"])
 
 @router.get("/users", response_model=PaginatedResponse)
 async def get_admin_users(
-    page: int = 1,
-    limit: int = 10,
-    search: Optional[str] = None,
-    role_filter: Optional[str] = None,
-    status_filter: Optional[str] = None,
-    sort_order: Optional[str] = "oldest",
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        page: int = 1,
+        limit: int = 10,
+        search: Optional[str] = None,
+        role_filter: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        sort_order: Optional[str] = "oldest",
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 목록 조회"""
     try:
@@ -44,12 +41,10 @@ async def get_admin_users(
         )
         if search:
             search_filter = f"%{search}%"
-            query = query.filter(
-                (User.email.ilike(search_filter))
-                | (User.nickname.ilike(search_filter))
-                | (User.realname.ilike(search_filter))
-                | (User.phone_number.ilike(search_filter))
-            )
+            query = query.filter((User.email.ilike(search_filter))
+                                 | (User.nickname.ilike(search_filter))
+                                 | (User.realname.ilike(search_filter))
+                                 | (User.phone_number.ilike(search_filter)))
         if status_filter:
             query = query.filter(User.status == status_filter)
         total_count = query.count()
@@ -88,8 +83,7 @@ async def get_admin_users(
                     club_count=club_count,
                     created_at=user.created_at,
                     updated_at=user.updated_at,
-                )
-            )
+                ))
         return {
             "data": user_responses,
             "total": total_count,
@@ -107,10 +101,10 @@ async def get_admin_users(
 
 @router.get("/users/search")
 async def search_users_for_club(
-    q: Optional[str] = None,
-    limit: int = 20,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        q: Optional[str] = None,
+        limit: int = 20,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """클럽 대표자 선택을 위한 사용자 검색"""
     try:
@@ -120,23 +114,18 @@ async def search_users_for_club(
         )
         if q:
             search_filter = f"%{q}%"
-            query = query.filter(
-                (User.email.ilike(search_filter))
-                | (User.nickname.ilike(search_filter))
-                | (User.realname.ilike(search_filter))
-            )
+            query = query.filter((User.email.ilike(search_filter))
+                                 | (User.nickname.ilike(search_filter))
+                                 | (User.realname.ilike(search_filter)))
         users = query.limit(limit).all()
-        user_list = [
-            {
-                "id": u.id,
-                "email": u.email,
-                "nickname": u.nickname,
-                "realname": getattr(u, "realname", None),
-                "phone_number": getattr(u, "phone_number", None),
-                "status": u.status.value if u.status else None,
-            }
-            for u in users
-        ]
+        user_list = [{
+            "id": u.id,
+            "email": u.email,
+            "nickname": u.nickname,
+            "realname": getattr(u, "realname", None),
+            "phone_number": getattr(u, "phone_number", None),
+            "status": u.status.value if u.status else None,
+        } for u in users]
         return {"success": True, "users": user_list, "total": len(user_list)}
     except Exception as e:
         logger.error(f"사용자 검색 중 오류: {str(e)}")
@@ -148,8 +137,8 @@ async def search_users_for_club(
 
 @router.get("/users/create")
 async def get_user_create_form_data(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """사용자 생성 페이지에 필요한 데이터 조회"""
     return {
@@ -164,28 +153,21 @@ async def get_user_create_form_data(
 
 @router.get("/users/create/clubs")
 async def get_user_create_clubs_data(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """사용자 생성 시 클럽 목록 조회 (대표자 선택용)"""
     try:
         from models import ClubStatus
 
-        clubs = (
-            db.query(Club)
-            .filter(Club.deleted_at.is_(None), Club.status == ClubStatus.ACTIVE)
-            .order_by(Club.created_at.desc())
-            .all()
-        )
-        club_list = [
-            {
-                "id": c.id,
-                "display_id": c.display_id,
-                "name": c.name,
-                "status": c.status.value if hasattr(c.status, "value") else str(c.status),
-            }
-            for c in clubs
-        ]
+        clubs = (db.query(Club).filter(Club.deleted_at.is_(None),
+                                       Club.status == ClubStatus.ACTIVE).order_by(Club.created_at.desc()).all())
+        club_list = [{
+            "id": c.id,
+            "display_id": c.display_id,
+            "name": c.name,
+            "status": c.status.value if hasattr(c.status, "value") else str(c.status),
+        } for c in clubs]
         return {"success": True, "clubs": club_list, "total": len(club_list)}
     except Exception as e:
         logger.error(f"클럽 목록 조회 중 오류: {str(e)}")
@@ -197,9 +179,9 @@ async def get_user_create_clubs_data(
 
 @router.get("/users/{user_id}")
 async def get_admin_user_detail(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 상세 조회"""
     try:
@@ -239,9 +221,9 @@ async def get_admin_user_detail(
 
 @router.get("/users/{user_id}/clubs")
 async def get_user_clubs(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """사용자별 소속 클럽 목록 조회"""
     try:
@@ -250,33 +232,25 @@ async def get_user_clubs(
         user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다")
-        memberships = (
-            db.query(ClubMembership, Club)
-            .join(Club, ClubMembership.club_id == Club.id)
-            .filter(
-                ClubMembership.user_id == user_id,
-                Club.deleted_at.is_(None),
-                or_(
-                    ClubMembership.status == MembershipStatus.ACTIVE,
-                    ClubMembership.status == "APPROVED",
-                ),
-            )
-            .all()
-        )
-        club_data = [
-            {
-                "id": club.id,
-                "name": club.name,
-                "type": club.type.value if hasattr(club.type, "value") else str(club.type),
-                "description": club.description,
-                "location": club.location,
-                "status": club.status.value if hasattr(club.status, "value") else str(club.status),
-                "member_role": membership.role.value if hasattr(membership.role, "value") else str(membership.role),
-                "joined_at": membership.created_at.isoformat() if membership.created_at else None,
-                "club_created_at": club.created_at.isoformat() if club.created_at else None,
-            }
-            for membership, club in memberships
-        ]
+        memberships = (db.query(ClubMembership, Club).join(Club, ClubMembership.club_id == Club.id).filter(
+            ClubMembership.user_id == user_id,
+            Club.deleted_at.is_(None),
+            or_(
+                ClubMembership.status == MembershipStatus.ACTIVE,
+                ClubMembership.status == "APPROVED",
+            ),
+        ).all())
+        club_data = [{
+            "id": club.id,
+            "name": club.name,
+            "type": club.type.value if hasattr(club.type, "value") else str(club.type),
+            "description": club.description,
+            "location": club.location,
+            "status": club.status.value if hasattr(club.status, "value") else str(club.status),
+            "member_role": membership.role.value if hasattr(membership.role, "value") else str(membership.role),
+            "joined_at": membership.created_at.isoformat() if membership.created_at else None,
+            "club_created_at": club.created_at.isoformat() if club.created_at else None,
+        } for membership, club in memberships]
         return {"user_id": user_id, "user_name": user.nickname, "total_clubs": len(club_data), "clubs": club_data}
     except HTTPException:
         raise
@@ -290,11 +264,11 @@ async def get_user_clubs(
 
 @router.get("/users/{user_id}/meetings", response_model=schemas.UserMeetingsResponse)
 async def get_user_meetings(
-    user_id: int,
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        page: int = Query(1, ge=1),
+        limit: int = Query(10, ge=1, le=100),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """사용자별 라운딩/소셜 참가 목록 조회"""
     try:
@@ -307,41 +281,27 @@ async def get_user_meetings(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다")
         offset = (page - 1) * limit
 
-        rounding_query = (
-            db.query(MeetingParticipant, Meeting, Club)
-            .join(Meeting, MeetingParticipant.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(
-                MeetingParticipant.user_id == user_id,
-                Meeting.meeting_type == MeetingType.ROUND,
-                Club.deleted_at.is_(None),
-            )
-        )
+        rounding_query = (db.query(MeetingParticipant, Meeting,
+                                   Club).join(Meeting, MeetingParticipant.meeting_id == Meeting.id).join(
+                                       Club, Meeting.club_id == Club.id).filter(
+                                           MeetingParticipant.user_id == user_id,
+                                           Meeting.meeting_type == MeetingType.ROUND,
+                                           Club.deleted_at.is_(None),
+                                       ))
         total_rounding = rounding_query.count()
-        rounding_results = (
-            rounding_query.order_by(desc(func.coalesce(Meeting.meeting_time, Meeting.created_at)))
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        rounding_results = (rounding_query.order_by(desc(func.coalesce(
+            Meeting.meeting_time, Meeting.created_at))).offset(offset).limit(limit).all())
 
-        social_query = (
-            db.query(MeetingParticipant, Meeting, Club)
-            .join(Meeting, MeetingParticipant.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(
-                MeetingParticipant.user_id == user_id,
-                Meeting.meeting_type == MeetingType.SOCIAL,
-                Club.deleted_at.is_(None),
-            )
-        )
+        social_query = (db.query(MeetingParticipant, Meeting,
+                                 Club).join(Meeting, MeetingParticipant.meeting_id == Meeting.id).join(
+                                     Club, Meeting.club_id == Club.id).filter(
+                                         MeetingParticipant.user_id == user_id,
+                                         Meeting.meeting_type == MeetingType.SOCIAL,
+                                         Club.deleted_at.is_(None),
+                                     ))
         total_social = social_query.count()
-        social_results = (
-            social_query.order_by(desc(func.coalesce(Meeting.meeting_time, Meeting.created_at)))
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        social_results = (social_query.order_by(desc(func.coalesce(
+            Meeting.meeting_time, Meeting.created_at))).offset(offset).limit(limit).all())
 
         rounding_meeting_ids = [m.id for _, m, _ in rounding_results]
         score_histories = {}
@@ -370,8 +330,7 @@ async def get_user_meetings(
                     has_score=sh is not None,
                     gross_score=sh.gross_score if sh else None,
                     net_score=float(sh.net_score) if sh and sh.net_score else None,
-                )
-            )
+                ))
 
         social_meetings = []
         for participant, meeting, club in social_results:
@@ -389,8 +348,7 @@ async def get_user_meetings(
                     has_score=False,
                     gross_score=None,
                     net_score=None,
-                )
-            )
+                ))
 
         return schemas.UserMeetingsResponse(
             rounding_meetings=rounding_meetings,
@@ -410,11 +368,11 @@ async def get_user_meetings(
 
 @router.get("/users/{user_id}/handicap-history", response_model=schemas.UserHandicapHistoryResponse)
 async def get_user_handicap_history(
-    user_id: int,
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        page: int = Query(1, ge=1),
+        limit: int = Query(10, ge=1, le=100),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """사용자별 핸디캡 업데이트 이력 조회"""
     try:
@@ -432,19 +390,13 @@ async def get_user_handicap_history(
             last_updated_at=user.updated_at,
         )
         offset = (page - 1) * limit
-        score_history_query = (
-            db.query(UserScoreHistory, Meeting, Club)
-            .join(Meeting, UserScoreHistory.meeting_id == Meeting.id)
-            .join(Club, Meeting.club_id == Club.id)
-            .filter(UserScoreHistory.user_id == user_id, Club.deleted_at.is_(None))
-        )
+        score_history_query = (db.query(UserScoreHistory, Meeting,
+                                        Club).join(Meeting, UserScoreHistory.meeting_id == Meeting.id).join(
+                                            Club,
+                                            Meeting.club_id == Club.id).filter(UserScoreHistory.user_id == user_id,
+                                                                               Club.deleted_at.is_(None)))
         total = score_history_query.count()
-        results = (
-            score_history_query.order_by(desc(UserScoreHistory.played_at))
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        results = (score_history_query.order_by(desc(UserScoreHistory.played_at)).offset(offset).limit(limit).all())
         score_history = [
             schemas.HandicapHistoryItem(
                 id=sh.id,
@@ -456,8 +408,7 @@ async def get_user_handicap_history(
                 handicap_used=float(sh.handicap_used),
                 played_at=sh.played_at,
                 created_at=sh.created_at,
-            )
-            for sh, m, c in results
+            ) for sh, m, c in results
         ]
         total_pages = (total + limit - 1) // limit if total > 0 else 0
         return schemas.UserHandicapHistoryResponse(
@@ -480,135 +431,36 @@ async def get_user_handicap_history(
 
 @router.post("/users", response_model=UserResponse)
 async def create_admin_user(
-    user_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 생성"""
-    try:
-        user = create_user_impl(UserCreate(**user_data), db)
-        return UserResponse(
-            id=user.id, email=user.email, realname=user.realname, nickname=user.nickname,
-            phone_number=user.phone_number, birthdate=user.birthdate,
-            gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
-            average_score=user.average_score, provider=user.provider.value if user.provider else None,
-            email_verified=user.email_verified, status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at, needs_terms_agreement=user.needs_terms_agreement,
-            created_at=user.created_at, updated_at=user.updated_at,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 생성 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    from routers.users import create_user
+    from schemas import UserCreate
+
+    return await create_user(UserCreate(**user_data), db=db, current_user=current_user)
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
 async def update_admin_user(
-    user_id: int,
-    user_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        user_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 수정"""
-    try:
-        user = update_user_impl(user_id, UserUpdate(**user_data), db)
-        return UserResponse(
-            id=user.id, email=user.email, realname=user.realname, nickname=user.nickname,
-            phone_number=user.phone_number, birthdate=user.birthdate,
-            gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
-            average_score=user.average_score, provider=user.provider.value if user.provider else None,
-            email_verified=user.email_verified, status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at, needs_terms_agreement=user.needs_terms_agreement,
-            created_at=user.created_at, updated_at=user.updated_at,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 수정 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    from routers.users import update_user
+    from schemas import UserUpdate
 
-
-class UserStatsResponse(BaseModel):
-    total_users: int
-    active_users: int
-    inactive_users: int
-    deleted_users: int
-    admin_users: int
-    regular_users: int
-    users_by_gender: dict
-    users_by_provider: dict
-    users_by_month: List[dict]
-    average_handicap: Optional[float]
-    users_with_handicap: int
-    users_without_handicap: int
-
-
-@router.get("/users/stats", response_model=UserStatsResponse)
-async def get_user_statistics(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
-):
-    """관리자용 사용자 통계 조회"""
-    try:
-        from models import Gender, Provider
-
-        total_users = db.query(User).filter(User.deleted_at.is_(None)).count()
-        active_users = db.query(User).filter(User.deleted_at.is_(None), User.status == UserStatus.ACTIVE).count()
-        inactive_users = db.query(User).filter(User.deleted_at.is_(None), User.status == UserStatus.DEACTIVATED).count()
-        deleted_users = db.query(User).filter(User.deleted_at.isnot(None)).count()
-        admin_users = db.query(Admin).filter(Admin.deleted_at.is_(None)).count()
-        regular_users = total_users
-
-        gender_stats = db.query(User.gender, func.count(User.id).label("count")).filter(
-            User.deleted_at.is_(None), User.gender.isnot(None)
-        ).group_by(User.gender).all()
-        users_by_gender = {g.value: c for g, c in gender_stats if g}
-
-        provider_stats = db.query(User.provider, func.count(User.id).label("count")).filter(
-            User.deleted_at.is_(None), User.provider.isnot(None)
-        ).group_by(User.provider).all()
-        users_by_provider = {p.value: c for p, c in provider_stats if p}
-
-        twelve_months_ago = datetime.now() - timedelta(days=365)
-        monthly_stats = db.query(
-            extract("year", User.created_at).label("year"),
-            extract("month", User.created_at).label("month"),
-            func.count(User.id).label("count"),
-        ).filter(User.deleted_at.is_(None), User.created_at >= twelve_months_ago).group_by(
-            extract("year", User.created_at), extract("month", User.created_at)
-        ).order_by(extract("year", User.created_at), extract("month", User.created_at)).all()
-        users_by_month = [{"year": int(y), "month": int(m), "count": c} for y, m, c in monthly_stats]
-
-        handicap_stats = db.query(
-            func.avg(User.handicap).label("avg_handicap"),
-            func.count(User.handicap).label("users_with_handicap"),
-        ).filter(User.deleted_at.is_(None), User.handicap.isnot(None)).first()
-        average_handicap = float(handicap_stats.avg_handicap) if handicap_stats and handicap_stats.avg_handicap else None
-        users_with_handicap = handicap_stats.users_with_handicap if handicap_stats and handicap_stats.users_with_handicap else 0
-        users_without_handicap = total_users - users_with_handicap
-
-        return UserStatsResponse(
-            total_users=total_users, active_users=active_users, inactive_users=inactive_users,
-            deleted_users=deleted_users, admin_users=admin_users, regular_users=regular_users,
-            users_by_gender=users_by_gender, users_by_provider=users_by_provider,
-            users_by_month=users_by_month, average_handicap=average_handicap,
-            users_with_handicap=users_with_handicap, users_without_handicap=users_without_handicap,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 통계 조회 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return await update_user(user_id, UserUpdate(**user_data), db=db, current_user=current_user)
 
 
 @router.delete("/users/{user_id}")
 async def delete_admin_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        user_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 삭제"""
     try:
