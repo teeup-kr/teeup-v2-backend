@@ -643,6 +643,12 @@ async def update_user(
 
         # 사용자 정보 업데이트
         update_data = user_data.dict(exclude_unset=True)
+        # 빈 문자열을 None으로 변환 (datetime 등 Optional 필드용)
+        optional_str_fields = ("birthdate", "phone_number", "gender")
+        for k in optional_str_fields:
+            if k in update_data and update_data[k] == "":
+                update_data[k] = None
+
         for field, value in update_data.items():
             if field == "role":
                 # role 필드는 더 이상 사용하지 않음 (Admin 모델로 분리됨)
@@ -655,20 +661,25 @@ async def update_user(
                         detail="본인 계정은 비활성화할 수 없습니다.",
                     )
                 setattr(user, field, UserStatus(value))
-            elif field == "gender" and value:
-                setattr(user, field, value)
-            elif field == "birthdate" and value:
-                # birthdate 문자열을 datetime으로 변환
-                try:
-                    from datetime import datetime
+            elif field == "gender":
+                setattr(user, field, value if value else None)
+            elif field == "birthdate":
+                if value:
+                    # birthdate 문자열을 datetime으로 변환
+                    try:
+                        from datetime import datetime
 
-                    birthdate_datetime = datetime.strptime(value, "%Y-%m-%d")
-                    setattr(user, field, birthdate_datetime)
-                except ValueError:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="생년월일 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.",
-                    )
+                        birthdate_datetime = datetime.strptime(value, "%Y-%m-%d")
+                        setattr(user, field, birthdate_datetime)
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="생년월일 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.",
+                        )
+                else:
+                    setattr(user, field, None)
+            elif field == "phone_number":
+                setattr(user, field, value if value else None)
             else:
                 setattr(user, field, value)
 
