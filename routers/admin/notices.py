@@ -1,12 +1,18 @@
 """
 백오피스 공지사항 API (시스템 공지)
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy.orm import Session
 import logging
+import os
+import requests
 
 from database import get_db
 from utils.datetime_utils import get_kst_now
+from routers.upload import validate_file, generate_filename, MAX_FILE_SIZE
+from config import settings
+from utils.google_oauth import load_access_token, get_mime_type
 from .deps import get_admin_user
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,68 @@ async def get_admin_notices(
     except Exception as e:
         logger.error(f"관리자 공지사항 목록 조회 중 오류: {str(e)}")
         return {"data": [], "total": 0}
+
+
+@router.post("/notices/upload")
+async def upload_notice_file(
+    file: UploadFile = File(...),
+    share: str | None = Query(default=None, description="'link' 지정 시 anyone-with-link viewer 권한 부여"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """공지사항 첨부파일 Google Drive 업로드 (관리자)"""
+    try:
+        if not validate_file(file):
+            raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다. PNG, JPG, JPEG, PDF만 업로드 가능합니다.")
+        file_bytes = await file.read()
+        if len(file_bytes) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="파일 크기가 10MB를 초과합니다.")
+        new_filename = generate_filename(file.filename)
+        file_ext = os.path.splitext(new_filename)[1]
+        mime_type = get_mime_type(file_ext)
+        folder_id = settings.GOOGLE_DRIVE_NOTICE_FOLDER_ID
+        if not folder_id:
+            raise HTTPException(status_code=500, detail="공지사항용 Google Drive 폴더 ID가 설정되지 않았습니다.")
+        try:
+            access_token = load_access_token()
+        except Exception as e:
+            error_msg = str(e)
+            if "리프레시 토큰이 만료" in error_msg or "토큰을 재발급" in error_msg:
+                raise HTTPException(status_code=503, detail="Google Drive 토큰이 만료되었습니다.")
+            raise HTTPException(status_code=500, detail=f"파일 업로드 중 오류: {error_msg}")
+        import json as _json
+        boundary = "teeuplink_boundary"
+        metadata = {"name": new_filename, "parents": [folder_id]}
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{_json.dumps(metadata)}\r\n--{boundary}\r\nContent-Type: {mime_type}\r\n\r\n").encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        params = {"uploadType": "multipart", "fields": "id,webViewLink,webContentLink,name,size,mimeType"}
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": f"multipart/related; boundary={boundary}"}
+        resp = requests.post("https://www.googleapis.com/upload/drive/v3/files", params=params, headers=headers, data=body, timeout=60)
+        if resp.status_code not in (200, 201):
+            logger.error("Drive 업로드 실패: %s %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=500, detail="파일 업로드 중 오류가 발생했습니다.")
+        file_id = resp.json().get("id")
+        if not file_id:
+            raise HTTPException(status_code=500, detail="파일 ID를 받지 못했습니다.")
+        resp_meta = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", params={"fields": "id,webViewLink,webContentLink,name,size,mimeType"}, headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+        meta = resp_meta.json() if resp_meta.status_code == 200 else resp.json()
+        result = {"success": True, "message": "파일이 성공적으로 업로드되었습니다.", "filename": new_filename, "original_filename": file.filename, "file_size": len(file_bytes), "file_id": meta.get("id"), "web_view_link": meta.get("webViewLink"), "web_content_link": meta.get("webContentLink"), "mime_type": meta.get("mimeType", mime_type)}
+        if share == "link" and file_id:
+            try:
+                perm_resp = requests.post(f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions", headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, params={"fields": "id"}, json={"role": "reader", "type": "anyone"}, timeout=20)
+                if perm_resp.status_code in (200, 201):
+                    resp_meta2 = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", params={"fields": "id,webViewLink,webContentLink"}, headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+                    if resp_meta2.status_code == 200:
+                        m2 = resp_meta2.json()
+                        result["web_view_link"] = m2.get("webViewLink")
+                        result["web_content_link"] = m2.get("webContentLink")
+            except Exception as perm_e:
+                logger.warning("권한 부여 처리 경고: %s", perm_e)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("공지 파일 업로드 오류: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"공지사항 파일 업로드 중 오류: {str(e)}")
 
 
 @router.post("/notices")
