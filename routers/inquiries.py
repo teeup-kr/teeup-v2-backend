@@ -140,7 +140,8 @@ async def get_inquiry(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"문의 조회 실패: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"문의 등록 실패: {str(e)}")
 
 
 # 문의 수정/답변 등록·수정·삭제는 /api/v1/admin/inquiries 에서 가능
