@@ -797,8 +797,8 @@ async def get_user_handicap_history(user_id: int,
 
         # 현재 핸디캡 정보 구성
         handicap_info = schemas.HandicapInfo(
-            initial_handicap=float(user.initial_handicap) if user.initial_handicap else None,
-            calculated_handicap=float(user.calculated_handicap) if user.calculated_handicap else None,
+            initial_handicap=float(user.handicap_init) if user.handicap_init else None,
+            calculated_handicap=float(user.handicap) if user.handicap else None,
             handicap_update_method=user.handicap_update_method.value if user.handicap_update_method else None,
             handicap_calculation_count=user.handicap_calculation_count,
             last_updated_at=user.updated_at)
@@ -3168,8 +3168,8 @@ async def update_terms(terms_type: str,
 
         # 약관 타입 매핑
         type_mapping = {
-            'service': 'SERVICE', 
-            'privacy': 'PRIVACY', 
+            'service': 'SERVICE',
+            'privacy': 'PRIVACY',
             'privacy_collection': 'PRIVACY_COLLECTION',
             'marketing': 'MARKETING'
         }
@@ -4014,8 +4014,8 @@ async def get_terms(terms_type: str, db: Session = Depends(get_db), current_user
         # 약관 타입 검증
         # 약관 타입 매핑
         type_mapping = {
-            'service': 'SERVICE', 
-            'privacy': 'PRIVACY', 
+            'service': 'SERVICE',
+            'privacy': 'PRIVACY',
             'privacy_collection': 'PRIVACY_COLLECTION',
             'marketing': 'MARKETING'
         }

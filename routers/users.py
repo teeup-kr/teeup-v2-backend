@@ -141,17 +141,24 @@ async def get_users(
                 phone_number=user.phone_number,
                 birthdate=user.birthdate,
                 gender=user.gender.value if user.gender else None,
-                handicap=float(user.handicap) if user.handicap else None,
+                handicap=user.handicap,
+                handicap_init=user.handicap_init,
                 average_score=user.average_score,
+                average_score_init=user.average_score_init,
+                status=user.status.value if user.status else None,
                 provider=user.provider.value if user.provider else None,
                 email_verified=user.email_verified,
-                role="USER",  # User는 항상 USER 역할
-                status=user.status.value if user.status else None,
-                deactivated_at=user.deactivated_at,
                 needs_terms_agreement=user.needs_terms_agreement,
+                terms_agreement=user.terms_agreement,
+                privacy_policy=user.privacy_policy,
+                privacy_collection=user.privacy_collection,
+                marketing_consent=user.marketing_consent,
+                club_count=user.club_count if hasattr(user, "club_count") else 0,
+                deactivated_at=user.deactivated_at,
                 created_at=user.created_at,
                 updated_at=user.updated_at,
             )
+
             user_responses.append(user_response)
 
         logger.info(f"사용자 목록 조회 완료 - 총 {len(user_responses)}개")
@@ -325,7 +332,6 @@ async def create_user(
         db.add(user)
         db.commit()
         db.refresh(user)
-
         user_response = UserResponse(
             id=user.id,
             email=user.email,
@@ -334,14 +340,20 @@ async def create_user(
             phone_number=user.phone_number,
             birthdate=user.birthdate,
             gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
+            handicap=user.handicap,
+            handicap_init=user.handicap_init,
             average_score=user.average_score,
+            average_score_init=user.average_score_init,
+            status=user.status.value if user.status else None,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role="USER",  # User는 항상 USER 역할
-            status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
+            terms_agreement=user.terms_agreement,
+            privacy_policy=user.privacy_policy,
+            privacy_collection=user.privacy_collection,
+            marketing_consent=user.marketing_consent,
+            club_count=user.club_count if hasattr(user, "club_count") else 0,
+            deactivated_at=user.deactivated_at,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -377,9 +389,11 @@ async def update_my_profile(
                 detail="사용자를 찾을 수 없습니다",
             )
 
-        # 유효성 검사: 실명/핸디캡/평균 스코어/생년월일
+        # ---------------------------
+        # 1. 입력값 유효성 검사
+        # ---------------------------
         try:
-            # 실명: 한글만(공백 불가) 또는 영문과 공백만, 2자 이상
+            # 실명 검사
             if user_data.realname is not None:
                 name = user_data.realname.strip()
                 if len(name) < 2:
@@ -387,8 +401,8 @@ async def update_my_profile(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="실명은 2자 이상이어야 합니다",
                     )
-                import re
 
+                import re
                 if re.search(r"[\uAC00-\uD7A3]", name):
                     if not re.fullmatch(r"[\uAC00-\uD7A3]+", name):
                         raise HTTPException(
@@ -402,30 +416,33 @@ async def update_my_profile(
                             detail="영문 이름은 알파벳과 공백만 입력해주세요",
                         )
 
-            # 핸디캡: 0-72
-            if user_data.handicap is not None:
-                if user_data.handicap < 0 or user_data.handicap > 72:
+            # 핸디캡 init (0~72)
+            if user_data.handicap_init is not None:
+                if not (0 <= user_data.handicap_init <= 72):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="핸디캡은 0-72 사이여야 합니다",
                     )
 
-            # 평균 스코어: 55-144
-            if user_data.average_score is not None:
-                if user_data.average_score < 55 or user_data.average_score > 144:
+            # 평균 타수 init (55~144)
+            if user_data.average_score_init is not None:
+                if not (55 <= user_data.average_score_init <= 144):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="평균 스코어는 55-144 사이여야 합니다"
+                        detail="평균 스코어는 55-144 사이여야 합니다",
                     )
-            
-            # 생년월일: 유효성 검사 및 변환
+
+            # 생년월일
             if user_data.birthdate is not None:
                 from routers.auth import validate_birthdate
-                from datetime import datetime
+
                 birthdate_validation = validate_birthdate(user_data.birthdate)
                 if not birthdate_validation["is_valid"]:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                        detail="; ".join(birthdate_validation["errors"]))
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="; ".join(birthdate_validation["errors"]),
+                    )
+
         except HTTPException:
             raise
         except Exception as e:
@@ -435,82 +452,103 @@ async def update_my_profile(
                 detail="입력 값이 올바르지 않습니다",
             )
 
-        # 평균 타수 입력 시 initial_handicap 자동 계산
-        if user_data.average_score is not None:
-            from utils.handicap_calculator import (
-                calculate_initial_handicap_from_average, )
-            from models import HandicapUpdateMethod
-
-            calculated_initial_handicap = calculate_initial_handicap_from_average(user_data.average_score)
-            if calculated_initial_handicap is not None:
-                user.initial_handicap = calculated_initial_handicap
-                user.handicap_update_method = HandicapUpdateMethod.MANUAL
-
-        # 이메일 중복 확인 (다른 사용자가 사용 중인지)
+        # ---------------------------
+        # 2. 중복 검사
+        # ---------------------------
         if user_data.email and user_data.email != user.email:
-            existing_user = (db.query(User).filter(User.email == user_data.email, User.id != user.id).first())
-            if existing_user:
+            if db.query(User).filter(
+                    User.email == user_data.email,
+                    User.id != user.id,
+            ).first():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="이미 존재하는 이메일입니다",
                 )
 
-        # 닉네임 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.nickname and user_data.nickname != user.nickname:
-            existing_nickname = (db.query(User).filter(User.nickname == user_data.nickname, User.id != user.id).first())
-            if existing_nickname:
+            if db.query(User).filter(
+                    User.nickname == user_data.nickname,
+                    User.id != user.id,
+            ).first():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="이미 존재하는 닉네임입니다",
                 )
 
-        # 전화번호 중복 확인 (다른 사용자가 사용 중인지)
         if user_data.phone_number and user_data.phone_number != user.phone_number:
-            existing_phone = (db.query(User).filter(User.phone_number == user_data.phone_number, User.id
-                                                    != user.id).first())
-            if existing_phone:
+            if db.query(User).filter(
+                    User.phone_number == user_data.phone_number,
+                    User.id != user.id,
+            ).first():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="이미 사용 중인 전화번호입니다",
                 )
 
-        # 사용자 정보 업데이트
+        # ---------------------------
+        # 3. 업데이트 데이터 구성 (PATCH semantics)
+        # ---------------------------
         update_data = user_data.dict(exclude_unset=True)
 
-        # average_score가 변경되는 경우 initial_handicap 자동 계산
-        if "average_score" in update_data and update_data["average_score"] is not None:
-            from utils.handicap_calculator import (
-                calculate_initial_handicap_from_average, )
-            from models import HandicapUpdateMethod
+        # average_score는 외부 입력 무시
+        update_data.pop("average_score", None)
 
-            calculated_initial_handicap = calculate_initial_handicap_from_average(update_data["average_score"])
-            if calculated_initial_handicap is not None:
-                user.initial_handicap = calculated_initial_handicap
-                user.handicap_update_method = HandicapUpdateMethod.MANUAL
+        # average_score 확정 시 init 값 무시
+        if user.average_score is not None:
+            update_data.pop("average_score_init", None)
+            update_data.pop("handicap_init", None)
+
+        # ---------------------------
+        # 4. 필드별 반영
+        # ---------------------------
+        from models import Gender, HandicapUpdateMethod
+        from utils.handicap_calculator import (
+            calculate_initial_handicap_from_average, )
+        from datetime import datetime
 
         for field, value in update_data.items():
-            if field == "gender" and value:
-                from models import Gender
+            if field == "gender":
+                # 성별은 1회만 설정 가능
+                if user.gender is None and value:
+                    setattr(user, field, Gender(value))
 
-                setattr(user, field, Gender(value))
-            elif field == "average_score":
-                # average_score는 위에서 처리했으므로 여기서는 건너뜀
-                setattr(user, field, value)
             elif field == "birthdate" and value:
-                # birthdate 문자열을 datetime으로 변환
-                from datetime import datetime
                 try:
-                    birthdate_datetime = datetime.strptime(value, '%Y-%m-%d')
-                    setattr(user, field, birthdate_datetime)
+                    setattr(
+                        user,
+                        field,
+                        datetime.strptime(value, "%Y-%m-%d"),
+                    )
                 except ValueError:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                        detail="생년월일 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="생년월일 형식이 올바르지 않습니다. YYYY-MM-DD",
+                    )
+
+            elif field in ("average_score_init", "handicap_init"):
+                # init 값은 아래에서 일괄 처리
+                continue
+
             else:
                 setattr(user, field, value)
+
+        # ---------------------------
+        # 5. 초기 평균 타수 → 초기 핸디캡 계산 (단 한 곳)
+        # ---------------------------
+        if (user.average_score is None and "average_score_init" in update_data
+                and update_data["average_score_init"] is not None):
+            calculated_handicap = calculate_initial_handicap_from_average(update_data["average_score_init"])
+            if calculated_handicap is not None:
+                user.average_score_init = update_data["average_score_init"]
+                user.handicap_init = calculated_handicap
+                user.handicap_update_method = HandicapUpdateMethod.MANUAL
 
         db.commit()
         db.refresh(user)
 
+        # ---------------------------
+        # 6. 응답 DTO
+        # ---------------------------
         user_response = UserResponse(
             id=user.id,
             email=user.email,
@@ -519,14 +557,20 @@ async def update_my_profile(
             phone_number=user.phone_number,
             birthdate=user.birthdate,
             gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
+            handicap=user.handicap,
+            handicap_init=user.handicap_init,
             average_score=user.average_score,
+            average_score_init=user.average_score_init,
+            status=user.status.value if user.status else None,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role="USER",  # User는 항상 USER 역할
-            status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
+            terms_agreement=user.terms_agreement,
+            privacy_policy=user.privacy_policy,
+            privacy_collection=user.privacy_collection,
+            marketing_consent=user.marketing_consent,
+            club_count=user.club_count if hasattr(user, "club_count") else 0,
+            deactivated_at=user.deactivated_at,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -540,7 +584,7 @@ async def update_my_profile(
         logger.error(f"내 프로필 수정 중 오류: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"서버 오류: {str(e)}",
+            detail="서버 오류가 발생했습니다",
         )
 
 
@@ -683,14 +727,20 @@ async def update_user(
             phone_number=user.phone_number,
             birthdate=user.birthdate,
             gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
+            handicap=user.handicap,
+            handicap_init=user.handicap_init,
             average_score=user.average_score,
+            average_score_init=user.average_score_init,
+            status=user.status.value if user.status else None,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role="USER",  # User는 항상 USER 역할
-            status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
+            terms_agreement=user.terms_agreement,
+            privacy_policy=user.privacy_policy,
+            privacy_collection=user.privacy_collection,
+            marketing_consent=user.marketing_consent,
+            club_count=user.club_count if hasattr(user, "club_count") else 0,
+            deactivated_at=user.deactivated_at,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -764,7 +814,6 @@ async def get_my_profile(db: Session = Depends(get_db), current_user: User = Dep
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="사용자를 찾을 수 없습니다",
             )
-
         user_response = UserResponse(
             id=user.id,
             email=user.email,
@@ -773,14 +822,20 @@ async def get_my_profile(db: Session = Depends(get_db), current_user: User = Dep
             phone_number=user.phone_number,
             birthdate=user.birthdate,
             gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
+            handicap=user.handicap,
+            handicap_init=user.handicap_init,
             average_score=user.average_score,
-            provider=user.provider.value if user.provider is not None else None,
+            average_score_init=user.average_score_init,
+            status=user.status.value if user.status else None,
+            provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            # role=user.role.value if user.role is not None else None,
-            status=user.status.value if user.status is not None else None,
-            deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
+            terms_agreement=user.terms_agreement,
+            privacy_policy=user.privacy_policy,
+            privacy_collection=user.privacy_collection,
+            marketing_consent=user.marketing_consent,
+            club_count=user.club_count if hasattr(user, "club_count") else 0,
+            deactivated_at=user.deactivated_at,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -1485,14 +1540,20 @@ async def get_user(
             phone_number=user.phone_number,
             birthdate=user.birthdate,
             gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
+            handicap=user.handicap,
+            handicap_init=user.handicap_init,
             average_score=user.average_score,
+            average_score_init=user.average_score_init,
+            status=user.status.value if user.status else None,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
-            role="USER",  # User는 항상 USER 역할
-            status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at,
             needs_terms_agreement=user.needs_terms_agreement,
+            terms_agreement=user.terms_agreement,
+            privacy_policy=user.privacy_policy,
+            privacy_collection=user.privacy_collection,
+            marketing_consent=user.marketing_consent,
+            club_count=user.club_count if hasattr(user, "club_count") else 0,
+            deactivated_at=user.deactivated_at,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -1527,8 +1588,8 @@ async def get_user_handicap(
             )
 
         # 새로운 핸디캡 시스템 필드 사용
-        initial_handicap = (float(user.initial_handicap) if user.initial_handicap else None)
-        calculated_handicap = (float(user.calculated_handicap) if user.calculated_handicap else None)
+        initial_handicap = (float(user.handicap_init) if user.handicap_init else None)
+        calculated_handicap = (float(user.handicap) if user.handicap else None)
         handicap_update_method = (user.handicap_update_method.value if user.handicap_update_method else None)
         handicap_calculation_count = (user.handicap_calculation_count if user.handicap_calculation_count else 0)
 
@@ -1613,7 +1674,7 @@ async def update_user_handicap(
                 logger.info(
                     f"평균 타수로부터 핸디캡 자동 계산 - user_id: {user_id}, average_score: {handicap_data.average_score}, calculated_handicap: {calculated_handicap}"
                 )
-                user.initial_handicap = calculated_handicap
+                user.handicap_init = calculated_handicap
                 user.average_score = handicap_data.average_score
                 user.handicap_update_method = HandicapUpdateMethod.MANUAL
         # initial_handicap만 있으면 직접 입력 (하위 호환성)
@@ -1640,7 +1701,7 @@ async def update_user_handicap(
             handicap_decimal = Decimal(str(rounded_value))
 
             logger.info(f"핸디캡 직접 입력 - user_id: {user_id}, initial_handicap: {handicap_decimal}")
-            user.initial_handicap = handicap_decimal
+            user.handicap_init = handicap_decimal
             user.handicap_update_method = HandicapUpdateMethod.MANUAL
         else:
             # 둘 다 없으면 에러
@@ -1653,7 +1714,7 @@ async def update_user_handicap(
             db.commit()
             db.refresh(user)
             logger.info(
-                f"핸디캡 수정 성공 - user_id: {user_id}, initial_handicap: {user.initial_handicap}, average_score: {user.average_score}"
+                f"핸디캡 수정 성공 - user_id: {user_id}, initial_handicap: {user.handicap_init}, average_score: {user.average_score}"
             )
         except Exception as db_error:
             db.rollback()
@@ -2194,8 +2255,8 @@ async def get_my_rounding_stats(db: Session = Depends(get_db), current_user: Use
             # 점수 기록이 없는 경우
             # 초기 핸디캡 조회
             initial_handicap = None
-            if current_user.initial_handicap is not None:
-                initial_handicap = float(current_user.initial_handicap)
+            if current_user.handicap_init is not None:
+                initial_handicap = float(current_user.handicap_init)
 
             return RoundingStatsResponse(
                 total_games=0,
@@ -2224,15 +2285,15 @@ async def get_my_rounding_stats(db: Session = Depends(get_db), current_user: Use
 
         # 현재 핸디캡 조회
         current_handicap = None
-        if current_user.calculated_handicap is not None:
-            current_handicap = float(current_user.calculated_handicap)
-        elif current_user.initial_handicap is not None:
-            current_handicap = float(current_user.initial_handicap)
+        if current_user.handicap is not None:
+            current_handicap = float(current_user.handicap)
+        elif current_user.handicap_init is not None:
+            current_handicap = float(current_user.handicap_init)
 
         # 초기 핸디캡 조회
         initial_handicap = None
-        if current_user.initial_handicap is not None:
-            initial_handicap = float(current_user.initial_handicap)
+        if current_user.handicap_init is not None:
+            initial_handicap = float(current_user.handicap_init)
 
         return RoundingStatsResponse(
             total_games=total_games,
