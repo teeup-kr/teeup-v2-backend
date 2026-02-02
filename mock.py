@@ -204,26 +204,22 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             if user.status == UserStatus.DEACTIVATED:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자에 의해 비활성화 처리된 회원입니다.")
 
-        # # 필수 약관 동의 확인 (check_terms_agreement가 True인 경우만)
-        # if check_terms_agreement and not is_admin_token:
-        #     # 약관 동의 전용 토큰인 경우 체크 제외 (약관 동의 API에만 사용 가능)
-        #     terms_agreement_only = payload.get("terms_agreement_only", False)
-        #     if not terms_agreement_only:
-        #         terms_agreed = getattr(user, 'terms_agreement', False)
-        #         privacy_agreed = getattr(user, 'privacy_policy', False)
-        #         collection_agreed = getattr(user, 'privacy_collection', False)
+        # 필수 약관 동의 확인 (check_terms_agreement가 True인 경우만)
+        if check_terms_agreement and not is_admin_token:
+            # 약관 동의 전용 토큰인 경우 체크 제외 (약관 동의 API에만 사용 가능)
+            terms_agreement_only = payload.get("terms_agreement_only", False)
+            if not terms_agreement_only:
+                terms_agreed = getattr(user, 'terms_agreement', False)
+                privacy_agreed = getattr(user, 'privacy_policy', False)
+                collection_agreed = getattr(user, 'privacy_collection', False)
 
-        #         if not (terms_agreed and privacy_agreed and collection_agreed):
-        #             logger.warning(
-        #                 f"필수 약관 미동의로 API 접근 차단: user_id={user.id}, "
-        #                 f"terms_agreement={terms_agreed}, "
-        #                 f"privacy_policy={privacy_agreed}, "
-        #                 f"privacy_collection={collection_agreed}"
-        #             )
-        #             raise HTTPException(
-        #                 status_code=status.HTTP_403_FORBIDDEN,
-        #                 detail="필수 약관에 동의하지 않아 서비스를 이용할 수 없습니다. 약관 동의를 완료해주세요."
-        #             )
+                if not (terms_agreed and privacy_agreed and collection_agreed):
+                    logger.warning(f"필수 약관 미동의로 API 접근 차단: user_id={user.id}, "
+                                   f"terms_agreement={terms_agreed}, "
+                                   f"privacy_policy={privacy_agreed}, "
+                                   f"privacy_collection={collection_agreed}")
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                        detail="필수 약관에 동의하지 않아 서비스를 이용할 수 없습니다. 약관 동의를 완료해주세요.")
 
         return user
 
@@ -238,18 +234,6 @@ def get_current_active_user(current_user: User = Depends(get_current_user)) -> U
     """현재 활성 사용자 조회"""
     if current_user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="비활성화된 사용자입니다.")
-
-    terms_agreed = getattr(current_user, 'terms_agreement', False)
-    privacy_agreed = getattr(current_user, 'privacy_policy', False)
-    collection_agreed = getattr(current_user, 'privacy_collection', False)
-    if not (terms_agreed and privacy_agreed and collection_agreed):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "TERMS_NOT_AGREED",
-                "message": "필수 약관 동의 필요",
-            },
-        )
     return current_user
 
 

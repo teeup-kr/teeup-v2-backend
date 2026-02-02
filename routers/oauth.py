@@ -179,24 +179,20 @@ async def drive_token_callback(code: str, state: str):
         <pre style="background:#f5f5f5;padding:12px;border-radius:8px;">state: {state}</pre>
       </body>
     </html>
-    """.format(
-        code=code or "(없음)", state=state or "(없음)"
-    )
+    """.format(code=code or "(없음)", state=state or "(없음)")
     return HTMLResponse(content=html)
 
 
 @router.post("/google/callback")
-async def google_oauth_callback_post(
-    request: GoogleOAuthBody, http_request: Request, db: Session = Depends(get_db)
-):
+async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Request, db: Session = Depends(get_db)):
     """Google OAuth 콜백 처리 (POST)"""
     try:
         authorizationCode = request.authorizationCode
         codeVerifier = request.codeVerifier
-        
+
         # 프론트엔드에서 전달한 redirectUri를 우선 사용
         redirect_uri = request.redirectUri
-        
+
         # redirectUri가 없으면 클라이언트 타입을 감지하여 settings에서 가져옴
         if not redirect_uri:
             client_type = _detect_client_type(http_request, None)
@@ -213,14 +209,12 @@ async def google_oauth_callback_post(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth redirect_uri 설정이 없습니다",
             )
-        
+
         logger.info(f"Google OAuth callback using redirect_uri: {redirect_uri}")
 
-        logger.info(
-            f"Google OAuth callback: "
-            f"code={authorizationCode[:10]}..., "
-            f"verifier_len={len(codeVerifier)}"
-        )
+        logger.info(f"Google OAuth callback: "
+                    f"code={authorizationCode[:10]}..., "
+                    f"verifier_len={len(codeVerifier)}")
 
         oauth_token_data = google_oauth.exchange_code_for_token(
             authorizationCode=authorizationCode,
@@ -236,47 +230,54 @@ async def google_oauth_callback_post(
         # 사용자 생성 또는 조회
         user, is_new_user = await create_or_get_oauth_user(google_user, db)
 
-        # 필수 약관 동의 여부 확인
-        terms_agreed = getattr(user, 'terms_agreement', False)
-        privacy_agreed = getattr(user, 'privacy_policy', False)
-        collection_agreed = getattr(user, 'privacy_collection', False)
-        
-        if not (terms_agreed and privacy_agreed and collection_agreed):
-            # 약관 미동의 시 약관 동의 전용 토큰 발급 (약관 동의 API 접근용)
-            logger.warning(
-                f"필수 약관 미동의로 정상 로그인 차단: {user.email}, "
-                f"is_new_user={is_new_user}, "
-                f"terms_agreement={terms_agreed}, "
-                f"privacy_policy={privacy_agreed}, "
-                f"privacy_collection={collection_agreed}"
-            )
-            
-            # 약관 동의 전용 토큰 생성 (약관 동의 API에만 사용 가능)
-            terms_agreement_token_payload = {
-                "id": user.id,
-                "email": user.email,
-                "nickname": user.nickname,
-                "role": "USER",
-                "provider": user.provider.value if user.provider else None,
-                "terms_agreement_only": True  # 약관 동의 전용 토큰 플래그
-            }
-            
-            terms_agreement_token = jwt_auth.create_access_token(terms_agreement_token_payload)
-            
-            # 약관 미동의 시 약관 동의 전용 토큰을 헤더에 포함하여 반환
-            from fastapi.responses import JSONResponse
-            
-            response = JSONResponse(
-                status_code=status.HTTP_403_FORBIDDEN,
-                content={
-                    "detail": "필수 약관에 동의하지 않아 로그인할 수 없습니다. 약관 동의를 완료해주세요.",
-                    "requires_terms_agreement": True,
-                    "terms_agreement_token": terms_agreement_token,  # 프론트엔드 호환성을 위해 본문에도 포함
-                    "user_id": user.id
-                }
-            )
-            response.headers["X-Terms-Agreement-Token"] = terms_agreement_token
-            return response
+        # # 필수 약관 동의 여부 확인
+        # terms_agreed = getattr(user, 'terms_agreement', False)
+        # privacy_agreed = getattr(user, 'privacy_policy', False)
+        # collection_agreed = getattr(user, 'privacy_collection', False)
+
+        # if not (terms_agreed and privacy_agreed and collection_agreed):
+        #     # 약관 미동의 시 약관 동의 전용 토큰 발급 (약관 동의 API 접근용)
+        #     logger.warning(
+        #         f"필수 약관 미동의로 정상 로그인 차단: {user.email}, "
+        #         f"is_new_user={is_new_user}, "
+        #         f"terms_agreement={terms_agreed}, "
+        #         f"privacy_policy={privacy_agreed}, "
+        #         f"privacy_collection={collection_agreed}"
+        #     )
+
+        #     # 약관 동의 전용 토큰 생성 (약관 동의 API에만 사용 가능)
+        #     terms_agreement_token_payload = {
+        #         "id": user.id,
+        #         "email": user.email,
+        #         "nickname": user.nickname,
+        #         "role": "USER",
+        #         "provider": user.provider.value if user.provider else None,
+        #         "terms_agreement_only": True  # 약관 동의 전용 토큰 플래그
+        #     }
+
+        #     terms_agreement_token = jwt_auth.create_access_token(terms_agreement_token_payload)
+
+        #     # 약관 미동의 시 약관 동의 전용 토큰을 헤더에 포함하여 반환
+        #     from fastapi.responses import JSONResponse
+
+        #     response = JSONResponse(
+        #         status_code=status.HTTP_403_FORBIDDEN,
+        #         content={
+        #             "detail": "필수 약관에 동의하지 않아 로그인할 수 없습니다. 약관 동의를 완료해주세요.",
+        #             "requires_terms_agreement": True,
+        #             "terms_agreement_token": terms_agreement_token,  # 프론트엔드 호환성을 위해 본문에도 포함
+        #             "user_id": user.id
+        #         }
+        #     )
+        #     response.headers["X-Terms-Agreement-Token"] = terms_agreement_token
+        #     return response
+
+        # if not (terms_agreed and privacy_agreed and collection_agreed):
+        #     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+        #                         detail={
+        #                             "code": "TERMS_NOT_AGREED",
+        #                             "message": "필수 약관 동의 필요"
+        #                         })
 
         # JWT 토큰 생성
         jwt_payload = {
@@ -304,15 +305,12 @@ async def google_oauth_callback_post(
                 "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
                 "status": user.status.value if user.status else "ACTIVE",
                 "provider": user.provider.value,
-                "created_at": (
-                    user.created_at.isoformat() if user.created_at is not None else None
-                ),
-                "updated_at": (
-                    user.updated_at.isoformat() if user.updated_at is not None else None
-                ),
+                "created_at": (user.created_at.isoformat() if user.created_at is not None else None),
+                "updated_at": (user.updated_at.isoformat() if user.updated_at is not None else None),
                 "profile_image": user.profile_image,
                 "phone": user.phone_number,
-                "needs_terms_agreement": user.needs_terms_agreement if hasattr(user, 'needs_terms_agreement') else False,
+                "needs_terms_agreement":
+                user.needs_terms_agreement if hasattr(user, 'needs_terms_agreement') else False,
                 "terms_agreement": user.terms_agreement if hasattr(user, 'terms_agreement') else False,
                 "privacy_policy": user.privacy_policy if hasattr(user, 'privacy_policy') else False,
                 "privacy_collection": user.privacy_collection if hasattr(user, 'privacy_collection') else False,
@@ -333,20 +331,12 @@ async def google_oauth_callback_post(
         )
 
 
-async def create_or_get_oauth_user(
-    oauth_user: OAuthUserInfo, db: Session
-) -> tuple[User, bool]:
+async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tuple[User, bool]:
     """OAuth 사용자 생성 또는 조회"""
     try:
         # 기존 사용자 조회 (이메일 또는 provider_id로)
-        existing_user = (
-            db.query(User)
-            .filter(
-                (User.email == oauth_user.email)
-                | (User.provider_id == oauth_user.provider_id)
-            )
-            .first()
-        )
+        existing_user = (db.query(User).filter((User.email == oauth_user.email)
+                                               | (User.provider_id == oauth_user.provider_id)).first())
 
         if existing_user:
             provider = cast(Provider, existing_user.provider)
@@ -380,23 +370,16 @@ async def create_or_get_oauth_user(
                 # 이미 OAuth 계정인 경우
                 # 상태 값을 안전하게 문자열로 변환
                 try:
-                    user_status_str = (
-                        existing_user.status.value
-                        if hasattr(existing_user.status, "value")
-                        else str(existing_user.status)
-                    )
+                    user_status_str = (existing_user.status.value
+                                       if hasattr(existing_user.status, "value") else str(existing_user.status))
                 except:
                     user_status_str = str(existing_user.status)
 
-                logger.info(
-                    f"OAuth 사용자 상태 확인: {existing_user.email}, status={user_status_str}"
-                )
+                logger.info(f"OAuth 사용자 상태 확인: {existing_user.email}, status={user_status_str}")
 
                 # 비활성화된 사용자 체크
                 if user_status_str == "DEACTIVATED":
-                    logger.warning(
-                        f"비활성화된 사용자 로그인 시도: {existing_user.email}"
-                    )
+                    logger.warning(f"비활성화된 사용자 로그인 시도: {existing_user.email}")
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="관리자에 의해 비활성화 처리된 회원입니다.",
@@ -424,30 +407,26 @@ async def create_or_get_oauth_user(
 
                 db.commit()
                 db.refresh(existing_user)
-                
+
                 # 약관 동의 상태 확인 및 로깅
                 needs_terms = getattr(existing_user, 'needs_terms_agreement', False)
                 terms_agreed = getattr(existing_user, 'terms_agreement', False)
                 privacy_agreed = getattr(existing_user, 'privacy_policy', False)
                 collection_agreed = getattr(existing_user, 'privacy_collection', False)
-                
-                logger.info(
-                    f"기존 OAuth 계정 정보 업데이트: {existing_user.email}, "
-                    f"needs_terms_agreement={needs_terms}, "
-                    f"terms_agreement={terms_agreed}, "
-                    f"privacy_policy={privacy_agreed}, "
-                    f"privacy_collection={collection_agreed}"
-                )
-                
+
+                logger.info(f"기존 OAuth 계정 정보 업데이트: {existing_user.email}, "
+                            f"needs_terms_agreement={needs_terms}, "
+                            f"terms_agreement={terms_agreed}, "
+                            f"privacy_policy={privacy_agreed}, "
+                            f"privacy_collection={collection_agreed}")
+
                 # 필수 약관 동의 여부 확인 - 로그인 차단
                 # (약관 미동의는 상위 함수에서 통합 처리하므로 여기서는 체크만 하고 예외는 발생시키지 않음)
                 if not (terms_agreed and privacy_agreed and collection_agreed):
-                    logger.warning(
-                        f"필수 약관 미동의 감지 (상위에서 처리): {existing_user.email}, "
-                        f"terms_agreement={terms_agreed}, "
-                        f"privacy_policy={privacy_agreed}, "
-                        f"privacy_collection={collection_agreed}"
-                    )
+                    logger.warning(f"필수 약관 미동의 감지 (상위에서 처리): {existing_user.email}, "
+                                   f"terms_agreement={terms_agreed}, "
+                                   f"privacy_policy={privacy_agreed}, "
+                                   f"privacy_collection={collection_agreed}")
                     # 약관 미동의는 상위 함수에서 통합 처리하므로 여기서는 그냥 넘어감
 
             return existing_user, False  # 기존 사용자
@@ -495,9 +474,7 @@ async def create_or_get_oauth_user(
 
     except HTTPException as he:
         # HTTPException은 그대로 전달
-        logger.info(
-            f"HTTPException 전달: status_code={he.status_code}, detail={he.detail}"
-        )
+        logger.info(f"HTTPException 전달: status_code={he.status_code}, detail={he.detail}")
         raise
     except Exception as e:
         db.rollback()
