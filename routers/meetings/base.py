@@ -30,7 +30,7 @@ from schemas import (
 )
 from routers.auth import get_current_user, get_current_active_user
 # admin_auth는 JWT 기반으로 변경됨
-from utils.permissions import require_admin, MEMBERSHIP_ACTIVE_STATUSES
+from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.cuid import generate_cuid
 from utils.handicap_calculator import (
     check_all_holes_completed,
@@ -1247,152 +1247,11 @@ async def get_club_meetings(
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
 
-# 모임 통계 관련 스키마
-from pydantic import BaseModel
-
-class MeetingStatsResponse(BaseModel):
-    total_meetings: int
-    active_meetings: int
-    canceled_meetings: int
-    completed_meetings: int
-    meetings_by_type: dict
-    meetings_by_month: List[dict]
-    total_participants: int
-    average_participants_per_meeting: float
-    meetings_by_club: List[dict]
-    upcoming_meetings_count: int
-    past_meetings_count: int
-
-@router.get("/stats", response_model=MeetingStatsResponse)
-async def get_meeting_statistics(
-    club_id: Optional[int] = None,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_admin())
-):
-    """모임 통계 조회 (관리자만 가능)"""
-    try:
-        
-        from datetime import datetime, timedelta
-        from sqlalchemy import func, extract
-        
-        # 기본 쿼리 설정
-        meetings_query = db.query(Meeting)
-        if club_id:
-            meetings_query = meetings_query.filter(Meeting.club_id == club_id)
-        
-        # 전체 모임 수
-        total_meetings = meetings_query.count()
-        
-        # 상태별 모임 수
-        active_meetings = meetings_query.filter(Meeting.status == MeetingStatus.SCHEDULED).count()
-        canceled_meetings = meetings_query.filter(Meeting.status == MeetingStatus.CANCELED).count()
-        completed_meetings = meetings_query.filter(Meeting.status == MeetingStatus.COMPLETED).count()
-        
-        # 타입별 모임 수
-        type_stats = meetings_query.with_entities(
-            Meeting.meeting_type,
-            func.count(Meeting.id).label('count')
-        ).group_by(Meeting.meeting_type).all()
-        
-        meetings_by_type = {}
-        for meeting_type, count in type_stats:
-            if meeting_type:
-                meetings_by_type[meeting_type.value] = count
-        
-        # 월별 모임 수 (최근 12개월)
-        current_date = datetime.now()
-        twelve_months_ago = current_date - timedelta(days=365)
-        
-        monthly_query = meetings_query.filter(Meeting.created_at >= twelve_months_ago)
-        monthly_stats = monthly_query.with_entities(
-            extract('year', Meeting.created_at).label('year'),
-            extract('month', Meeting.created_at).label('month'),
-            func.count(Meeting.id).label('count')
-        ).group_by(
-            extract('year', Meeting.created_at),
-            extract('month', Meeting.created_at)
-        ).order_by(
-            extract('year', Meeting.created_at),
-            extract('month', Meeting.created_at)
-        ).all()
-        
-        meetings_by_month = []
-        for year, month, count in monthly_stats:
-            meetings_by_month.append({
-                "year": int(year),
-                "month": int(month),
-                "count": count
-            })
-        
-        # 전체 참가자 수
-        participants_query = db.query(MeetingParticipant)
-        if club_id:
-            participants_query = participants_query.join(Meeting).filter(Meeting.club_id == club_id)
-        
-        total_participants = participants_query.filter(
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-        ).count()
-        
-        # 모임당 평균 참가자 수
-        average_participants_per_meeting = (
-            total_participants / total_meetings if total_meetings > 0 else 0
-        )
-        
-        # 클럽별 모임 수
-        club_stats = meetings_query.with_entities(
-            Meeting.club_id,
-            Club.name.label('club_name'),
-            func.count(Meeting.id).label('count')
-        ).join(Club).group_by(
-            Meeting.club_id,
-            Club.name
-        ).all()
-        
-        meetings_by_club = []
-        for club_id_stat, club_name, count in club_stats:
-            meetings_by_club.append({
-                "club_id": club_id_stat,
-                "club_name": club_name,
-                "count": count
-            })
-        
-        # 예정된 모임과 지난 모임 수
-        upcoming_meetings_count = meetings_query.filter(
-            Meeting.meeting_time > datetime.now(),
-            Meeting.status == MeetingStatus.SCHEDULED
-        ).count()
-        
-        past_meetings_count = meetings_query.filter(
-            Meeting.meeting_time <= datetime.now()
-        ).count()
-        
-        stats_response = MeetingStatsResponse(
-            total_meetings=total_meetings,
-            active_meetings=active_meetings,
-            canceled_meetings=canceled_meetings,
-            completed_meetings=completed_meetings,
-            meetings_by_type=meetings_by_type,
-            meetings_by_month=meetings_by_month,
-            total_participants=total_participants,
-            average_participants_per_meeting=round(average_participants_per_meeting, 2),
-            meetings_by_club=meetings_by_club,
-            upcoming_meetings_count=upcoming_meetings_count,
-            past_meetings_count=past_meetings_count
-        )
-        
-        return stats_response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"미팅 생성 중 오류 발생: {str(e)}")
-        print(f"ERROR: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
-        )
+# 모임 통계는 /api/v1/admin/meetings/stats 에서 조회 가능
 
 # 모임 알림 관련 스키마
+from pydantic import BaseModel
+
 class MeetingNotificationRequest(BaseModel):
     title: str
     content: str
