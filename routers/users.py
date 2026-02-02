@@ -36,7 +36,6 @@ from pydantic import BaseModel, Field, validator
 from routers.auth import get_current_user, get_current_active_user
 
 from utils.permissions import require_user_or_admin
-from utils.permissions import require_user_or_admin
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
