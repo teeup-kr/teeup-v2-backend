@@ -103,7 +103,8 @@ from .faq import (
 # 백오피스 관련 스키마
 from .admin import (
     UserMeetingItem, UserMeetingsResponse,
-    HandicapHistoryItem, HandicapInfo, UserHandicapHistoryResponse
+    HandicapHistoryItem, HandicapInfo, UserHandicapHistoryResponse,
+    AdminResponse, AdminCreate, AdminUpdate, AdminPasswordUpdate
 )
 
 # 기존 import 경로와의 호환성을 위해 모든 스키마를 export
@@ -170,6 +171,7 @@ __all__ = [
     # Admin
     "UserMeetingItem", "UserMeetingsResponse",
     "HandicapHistoryItem", "HandicapInfo", "UserHandicapHistoryResponse",
+    "AdminResponse", "AdminCreate", "AdminUpdate", "AdminPasswordUpdate",
 ]
 
 # Forward reference 해결을 위해 model_rebuild 호출

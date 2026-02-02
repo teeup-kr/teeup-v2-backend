@@ -1,7 +1,45 @@
 # 백오피스 사용자 상세페이지용 스키마
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
+
+
+# 관리자(Admin) CRUD용 스키마
+class AdminResponse(BaseModel):
+    """관리자 조회 응답 (비밀번호 제외)"""
+    id: int
+    email: str
+    name: str
+    profile_image: Optional[str] = None
+    phone_number: Optional[str] = None
+    provider: Optional[str] = None
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdminCreate(BaseModel):
+    """관리자 생성"""
+    email: str = Field(..., description="이메일")
+    password: str = Field(..., min_length=6, description="비밀번호")
+    name: str = Field(..., description="관리자 이름")
+    phone_number: Optional[str] = Field(None, description="전화번호")
+    profile_image: Optional[str] = Field(None, description="프로필 이미지 URL")
+
+
+class AdminUpdate(BaseModel):
+    """관리자 수정"""
+    name: Optional[str] = Field(None, description="관리자 이름")
+    phone_number: Optional[str] = Field(None, description="전화번호")
+    profile_image: Optional[str] = Field(None, description="프로필 이미지 URL")
+    status: Optional[str] = Field(None, description="상태 (ACTIVE, DEACTIVATED)")
+
+
+class AdminPasswordUpdate(BaseModel):
+    """관리자 비밀번호 변경 (다른 관리자가 변경)"""
+    new_password: str = Field(..., min_length=6, description="새 비밀번호")
 # 백오피스 사용자 상세페이지용 스키마
 class UserMeetingItem(BaseModel):
     """사용자 참가 모임 정보"""
