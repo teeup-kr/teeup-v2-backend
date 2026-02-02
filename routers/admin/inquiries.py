@@ -1,7 +1,6 @@
 """
 백오피스 문의 관리 API
 """
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import logging
@@ -17,8 +16,8 @@ router = APIRouter(tags=["admin-inquiries"])
 
 @router.get("/inquiries")
 async def get_admin_inquiries(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 문의 목록 조회"""
     try:
@@ -29,7 +28,10 @@ async def get_admin_inquiries(
         inquiry_list = []
         for i in inquiries:
             inquiry_list.append({
-                "id": i.id, "title": i.title, "type": i.type.value, "status": i.status.value,
+                "id": i.id,
+                "title": i.title,
+                "type": i.type.value,
+                "status": i.status.value,
                 "priority": i.priority,
                 "user_nickname": i.user.nickname if i.user else "알 수 없음",
                 "created_at": i.created_at.isoformat() if i.created_at else None,
@@ -42,9 +44,9 @@ async def get_admin_inquiries(
 
 @router.get("/inquiries/{inquiry_id}")
 async def get_admin_inquiry_detail(
-    inquiry_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        inquiry_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 문의 상세 조회"""
     try:
@@ -53,17 +55,24 @@ async def get_admin_inquiry_detail(
         inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
         if not inquiry:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="문의를 찾을 수 없습니다")
-        responses = db.query(InquiryResponse).filter(InquiryResponse.inquiry_id == inquiry_id).order_by(InquiryResponse.created_at).all()
+        responses = db.query(InquiryResponse).filter(InquiryResponse.inquiry_id == inquiry_id).order_by(
+            InquiryResponse.created_at).all()
         response_list = []
         for r in responses:
             response_list.append({
-                "id": r.id, "content": r.content, "is_admin": True,
+                "id": r.id,
+                "content": r.content,
+                "is_admin": True,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
         return {
             "inquiry": {
-                "id": inquiry.id, "title": inquiry.title, "content": inquiry.content,
-                "type": inquiry.type.value, "status": inquiry.status.value, "priority": inquiry.priority,
+                "id": inquiry.id,
+                "title": inquiry.title,
+                "content": inquiry.content,
+                "type": inquiry.type.value,
+                "status": inquiry.status.value,
+                "priority": inquiry.priority,
                 "user_nickname": inquiry.user.nickname if inquiry.user else "알 수 없음",
                 "created_at": inquiry.created_at.isoformat() if inquiry.created_at else None,
             },
@@ -78,10 +87,10 @@ async def get_admin_inquiry_detail(
 
 @router.put("/inquiries/{inquiry_id}/status")
 async def update_admin_inquiry_status(
-    inquiry_id: int,
-    status_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        inquiry_id: int,
+        status_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 문의 상태 업데이트"""
     try:
@@ -102,106 +111,12 @@ async def update_admin_inquiry_status(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="문의 상태 업데이트 중 오류가 발생했습니다")
 
 
-@router.put("/inquiries/{inquiry_id}")
-async def update_admin_inquiry(
-    inquiry_id: int,
-    inquiry_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
-):
-    """관리자용 문의 수정"""
-    try:
-        from models import Inquiry, InquiryType, InquiryStatus
-
-        inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
-        if not inquiry:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="문의를 찾을 수 없습니다")
-        update_data = {k: v for k, v in inquiry_data.items() if k in ("title", "content", "type", "status", "priority") and v is not None}
-        for field, value in update_data.items():
-            if field == "type":
-                inquiry.type = InquiryType(value)
-            elif field == "status":
-                inquiry.status = InquiryStatus(value)
-            else:
-                setattr(inquiry, field, value)
-        inquiry.updated_at = datetime.now()
-        db.commit()
-        db.refresh(inquiry)
-        return {
-            "id": inquiry.id, "user_id": inquiry.user_id, "title": inquiry.title, "content": inquiry.content,
-            "type": inquiry.type.value, "status": inquiry.status.value, "priority": inquiry.priority,
-            "created_at": inquiry.created_at.isoformat() if inquiry.created_at else None,
-            "updated_at": inquiry.updated_at.isoformat() if inquiry.updated_at else None,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"문의 수정 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.put("/inquiries/{inquiry_id}/responses/{response_id}")
-async def update_admin_inquiry_response(
-    inquiry_id: int,
-    response_id: int,
-    response_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
-):
-    """관리자용 문의 답변 수정"""
-    try:
-        from models import InquiryResponse
-
-        response = db.query(InquiryResponse).filter(InquiryResponse.id == response_id, InquiryResponse.inquiry_id == inquiry_id).first()
-        if not response:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="답변을 찾을 수 없습니다")
-        if "content" in response_data:
-            response.content = response_data["content"]
-        if "is_internal" in response_data:
-            response.is_internal = response_data["is_internal"]
-        db.commit()
-        db.refresh(response)
-        return {"message": "답변이 수정되었습니다", "id": response.id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"답변 수정 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.delete("/inquiries/{inquiry_id}/responses/{response_id}")
-async def delete_admin_inquiry_response(
-    inquiry_id: int,
-    response_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
-):
-    """관리자용 문의 답변 삭제"""
-    try:
-        from models import InquiryResponse
-
-        response = db.query(InquiryResponse).filter(InquiryResponse.id == response_id, InquiryResponse.inquiry_id == inquiry_id).first()
-        if not response:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="답변을 찾을 수 없습니다")
-        db.delete(response)
-        db.commit()
-        return {"message": "답변이 삭제되었습니다"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"답변 삭제 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
 @router.post("/inquiries/{inquiry_id}/responses")
 async def create_admin_inquiry_response(
-    inquiry_id: int,
-    response_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        inquiry_id: int,
+        response_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 문의 답변 생성"""
     try:
