@@ -31,8 +31,8 @@ class UserUpdate(BaseModel):
     phone_number: Optional[str] = Field(None, description="전화번호")
     birthdate: Optional[str] = Field(None, description="생년월일")
     gender: Optional[str] = Field(None, description="성별")
-    handicap: Optional[float] = Field(None, description="핸디캡")
-    average_score: Optional[int] = Field(None, description="평균 점수")
+    handicap_init: Optional[float] = Field(None, description="핸디캡")
+    average_score_init: Optional[int] = Field(None, description="평균 점수")
     # role: Optional[str] = Field(None, description="역할")
     status: Optional[str] = Field(None, description="상태")
     needs_terms_agreement: Optional[bool] = Field(None, description="약관 동의 필요")
@@ -50,8 +50,12 @@ class UserResponse(BaseModel):
     phone_number: Optional[str] = None
     birthdate: Optional[datetime] = None
     gender: Optional[str] = None
+
     handicap: Optional[float] = None
+    handicap_init: Optional[float] = None
     average_score: Optional[int] = None
+    average_score_init: Optional[int] = None
+
     # role: str
     status: str
     provider: Optional[str] = None

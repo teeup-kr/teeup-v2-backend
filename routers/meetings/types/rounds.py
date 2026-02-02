@@ -819,15 +819,15 @@ async def get_round_teams(meeting_id: int,
                                 user_nickname = user.nickname or "닉네임 없음"
                                 gender = user.gender.value if user.gender else None
 
-                                # 핸디캡 우선순위: participant.handicap_index → user.calculated_handicap → user.handicap → user.initial_handicap → user.average_score - 72
+                                # 핸디캡 우선순위: participant.handicap_index → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
                                 if participant.handicap_index is not None:
                                     handicap_index = participant.handicap_index
-                                elif user.calculated_handicap is not None:
-                                    handicap_index = int(user.calculated_handicap)
                                 elif user.handicap is not None:
                                     handicap_index = int(user.handicap)
-                                elif user.initial_handicap is not None:
-                                    handicap_index = int(user.initial_handicap)
+                                elif user.handicap is not None:
+                                    handicap_index = int(user.handicap)
+                                elif user.handicap_init is not None:
+                                    handicap_index = int(user.handicap_init)
                                 elif user.average_score is not None:
                                     handicap_index = max(0, int(user.average_score - 72))
                                 else:
@@ -997,15 +997,15 @@ async def add_team_member(
                     user_nickname = user.nickname or "닉네임 없음"
                     gender = user.gender.value if user.gender else None
 
-                    # 핸디캡 우선순위: participant.handicap_index → user.calculated_handicap → user.handicap → user.initial_handicap → user.average_score - 72
+                    # 핸디캡 우선순위: participant.handicap_index → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
                     if participant.handicap_index is not None:
                         handicap_index = participant.handicap_index
-                    elif user.calculated_handicap is not None:
-                        handicap_index = int(user.calculated_handicap)
                     elif user.handicap is not None:
                         handicap_index = int(user.handicap)
-                    elif user.initial_handicap is not None:
-                        handicap_index = int(user.initial_handicap)
+                    elif user.handicap is not None:
+                        handicap_index = int(user.handicap)
+                    elif user.handicap_init is not None:
+                        handicap_index = int(user.handicap_init)
                     elif user.average_score is not None:
                         handicap_index = max(0, int(user.average_score - 72))
 

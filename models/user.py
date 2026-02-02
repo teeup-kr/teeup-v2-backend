@@ -19,12 +19,13 @@ class User(Base):
     phone_number = Column(String(255), unique=True)
     gender = Column(Enum(Gender))
     birthdate = Column(DateTime)
-    average_score = Column(Integer)
 
     # 핸디캡 시스템 개선 필드
-    handicap = Column(DECIMAL(4, 1))  # 기존 핸디캡 (하위 호환성 유지)
-    initial_handicap = Column(DECIMAL(4, 1), comment="가입 시 수동 입력한 핸디캡")
-    calculated_handicap = Column(DECIMAL(4, 1), comment="자동 계산된 핸디캡 (최근 N경기 평균 기반)")
+    average_score_init = Column(Integer)
+    average_score = Column(Integer)
+    handicap_init = Column(DECIMAL(4, 1), comment="가입 시 수동 입력한 핸디캡")
+    handicap = Column(DECIMAL(4, 1), comment="자동 계산된 핸디캡 (최근 N경기 평균 기반)")
+
     handicap_update_method = Column(Enum(HandicapUpdateMethod),
                                     default=HandicapUpdateMethod.MANUAL,
                                     comment="핸디캡 업데이트 방식")
