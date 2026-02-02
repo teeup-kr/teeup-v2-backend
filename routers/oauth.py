@@ -449,14 +449,12 @@ async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tu
 
         new_user = User(
             email=oauth_user.email,
-            realname=None,  # 소셜 로그인에서는 실명을 null로 설정
             nickname=nickname,
             provider=Provider.GOOGLE,
             provider_id=oauth_user.provider_id,
             email_verified=datetime.now() if oauth_user.verified_email else None,
             profile_image=oauth_user.picture,
             status=UserStatus.ACTIVE,
-            average_score=100,  # OAuth 사용자 기본 평균타수 (100타)
             # OAuth 사용자 약관 동의 처리 (회원가입 후 약관 동의 방식)
             needs_terms_agreement=True,  # 약관 동의 필요 (아직 동의 안 함)
             terms_agreement=False,  # 서비스이용약관 동의 (미동의)
