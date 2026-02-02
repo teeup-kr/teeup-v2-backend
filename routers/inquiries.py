@@ -22,74 +22,22 @@ router = APIRouter(prefix="/inquiries", tags=["inquiries"])
 
 
 @router.get("/", response_model=InquiryListResponse)
-async def get_inquiries(
-    page: int = Query(1, ge=1, description="페이지 번호"),
-    size: int = Query(20, ge=1, le=100, description="페이지 크기"),
-    type: Optional[str] = Query(None, description="문의 타입"),
-    status: Optional[str] = Query(None, description="문의 상태"),
-    priority: Optional[int] = Query(None, description="우선순위"),
-    search: Optional[str] = Query(None, description="제목 검색"),
-    user_id: Optional[int] = Query(None, description="사용자 ID (관리자만)"),
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
+async def get_my_inquiries(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """문의 목록 조회 (관리자)"""
+    """내 문의 목록 조회 (본인 문의만)"""
     try:
-        query = db.query(Inquiry)
-        
-        # 필터 적용
-        if type:
-            query = query.filter(Inquiry.type == type)
-        if status:
-            query = query.filter(Inquiry.status == status)
-        if priority:
-            query = query.filter(Inquiry.priority == priority)
-        if search:
-            query = query.filter(Inquiry.title.contains(search))
-        if user_id:
-            query = query.filter(Inquiry.user_id == user_id)
-        
-        # 총 개수 조회
+        query = db.query(Inquiry).filter(Inquiry.user_id == current_user.id)
         total = query.count()
-        
-        # 정렬 및 페이징 (우선순위 높은 순, 최신 순)
-        inquiries = query.order_by(desc(Inquiry.priority), desc(Inquiry.created_at))\
-                        .offset((page - 1) * size)\
-                        .limit(size)\
-                        .all()
-        
-        # JOIN을 사용한 최적화된 쿼리로 사용자 정보를 한 번에 조회
-        inquiries_with_users = db.query(
-            Inquiry,
-            User.nickname
-        ).outerjoin(
-            User, Inquiry.user_id == User.id
-        ).filter(
-            Inquiry.id.in_([inquiry.id for inquiry in inquiries])
-        ).all()
-        
-        # 응답 데이터 변환
-        inquiry_responses = []
-        for inquiry, user_nickname in inquiries_with_users:
-            inquiry_responses.append(InquiryResponseSchema(
-                id=inquiry.id,                user_id=inquiry.user_id,
-                user_nickname=user_nickname if user_nickname else "알 수 없음",
-                title=inquiry.title,
-                content=inquiry.content,
-                type=inquiry.type.value,
-                status=inquiry.status.value,
-                priority=inquiry.priority,
-                created_at=inquiry.created_at,
-                updated_at=inquiry.updated_at
-            ))
-        
-        return InquiryListResponse(
-            inquiries=inquiry_responses,
-            total=total,
-            page=page,
-            size=size
-        )
-        
+        inquiries = query.order_by(desc(Inquiry.priority), desc(Inquiry.created_at)).offset((page - 1) * size).limit(size).all()
+        inquiry_responses = [
+            InquiryResponseSchema(id=i.id, user_id=i.user_id, user_name=getattr(current_user, "realname", None) or getattr(current_user, "nickname", "나"), user_nickname=getattr(current_user, "nickname", "나"), title=i.title, content=i.content, type=i.type.value, status=i.status.value, priority=i.priority, created_at=i.created_at, updated_at=i.updated_at)
+            for i in inquiries
+        ]
+        return InquiryListResponse(inquiries=inquiry_responses, total=total, page=page, size=size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"문의 목록 조회 실패: {str(e)}")
 
@@ -129,15 +77,11 @@ async def create_inquiry(
             logger.error(f"관리자 문의 등록 알림 전송 실패: {str(e)}")
         
         return InquiryResponseSchema(
-            id=inquiry.id,            user_id=inquiry.user_id,
-            user_nickname=inquiry.user.nickname,
-            title=inquiry.title,
-            content=inquiry.content,
-            type=inquiry.type.value,
-            status=inquiry.status.value,
-            priority=inquiry.priority,
-            created_at=inquiry.created_at,
-            updated_at=inquiry.updated_at
+            id=inquiry.id, user_id=inquiry.user_id,
+            user_name=getattr(inquiry.user, "realname", None) or (inquiry.user.nickname if inquiry.user else "알 수 없음"),
+            user_nickname=inquiry.user.nickname if inquiry.user else "알 수 없음",
+            title=inquiry.title, content=inquiry.content, type=inquiry.type.value, status=inquiry.status.value,
+            priority=inquiry.priority, created_at=inquiry.created_at, updated_at=inquiry.updated_at,
         )
         
     except Exception as e:
@@ -148,222 +92,36 @@ async def create_inquiry(
 @router.get("/{inquiry_id}", response_model=InquiryDetailResponse)
 async def get_inquiry(
     inquiry_id: int,
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """문의 상세 조회 (관리자)"""
+    """문의 상세 조회 (본인 문의만)"""
     try:
         inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
         if not inquiry:
             raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
-        
-        # 답변 목록 조회
-        responses = db.query(InquiryResponse).filter(
-            InquiryResponse.inquiry_id == inquiry_id
-        ).order_by(asc(InquiryResponse.created_at)).all()
-        
-        # 응답 데이터 변환
+        if inquiry.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="본인의 문의만 조회할 수 있습니다")
+        responses = db.query(InquiryResponse).filter(InquiryResponse.inquiry_id == inquiry_id).order_by(InquiryResponse.created_at).all()
         inquiry_response = InquiryResponseSchema(
-            id=inquiry.id,            user_id=inquiry.user_id,
+            id=inquiry.id, user_id=inquiry.user_id,
+            user_name=getattr(inquiry.user, "realname", None) or (inquiry.user.nickname if inquiry.user else "알 수 없음"),
             user_nickname=inquiry.user.nickname if inquiry.user else "알 수 없음",
-            title=inquiry.title,
-            content=inquiry.content,
-            type=inquiry.type.value,
-            status=inquiry.status.value,
-            priority=inquiry.priority,
-            created_at=inquiry.created_at,
-            updated_at=inquiry.updated_at
+            title=inquiry.title, content=inquiry.content, type=inquiry.type.value, status=inquiry.status.value,
+            priority=inquiry.priority, created_at=inquiry.created_at, updated_at=inquiry.updated_at,
         )
-        
-        response_responses = []
-        for response in responses:
-            response_responses.append(InquiryResponseResponse(
-                id=response.id,                inquiry_id=response.inquiry_id,
-                admin_id=response.admin_id,
-                admin_nickname=response.admin.nickname if response.admin else "알 수 없음",
-                content=response.content,
-                is_internal=response.is_internal,
-                created_at=response.created_at,
-                updated_at=response.updated_at
-            ))
-        
-        return InquiryDetailResponse(
-            inquiry=inquiry_response,
-            responses=response_responses
-        )
-        
+        response_responses = [
+            InquiryResponseResponse(id=r.id, inquiry_id=r.inquiry_id, admin_id=r.admin_id, admin_name=r.admin.name if r.admin else "알 수 없음", content=r.content, is_internal=r.is_internal, created_at=r.created_at)
+            for r in responses
+        ]
+        return InquiryDetailResponse(inquiry=inquiry_response, responses=response_responses, total_responses=len(response_responses))
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"문의 조회 실패: {str(e)}")
 
 
-@router.put("/{inquiry_id}", response_model=InquiryResponseSchema)
-async def update_inquiry(
-    inquiry_id: int,
-    inquiry_data: InquiryUpdate,
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
-):
-    """문의 수정 (관리자)"""
-    try:
-        inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
-        if not inquiry:
-            raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
-        
-        # 업데이트할 필드만 수정
-        update_data = inquiry_data.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            if field == "type":
-                setattr(inquiry, field, InquiryType(value))
-            elif field == "status":
-                setattr(inquiry, field, InquiryStatus(value))
-            else:
-                setattr(inquiry, field, value)
-        
-        inquiry.updated_at = datetime.now()
-        
-        db.commit()
-        db.refresh(inquiry)
-        
-        return InquiryResponseSchema(
-            id=inquiry.id,            user_id=inquiry.user_id,
-            user_nickname=inquiry.user.nickname,
-            title=inquiry.title,
-            content=inquiry.content,
-            type=inquiry.type.value,
-            status=inquiry.status.value,
-            priority=inquiry.priority,
-            created_at=inquiry.created_at,
-            updated_at=inquiry.updated_at
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"문의 수정 실패: {str(e)}")
-
-
-@router.post("/{inquiry_id}/responses", response_model=InquiryResponseResponse)
-async def create_inquiry_response(
-    inquiry_id: int,
-    response_data: InquiryResponseCreate,
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
-):
-    """문의 답변 등록 (관리자)"""
-    try:
-        # 문의 존재 확인
-        inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
-        if not inquiry:
-            raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
-        
-        # 답변 생성
-        response = InquiryResponse(
-            inquiry_id=inquiry_id,
-            admin_id=current_user.id,
-            content=response_data.content,
-            is_internal=response_data.is_internal
-        )
-        
-        db.add(response)
-        
-        # 문의 상태를 처리중으로 변경 (내부 메모가 아닌 경우)
-        if not response_data.is_internal and inquiry.status == InquiryStatus.PENDING:
-            inquiry.status = InquiryStatus.IN_PROGRESS
-            inquiry.updated_at = datetime.now()
-        
-        db.commit()
-        db.refresh(response)
-        
-        return InquiryResponseResponse(
-            id=response.id,            inquiry_id=response.inquiry_id,
-            admin_id=response.admin_id,
-            admin_nickname=response.admin.nickname,
-            content=response.content,
-            is_internal=response.is_internal,
-            created_at=response.created_at,
-            updated_at=response.updated_at
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"문의 답변 등록 실패: {str(e)}")
-
-
-@router.put("/{inquiry_id}/responses/{response_id}", response_model=InquiryResponseResponse)
-async def update_inquiry_response(
-    inquiry_id: int,
-    response_id: int,
-    response_data: InquiryResponseUpdate,
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
-):
-    """문의 답변 수정 (관리자)"""
-    try:
-        response = db.query(InquiryResponse).filter(
-            InquiryResponse.id == response_id,
-            InquiryResponse.inquiry_id == inquiry_id
-        ).first()
-        if not response:
-            raise HTTPException(status_code=404, detail="답변을 찾을 수 없습니다")
-        
-        # 업데이트할 필드만 수정
-        update_data = response_data.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(response, field, value)
-        
-        response.updated_at = datetime.now()
-        
-        db.commit()
-        db.refresh(response)
-        
-        return InquiryResponseResponse(
-            id=response.id,            inquiry_id=response.inquiry_id,
-            admin_id=response.admin_id,
-            admin_nickname=response.admin.nickname,
-            content=response.content,
-            is_internal=response.is_internal,
-            created_at=response.created_at,
-            updated_at=response.updated_at
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"문의 답변 수정 실패: {str(e)}")
-
-
-@router.delete("/{inquiry_id}/responses/{response_id}")
-async def delete_inquiry_response(
-    inquiry_id: int,
-    response_id: int,
-    current_user = Depends(lambda: get_current_user(required_type="admin", check_status=False)),
-    db: Session = Depends(get_db)
-):
-    """문의 답변 삭제 (관리자)"""
-    try:
-        response = db.query(InquiryResponse).filter(
-            InquiryResponse.id == response_id,
-            InquiryResponse.inquiry_id == inquiry_id
-        ).first()
-        if not response:
-            raise HTTPException(status_code=404, detail="답변을 찾을 수 없습니다")
-        
-        db.delete(response)
-        db.commit()
-        
-        return {"message": "답변이 삭제되었습니다"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"문의 답변 삭제 실패: {str(e)}")
+# 문의 수정/답변 등록·수정·삭제는 /api/v1/admin/inquiries 에서 가능
 
 
 @router.get("/types/", response_model=List[dict])
