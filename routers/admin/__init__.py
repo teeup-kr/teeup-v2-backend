@@ -24,6 +24,7 @@ from .notifications import router as notifications_router
 from .scores import router as scores_router
 from .clubs import router as clubs_router
 from .meetings import router as meetings_router
+from .faq import router as faq_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -42,5 +43,6 @@ router.include_router(notifications_router)
 router.include_router(scores_router)
 router.include_router(clubs_router)
 router.include_router(meetings_router)
+router.include_router(faq_router)
 
 __all__ = ["router", "get_admin_user"]
