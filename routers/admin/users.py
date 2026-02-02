@@ -3,20 +3,17 @@
 """
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
-from typing import Optional, List
+from typing import Optional
 import logging
 
 from database import get_db
-from models import User, Club, ClubMembership, Admin
+from models import User, Club, ClubMembership
 from models import UserStatus
-from schemas import UserResponse, PaginatedResponse, MembershipStatus, UserCreate, UserUpdate
+from schemas import UserResponse, PaginatedResponse, MembershipStatus
 import schemas
 from utils.datetime_utils import get_kst_now
 from .deps import get_admin_user
-from services.user_admin_service import create_user_impl, update_user_impl
 
 logger = logging.getLogger(__name__)
 
@@ -439,23 +436,10 @@ async def create_admin_user(
         current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 생성"""
-    try:
-        user = create_user_impl(UserCreate(**user_data), db)
-        return UserResponse(
-            id=user.id, email=user.email, realname=user.realname, nickname=user.nickname,
-            phone_number=user.phone_number, birthdate=user.birthdate,
-            gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
-            average_score=user.average_score, provider=user.provider.value if user.provider else None,
-            email_verified=user.email_verified, status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at, needs_terms_agreement=user.needs_terms_agreement,
-            created_at=user.created_at, updated_at=user.updated_at,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 생성 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    from routers.users import create_user
+    from schemas import UserCreate
+
+    return await create_user(UserCreate(**user_data), db=db, current_user=current_user)
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
@@ -466,96 +450,10 @@ async def update_admin_user(
         current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 사용자 수정"""
-    try:
-        user = update_user_impl(user_id, UserUpdate(**user_data), db)
-        return UserResponse(
-            id=user.id, email=user.email, realname=user.realname, nickname=user.nickname,
-            phone_number=user.phone_number, birthdate=user.birthdate,
-            gender=user.gender.value if user.gender else None,
-            handicap=float(user.handicap) if user.handicap else None,
-            average_score=user.average_score, provider=user.provider.value if user.provider else None,
-            email_verified=user.email_verified, status=user.status.value if user.status else None,
-            deactivated_at=user.deactivated_at, needs_terms_agreement=user.needs_terms_agreement,
-            created_at=user.created_at, updated_at=user.updated_at,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 수정 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    from routers.users import update_user
+    from schemas import UserUpdate
 
-
-class UserStatsResponse(BaseModel):
-    total_users: int
-    active_users: int
-    inactive_users: int
-    deleted_users: int
-    admin_users: int
-    regular_users: int
-    users_by_gender: dict
-    users_by_provider: dict
-    users_by_month: List[dict]
-    average_handicap: Optional[float]
-    users_with_handicap: int
-    users_without_handicap: int
-
-
-@router.get("/users/stats", response_model=UserStatsResponse)
-async def get_user_statistics(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
-):
-    """관리자용 사용자 통계 조회"""
-    try:
-        from models import Gender, Provider
-
-        total_users = db.query(User).filter(User.deleted_at.is_(None)).count()
-        active_users = db.query(User).filter(User.deleted_at.is_(None), User.status == UserStatus.ACTIVE).count()
-        inactive_users = db.query(User).filter(User.deleted_at.is_(None), User.status == UserStatus.DEACTIVATED).count()
-        deleted_users = db.query(User).filter(User.deleted_at.isnot(None)).count()
-        admin_users = db.query(Admin).filter(Admin.deleted_at.is_(None)).count()
-        regular_users = total_users
-
-        gender_stats = db.query(User.gender, func.count(User.id).label("count")).filter(
-            User.deleted_at.is_(None), User.gender.isnot(None)
-        ).group_by(User.gender).all()
-        users_by_gender = {g.value: c for g, c in gender_stats if g}
-
-        provider_stats = db.query(User.provider, func.count(User.id).label("count")).filter(
-            User.deleted_at.is_(None), User.provider.isnot(None)
-        ).group_by(User.provider).all()
-        users_by_provider = {p.value: c for p, c in provider_stats if p}
-
-        twelve_months_ago = datetime.now() - timedelta(days=365)
-        monthly_stats = db.query(
-            extract("year", User.created_at).label("year"),
-            extract("month", User.created_at).label("month"),
-            func.count(User.id).label("count"),
-        ).filter(User.deleted_at.is_(None), User.created_at >= twelve_months_ago).group_by(
-            extract("year", User.created_at), extract("month", User.created_at)
-        ).order_by(extract("year", User.created_at), extract("month", User.created_at)).all()
-        users_by_month = [{"year": int(y), "month": int(m), "count": c} for y, m, c in monthly_stats]
-
-        handicap_stats = db.query(
-            func.avg(User.handicap).label("avg_handicap"),
-            func.count(User.handicap).label("users_with_handicap"),
-        ).filter(User.deleted_at.is_(None), User.handicap.isnot(None)).first()
-        average_handicap = float(handicap_stats.avg_handicap) if handicap_stats and handicap_stats.avg_handicap else None
-        users_with_handicap = handicap_stats.users_with_handicap if handicap_stats and handicap_stats.users_with_handicap else 0
-        users_without_handicap = total_users - users_with_handicap
-
-        return UserStatsResponse(
-            total_users=total_users, active_users=active_users, inactive_users=inactive_users,
-            deleted_users=deleted_users, admin_users=admin_users, regular_users=regular_users,
-            users_by_gender=users_by_gender, users_by_provider=users_by_provider,
-            users_by_month=users_by_month, average_handicap=average_handicap,
-            users_with_handicap=users_with_handicap, users_without_handicap=users_without_handicap,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"관리자 사용자 통계 조회 중 오류: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return await update_user(user_id, UserUpdate(**user_data), db=db, current_user=current_user)
 
 
 @router.delete("/users/{user_id}")
