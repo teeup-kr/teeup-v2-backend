@@ -259,7 +259,7 @@ class ClubRegulationResponse(BaseModel):
     title: str
     content: str
     status: str
-    created_by: int
+    created_by: Optional[int] = None
     created_by_name: Optional[str] = None
     published_at: Optional[datetime] = None
     created_at: datetime

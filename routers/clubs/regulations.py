@@ -719,27 +719,34 @@ async def get_club_regulation(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="클럽 멤버만 규정을 조회할 수 있습니다."
             )
-        
-        # TODO: 실제 규정 데이터베이스 테이블이 구현되면 수정 필요
-        # 임시로 더미 데이터 반환
-        # 작성자 이름 조회
-        author_name = None
-        if current_user:
-            author_name = current_user.realname or current_user.nickname or None
-        
-        regulation = ClubRegulationResponse(
-            id=regulation_id,# 더미 데이터이므로 임시 uuid 생성
-            club_id=club.id,
-            title="샘플 규정",
-            content="샘플 규정 내용",
-            status="ACTIVE",
-            created_by=None,  # 스키마는 Optional[str]이므로 None으로 설정
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            author_name=author_name  # 작성자 이름은 author_name에 설정
+
+        # 규정 조회 (클럽 소속 확인)
+        regulation = db.query(Regulation).filter(
+            Regulation.id == regulation_id,
+            Regulation.club_id == club.id,
+        ).first()
+
+        if not regulation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="규정을 찾을 수 없습니다."
+            )
+
+        category = regulation.category
+        return ClubRegulationResponse(
+            id=regulation.id,
+            club_id=regulation.club_id,
+            category_id=regulation.category_id,
+            title=regulation.title,
+            content=regulation.content,
+            status=regulation.status,
+            created_by=regulation.created_by,
+            created_by_name=regulation.created_by_name,
+            published_at=regulation.published_at,
+            created_at=regulation.created_at,
+            updated_at=regulation.updated_at,
+            category_name=category.name if category else None,
         )
-        
-        return regulation
         
     except HTTPException:
         raise
