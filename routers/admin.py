@@ -288,11 +288,12 @@ async def get_admin_settings(current_user: dict = Depends(get_admin_user)):
 
 @router.get("/search")
 async def global_search(
-    q: str = Query(..., min_length=1, max_length=100, description="검색어"),
-    limit: int = Query(5, ge=1, le=20, description="카테고리별 최대 결과 수"),
-    types: Optional[str] = Query("users,clubs,meetings,admins", description="검색 대상 (쉼표 구분: users,clubs,meetings,admins)"),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        q: str = Query(..., min_length=1, max_length=100, description="검색어"),
+        limit: int = Query(5, ge=1, le=20, description="카테고리별 최대 결과 수"),
+        types: Optional[str] = Query("users,clubs,meetings,admins",
+                                     description="검색 대상 (쉼표 구분: users,clubs,meetings,admins)"),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """
     백오피스 헤더 전역 검색
@@ -310,102 +311,64 @@ async def global_search(
     try:
         # 사용자 검색 (email, nickname, realname)
         if "users" in target_types:
-            users = (
-                db.query(User)
-                .filter(
-                    User.deleted_at.is_(None),
-                    ~User.nickname.like("guest_%"),
-                    ~User.email.like("%@guest.local"),
-                )
-                .filter(
-                    (User.email.ilike(pattern))
-                    | (User.nickname.ilike(pattern))
-                    | (User.realname.ilike(pattern))
-                )
-                .order_by(User.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            result["users"] = [
-                {
-                    "id": u.id,
-                    "type": "user",
-                    "email": u.email,
-                    "nickname": u.nickname,
-                    "realname": getattr(u, "realname", None),
-                    "link": f"/users/{u.id}",
-                }
-                for u in users
-            ]
+            users = (db.query(User).filter(
+                User.deleted_at.is_(None),
+                ~User.nickname.like("guest_%"),
+                ~User.email.like("%@guest.local"),
+            ).filter((User.email.ilike(pattern))
+                     | (User.nickname.ilike(pattern))
+                     | (User.realname.ilike(pattern))).order_by(User.created_at.desc()).limit(limit).all())
+            result["users"] = [{
+                "id": u.id,
+                "type": "user",
+                "email": u.email,
+                "nickname": u.nickname,
+                "realname": getattr(u, "realname", None),
+                "link": f"/users/{u.id}",
+            } for u in users]
 
         # 클럽 검색 (name, description)
         if "clubs" in target_types:
-            clubs = (
-                db.query(Club)
-                .filter(Club.deleted_at.is_(None))
-                .filter(
-                    (Club.name.ilike(pattern))
-                    | ((Club.description.isnot(None)) & (Club.description.ilike(pattern)))
-                )
-                .order_by(Club.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            result["clubs"] = [
-                {
-                    "id": c.id,
-                    "display_id": c.display_id,
-                    "type": "club",
-                    "name": c.name,
-                    "status": c.status.value if c.status else None,
-                    "link": f"/clubs/{c.display_id or c.id}",
-                }
-                for c in clubs
-            ]
+            clubs = (db.query(Club).filter(
+                Club.deleted_at.is_(None)).filter((Club.name.ilike(pattern))
+                                                  | ((Club.description.isnot(None))
+                                                     & (Club.description.ilike(pattern)))).order_by(
+                                                         Club.created_at.desc()).limit(limit).all())
+            result["clubs"] = [{
+                "id": c.id,
+                "display_id": c.display_id,
+                "type": "club",
+                "name": c.name,
+                "status": c.status.value if c.status else None,
+                "link": f"/clubs/{c.display_id or c.id}",
+            } for c in clubs]
 
         # 모임 검색 (name)
         if "meetings" in target_types:
-            meetings = (
-                db.query(Meeting)
-                .filter(Meeting.club_id.isnot(None))
-                .filter(Meeting.name.ilike(pattern))
-                .order_by(Meeting.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            result["meetings"] = [
-                {
-                    "id": m.id,
-                    "type": "meeting",
-                    "name": m.name,
-                    "club_id": m.club_id,
-                    "meeting_time": m.meeting_time.isoformat() if m.meeting_time else None,
-                    "status": m.status,
-                    "link": f"/meetings/{m.id}",
-                }
-                for m in meetings
-            ]
+            meetings = (db.query(Meeting).filter(Meeting.club_id.isnot(None)).filter(
+                Meeting.name.ilike(pattern)).order_by(Meeting.created_at.desc()).limit(limit).all())
+            result["meetings"] = [{
+                "id": m.id,
+                "type": "meeting",
+                "name": m.name,
+                "club_id": m.club_id,
+                "meeting_time": m.meeting_time.isoformat() if m.meeting_time else None,
+                "status": m.status,
+                "link": f"/meetings/{m.id}",
+            } for m in meetings]
 
         # 관리자 검색 (email, name)
         if "admins" in target_types:
-            admins = (
-                db.query(Admin)
-                .filter(Admin.deleted_at.is_(None))
-                .filter((Admin.email.ilike(pattern)) | (Admin.name.ilike(pattern)))
-                .order_by(Admin.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            result["admins"] = [
-                {
-                    "id": a.id,
-                    "type": "admin",
-                    "email": a.email,
-                    "name": a.name,
-                    "link": f"/admins/{a.id}",
-                }
-                for a in admins
-            ]
+            admins = (db.query(Admin).filter(
+                Admin.deleted_at.is_(None)).filter((Admin.email.ilike(pattern)) | (Admin.name.ilike(pattern))).order_by(
+                    Admin.created_at.desc()).limit(limit).all())
+            result["admins"] = [{
+                "id": a.id,
+                "type": "admin",
+                "email": a.email,
+                "name": a.name,
+                "link": f"/admins/{a.id}",
+            } for a in admins]
 
         return result
 
@@ -424,12 +387,12 @@ async def global_search(
 
 @router.get("/admins", response_model=PaginatedResponse)
 async def get_admin_list(
-    page: int = Query(1, ge=1, description="페이지"),
-    limit: int = Query(10, ge=1, le=100, description="페이지당 개수"),
-    search: Optional[str] = Query(None, description="이메일/이름 검색"),
-    status_filter: Optional[str] = Query(None, description="상태 필터 (ACTIVE, DEACTIVATED, DELETED)"),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        page: int = Query(1, ge=1, description="페이지"),
+        limit: int = Query(10, ge=1, le=100, description="페이지당 개수"),
+        search: Optional[str] = Query(None, description="이메일/이름 검색"),
+        status_filter: Optional[str] = Query(None, description="상태 필터 (ACTIVE, DEACTIVATED, DELETED)"),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자 목록 조회 (페이지네이션)"""
     try:
@@ -437,9 +400,7 @@ async def get_admin_list(
 
         if search:
             search_pattern = f"%{search}%"
-            query = query.filter(
-                (Admin.email.ilike(search_pattern)) | (Admin.name.ilike(search_pattern))
-            )
+            query = query.filter((Admin.email.ilike(search_pattern)) | (Admin.name.ilike(search_pattern)))
 
         if status_filter:
             try:
@@ -462,8 +423,7 @@ async def get_admin_list(
                 status=a.status.value if a.status else None,
                 created_at=a.created_at,
                 updated_at=a.updated_at,
-            )
-            for a in admins
+            ) for a in admins
         ]
 
         return {
@@ -480,9 +440,9 @@ async def get_admin_list(
 
 @router.get("/admins/{admin_id}", response_model=AdminResponse)
 async def get_admin_detail(
-    admin_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        admin_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자 상세 조회"""
     admin = db.query(Admin).filter(Admin.id == admin_id, Admin.deleted_at.is_(None)).first()
@@ -503,9 +463,9 @@ async def get_admin_detail(
 
 @router.post("/admins", response_model=AdminResponse)
 async def create_admin(
-    data: AdminCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        data: AdminCreate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """새 관리자 생성"""
     import hashlib
@@ -540,10 +500,10 @@ async def create_admin(
 
 @router.put("/admins/{admin_id}", response_model=AdminResponse)
 async def update_admin(
-    admin_id: int,
-    data: AdminUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        admin_id: int,
+        data: AdminUpdate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자 정보 수정"""
     admin = db.query(Admin).filter(Admin.id == admin_id, Admin.deleted_at.is_(None)).first()
@@ -578,10 +538,10 @@ async def update_admin(
 
 @router.put("/admins/{admin_id}/password")
 async def update_admin_password_by_admin(
-    admin_id: int,
-    data: AdminPasswordUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        admin_id: int,
+        data: AdminPasswordUpdate,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """다른 관리자의 비밀번호 변경 (관리자 전용)"""
     import hashlib
@@ -596,9 +556,9 @@ async def update_admin_password_by_admin(
 
 @router.delete("/admins/{admin_id}")
 async def delete_admin(
-    admin_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        admin_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자 삭제 (soft delete)"""
     if admin_id == current_user.get("id"):
@@ -971,8 +931,7 @@ async def get_user_clubs(user_id: int, db: Session = Depends(get_db), current_us
         # 사용자의 클럽 멤버십 조회 (ACTIVE와 APPROVED 상태 모두 포함, 삭제되지 않은 클럽만)
         memberships = db.query(ClubMembership, Club).join(Club, ClubMembership.club_id == Club.id).filter(
             ClubMembership.user_id == user_id, Club.deleted_at.is_(None),
-            or_(ClubMembership.status == MembershipStatus.ACTIVE,
-                ClubMembership.status == "APPROVED")).all()
+            or_(ClubMembership.status == MembershipStatus.ACTIVE, ClubMembership.status == "APPROVED")).all()
 
         club_data = []
         for membership, club in memberships:
@@ -1551,11 +1510,11 @@ def _resolve_club(db: Session, club_id: str) -> Club:
 
 @router.get("/clubs/{club_id}/notices")
 async def get_admin_club_notices(
-    club_id: str,
-    page: int = 1,
-    limit: int = 20,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        page: int = 1,
+        limit: int = 20,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 공지사항 조회"""
     from models import ClubNotice, User
@@ -1563,10 +1522,8 @@ async def get_admin_club_notices(
     offset = (page - 1) * limit
     notices_query = db.query(ClubNotice).filter(ClubNotice.club_id == club.id)
     total = notices_query.count()
-    notices = notices_query.order_by(
-        ClubNotice.is_important.desc(),
-        ClubNotice.created_at.desc()
-    ).offset(offset).limit(limit).all()
+    notices = notices_query.order_by(ClubNotice.is_important.desc(),
+                                     ClubNotice.created_at.desc()).offset(offset).limit(limit).all()
     notice_list = []
     for n in notices:
         author = db.query(User).filter(User.id == n.author_id).first()
@@ -1594,31 +1551,26 @@ async def get_admin_club_notices(
 
 @router.get("/clubs/{club_id}/regulations")
 async def get_admin_club_regulations(
-    club_id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 조회"""
     from models import RegulationCategory, Regulation
     club = _resolve_club(db, club_id)
-    categories = db.query(RegulationCategory).filter(
-        RegulationCategory.club_id == club.id
-    ).order_by(RegulationCategory.order).all()
+    categories = db.query(RegulationCategory).filter(RegulationCategory.club_id == club.id).order_by(
+        RegulationCategory.order).all()
     result_categories = []
     for cat in categories:
-        regulations = db.query(Regulation).filter(
-            Regulation.category_id == cat.id
-        ).order_by(Regulation.created_at).all()
-        regulations_list = [
-            {
-                "id": r.id,
-                "title": r.title,
-                "content": r.content,
-                "status": r.status,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in regulations
-        ]
+        regulations = db.query(Regulation).filter(Regulation.category_id == cat.id).order_by(
+            Regulation.created_at).all()
+        regulations_list = [{
+            "id": r.id,
+            "title": r.title,
+            "content": r.content,
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in regulations]
         result_categories.append({
             "id": cat.id,
             "name": cat.name,
@@ -1630,9 +1582,9 @@ async def get_admin_club_regulations(
 
 @router.get("/clubs/{club_id}/fees")
 async def get_admin_club_fees(
-    club_id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 회비 항목 조회"""
     from models import ClubFee
@@ -1677,10 +1629,10 @@ def _get_club_posting_user_id(db: Session, club_id: int) -> int:
 
 @router.post("/clubs/{club_id}/notices")
 async def create_admin_club_notice(
-    club_id: str,
-    notice_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        notice_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 공지사항 생성"""
     from models import ClubNotice, User
@@ -1718,10 +1670,10 @@ async def create_admin_club_notice(
 
 @router.get("/clubs/{club_id}/notices/{notice_id}")
 async def get_admin_club_notice_detail(
-    club_id: str,
-    notice_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        notice_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 공지사항 상세 조회"""
     from models import ClubNotice, User
@@ -1750,11 +1702,11 @@ async def get_admin_club_notice_detail(
 
 @router.put("/clubs/{club_id}/notices/{notice_id}")
 async def update_admin_club_notice(
-    club_id: str,
-    notice_id: int,
-    notice_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        notice_id: int,
+        notice_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 공지사항 수정"""
     from models import ClubNotice, User
@@ -1766,7 +1718,10 @@ async def update_admin_club_notice(
     ).first()
     if not notice:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="공지사항을 찾을 수 없습니다")
-    data = ClubNoticeUpdate(**{k: v for k, v in notice_data.items() if k in ("title", "content", "is_important", "is_private")})
+    data = ClubNoticeUpdate(**{
+        k: v
+        for k, v in notice_data.items() if k in ("title", "content", "is_important", "is_private")
+    })
     if data.title is not None:
         notice.title = data.title
     if data.content is not None:
@@ -1796,10 +1751,10 @@ async def update_admin_club_notice(
 
 @router.delete("/clubs/{club_id}/notices/{notice_id}")
 async def delete_admin_club_notice(
-    club_id: str,
-    notice_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        notice_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 공지사항 삭제"""
     from models import ClubNotice
@@ -1817,10 +1772,10 @@ async def delete_admin_club_notice(
 
 @router.post("/clubs/{club_id}/fees")
 async def create_admin_club_fee(
-    club_id: str,
-    fee_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        fee_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 회비 항목 생성"""
     from models import ClubFee
@@ -1859,11 +1814,11 @@ async def create_admin_club_fee(
 
 @router.put("/clubs/{club_id}/fees/{fee_id}")
 async def update_admin_club_fee(
-    club_id: str,
-    fee_id: int,
-    fee_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        fee_id: int,
+        fee_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 회비 항목 수정"""
     from models import ClubFee
@@ -1875,7 +1830,10 @@ async def update_admin_club_fee(
     ).first()
     if not fee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="회비 항목을 찾을 수 없습니다")
-    data = ClubFeeUpdate(**{k: v for k, v in fee_data.items() if k in ("name", "amount", "cycle", "description", "is_active")})
+    data = ClubFeeUpdate(**{
+        k: v
+        for k, v in fee_data.items() if k in ("name", "amount", "cycle", "description", "is_active")
+    })
     if data.name is not None:
         fee.name = data.name
     if data.amount is not None:
@@ -1905,10 +1863,10 @@ async def update_admin_club_fee(
 
 @router.delete("/clubs/{club_id}/fees/{fee_id}")
 async def delete_admin_club_fee(
-    club_id: str,
-    fee_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        fee_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 회비 항목 삭제"""
     from models import ClubFee
@@ -1927,28 +1885,24 @@ async def delete_admin_club_fee(
 # 규정: Regulation의 created_by는 User FK가 아니므로 관리자 이름 사용 가능
 @router.get("/clubs/{club_id}/regulations/categories")
 async def get_admin_club_regulation_categories(
-    club_id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 카테고리 목록 조회"""
     from models import RegulationCategory
     club = _resolve_club(db, club_id)
-    categories = db.query(RegulationCategory).filter(
-        RegulationCategory.club_id == club.id
-    ).order_by(RegulationCategory.order).all()
-    return [
-        {"id": c.id, "name": c.name, "order": c.order}
-        for c in categories
-    ]
+    categories = db.query(RegulationCategory).filter(RegulationCategory.club_id == club.id).order_by(
+        RegulationCategory.order).all()
+    return [{"id": c.id, "name": c.name, "order": c.order} for c in categories]
 
 
 @router.post("/clubs/{club_id}/regulations/categories")
 async def create_admin_club_regulation_category(
-    club_id: str,
-    category_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        category_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 규정 카테고리 생성"""
     from models import RegulationCategory
@@ -1956,9 +1910,7 @@ async def create_admin_club_regulation_category(
     name = category_data.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="카테고리 이름을 입력해주세요")
-    max_order = db.query(RegulationCategory).filter(
-        RegulationCategory.club_id == club.id
-    ).count()
+    max_order = db.query(RegulationCategory).filter(RegulationCategory.club_id == club.id).count()
     cat = RegulationCategory(club_id=club.id, name=name, order=max_order)
     db.add(cat)
     db.commit()
@@ -1968,11 +1920,11 @@ async def create_admin_club_regulation_category(
 
 @router.put("/clubs/{club_id}/regulations/categories/{category_id}")
 async def update_admin_club_regulation_category(
-    club_id: str,
-    category_id: int,
-    category_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        category_id: int,
+        category_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 규정 카테고리 수정"""
     from models import RegulationCategory
@@ -1994,10 +1946,10 @@ async def update_admin_club_regulation_category(
 
 @router.delete("/clubs/{club_id}/regulations/categories/{category_id}")
 async def delete_admin_club_regulation_category(
-    club_id: str,
-    category_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        category_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 규정 카테고리 삭제"""
     from models import RegulationCategory
@@ -2015,10 +1967,10 @@ async def delete_admin_club_regulation_category(
 
 @router.post("/clubs/{club_id}/regulations")
 async def create_admin_club_regulation(
-    club_id: str,
-    regulation_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        regulation_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 생성"""
     from models import Regulation, RegulationCategory
@@ -2063,10 +2015,10 @@ async def create_admin_club_regulation(
 
 @router.get("/clubs/{club_id}/regulations/{regulation_id}")
 async def get_admin_club_regulation_detail(
-    club_id: str,
-    regulation_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        regulation_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 상세 조회"""
     from models import Regulation, RegulationCategory
@@ -2096,11 +2048,11 @@ async def get_admin_club_regulation_detail(
 
 @router.put("/clubs/{club_id}/regulations/{regulation_id}")
 async def update_admin_club_regulation(
-    club_id: str,
-    regulation_id: int,
-    regulation_data: dict,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        regulation_id: int,
+        regulation_data: dict,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 수정"""
     from models import Regulation, RegulationCategory
@@ -2112,7 +2064,10 @@ async def update_admin_club_regulation(
     ).first()
     if not reg:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="규정을 찾을 수 없습니다")
-    data = ClubRegulationUpdate(**{k: v for k, v in regulation_data.items() if k in ("category_id", "title", "content", "status")})
+    data = ClubRegulationUpdate(**{
+        k: v
+        for k, v in regulation_data.items() if k in ("category_id", "title", "content", "status")
+    })
     if data.category_id is not None:
         cat = db.query(RegulationCategory).filter(
             RegulationCategory.id == data.category_id,
@@ -2149,10 +2104,10 @@ async def update_admin_club_regulation(
 
 @router.delete("/clubs/{club_id}/regulations/{regulation_id}")
 async def delete_admin_club_regulation(
-    club_id: str,
-    regulation_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_admin_user),
+        club_id: str,
+        regulation_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_admin_user),
 ):
     """관리자용 클럽 규정 삭제"""
     from models import Regulation
