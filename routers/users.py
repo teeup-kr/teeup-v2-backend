@@ -70,7 +70,6 @@ class HandicapResponse(BaseModel):
     )
 
 
-<<<<<<< HEAD
 # 사용자 생성은 /api/v1/admin/users POST 에서만 가능 (admin/users.py)
 
 
@@ -125,17 +124,11 @@ async def update_my_profile(
             # 핸디캡 init (0~72)
             if user_data.handicap_init is not None:
                 if not (0 <= user_data.handicap_init <= 72):
-            # 핸디캡 init (0~72)
-            if user_data.handicap_init is not None:
-                if not (0 <= user_data.handicap_init <= 72):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="핸디캡은 0-72 사이여야 합니다",
                     )
 
-            # 평균 타수 init (55~144)
-            if user_data.average_score_init is not None:
-                if not (55 <= user_data.average_score_init <= 144):
             # 평균 타수 init (55~144)
             if user_data.average_score_init is not None:
                 if not (55 <= user_data.average_score_init <= 144):
@@ -147,7 +140,6 @@ async def update_my_profile(
             # 생년월일
             if user_data.birthdate is not None:
                 from routers.auth import validate_birthdate
-
 
                 birthdate_validation = validate_birthdate(user_data.birthdate)
                 if not birthdate_validation["is_valid"]:
@@ -306,9 +298,7 @@ async def update_my_profile(
         )
 
 
-<<<<<<< HEAD
 # 사용자 수정/삭제는 /api/v1/admin/users PUT,DELETE 에서만 가능
-=======
 @router.put("/{user_id}", response_model=UserResponse)
 async def update_user(
         user_id: int,
@@ -473,22 +463,11 @@ async def update_user(
             gender=user.gender.value if user.gender else None,
             handicap=user.handicap,
             handicap_init=user.handicap_init,
-            handicap=user.handicap,
-            handicap_init=user.handicap_init,
             average_score=user.average_score,
-            average_score_init=user.average_score_init,
-            status=user.status.value if user.status else None,
-            average_score_init=user.average_score_init,
             status=user.status.value if user.status else None,
             provider=user.provider.value if user.provider else None,
             email_verified=user.email_verified,
             needs_terms_agreement=user.needs_terms_agreement,
-            terms_agreement=user.terms_agreement,
-            privacy_policy=user.privacy_policy,
-            privacy_collection=user.privacy_collection,
-            marketing_consent=user.marketing_consent,
-            club_count=user.club_count if hasattr(user, "club_count") else 0,
-            deactivated_at=user.deactivated_at,
             terms_agreement=user.terms_agreement,
             privacy_policy=user.privacy_policy,
             privacy_collection=user.privacy_collection,
@@ -509,7 +488,6 @@ async def update_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"서버 오류: {str(e)}",
-            
         )
 
 
