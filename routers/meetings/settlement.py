@@ -27,7 +27,7 @@ from schemas import (
     RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, 
     MeetingResponse, MeetingParticipantResponse, PaginatedResponse
 )
-from routers.auth import get_current_active_user, get_current_user
+from routers.auth import get_current_active_user, get_current_authenticated_user
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from models import Notification
 from schemas import NotificationType, NotificationStatus
@@ -567,7 +567,7 @@ async def create_social_settlement(
 async def get_meeting_settlement(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: User = Depends(get_current_authenticated_user)
 ):
     """모임 정산 조회"""
     try:
@@ -1106,7 +1106,6 @@ async def get_available_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
-
 
 
 
