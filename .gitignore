@@ -4,6 +4,6 @@
 venv
 .vscode/settings.json
 dev
-scripts/apply_mock_users_to_meeting.py
-mock.py
 name.txt
+mock.py
+scripts/apply_mock_users_to_meeting.py
