@@ -29,7 +29,7 @@ from schemas import (
     MeetingResponse, MeetingParticipantResponse, PaginatedResponse,
     TeamFormationRequest, TeamFormationResponse, TeamFormationMode
 )
-from routers.auth import get_current_active_user, get_current_user
+from routers.auth import get_current_active_user, get_current_authenticated_user, get_current_user
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.handicap_calculator import process_meeting_completion
 from utils.team_formation import TeamFormationEngine
@@ -53,7 +53,7 @@ def is_application_deadline_passed(application_deadline):
 async def apply_to_meeting(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """모임 참가 신청 (일반회원/리더/매니저 구분없이)"""
     try:
@@ -170,7 +170,7 @@ async def approve_participant(
     meeting_id: int,
     participant_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """참가자 승인 (매니저/리더만 가능)"""
     try:
@@ -240,7 +240,7 @@ async def reject_participant(
     meeting_id: int,
     participant_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """참가자 거절 (매니저/리더만 가능)"""
     try:
@@ -296,7 +296,7 @@ async def reject_participant(
 async def close_application_early(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """참가 신청 조기 마감 (매니저/리더만 가능)"""
     try:
@@ -415,7 +415,7 @@ async def close_application_early(
 async def get_application_status(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: User = Depends(get_current_active_user)
 ):
     """참가 신청 현황 조회 (매니저/리더만 가능)"""
     try:
@@ -477,7 +477,7 @@ async def get_application_status(
 async def start_team_formation(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """팀 편성 시작 (모집마감 후에만 가능)"""
     try:
@@ -573,7 +573,7 @@ async def auto_form_teams(
     meeting_id: int,
     formation_request: TeamFormationRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """자동 팀 편성 (매니저/리더만 가능)"""
     try:
@@ -765,7 +765,7 @@ async def auto_form_teams(
 async def confirm_team_formation(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """팀 편성 확정 (매니저/리더만 가능)"""
     try:
@@ -834,7 +834,7 @@ async def confirm_team_member(
     team_id: int,
     member_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """팀 편성 확인 완료 (참가자 본인만 가능)"""
     try:
@@ -895,7 +895,7 @@ async def confirm_team_member(
 async def start_rounding(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: User = Depends(get_current_authenticated_user)
 ):
     """모임 진행 시작 (매니저/리더만 가능)"""
     try:
@@ -955,7 +955,7 @@ async def start_rounding(
 async def complete_rounding(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: User = Depends(get_current_authenticated_user)
 ):
     """라운딩 종료 (매니저/리더만 가능)"""
     try:
@@ -1032,7 +1032,7 @@ async def complete_rounding(
 async def complete_meeting(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """모임 완료 체크 (매니저/리더만 가능)"""
     try:
@@ -1148,7 +1148,7 @@ async def get_meeting_results(
 async def confirm_settlement(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(lambda: get_current_user(required_type=None, check_status=True))
+    current_user: dict = Depends(get_current_authenticated_user)
 ):
     """정산 확정 (매니저/리더만 가능)"""
     try:
@@ -1613,7 +1613,5 @@ async def send_meeting_completed_notification(meeting_id: int, db: Session):
     except Exception as e:
         logger.error(f"모임 완료 알림 전송 오류: {str(e)}")
         db.rollback()
-
-
 
 
