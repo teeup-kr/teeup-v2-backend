@@ -23,6 +23,7 @@ class RoundingMeetingCreate(BaseModel):
     hole_count: Optional[int] = Field(None, ge=1, le=18, description="홀 수")
     reservation_name: Optional[str] = Field(None, max_length=255, description="예약자명")
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
+    club_id: int = Field(..., ge=1, description="클럽 ID")
     team_formation_mode: Optional[str] = Field(None, max_length=50, description="팀 구성 방식")
     team_size: Optional[int] = Field(None, ge=1, description="팀 크기")
     is_private: Optional[bool] = Field(False, description="프라이빗 라운딩 여부")
@@ -158,4 +159,3 @@ class SocialMeetingCreate(BaseModel):
                 return v.replace(tzinfo=None)
             return v
         return v
-

@@ -1,6 +1,7 @@
 # 클럽 멤버 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Optional
 import logging
 
@@ -11,12 +12,115 @@ from models import User, Club, ClubMembership
 from schemas import (
     MessageResponse, ClubRole, ClubStatus, MembershipStatus,
     ClubMemberAddRequest, ClubMemberRoleUpdateRequest,
-    MemberNoteUpdate, MemberNoteResponse
+    MemberNoteUpdate, MemberNoteResponse,
+    ClubMemberSearchResponse
 )
 from routers.auth import get_current_active_user
 from utils.datetime_utils import get_kst_now
 
 router = APIRouter(prefix="/clubs", tags=["클럽 멤버 관리"])
+
+
+@router.get("/members/search", response_model=ClubMemberSearchResponse)
+async def search_members_in_my_clubs(
+    name: Optional[str] = Query(None, description="이름 검색어 (실명/닉네임 부분 일치, 비우면 전체)"),
+    limit: int = Query(100, ge=1, le=500, description="최대 반환 인원 수"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """내가 속한 클럽의 구성원 중 이름 검색"""
+    try:
+        keyword = name.strip() if name else ""
+
+        # 현재 사용자가 속한 클럽(승인된 멤버십) 조회
+        my_memberships = db.query(ClubMembership.club_id).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_([MembershipStatus.ACTIVE, "APPROVED"])
+        ).all()
+        my_club_ids = [club_id for (club_id,) in my_memberships]
+
+        if not my_club_ids:
+            response_payload = {
+                "keyword": keyword,
+                "data": [],
+                "total_clubs": 0,
+                "total_members": 0
+            }
+            print(f"[DEBUG] /clubs/members/search response: {response_payload}")
+            return response_payload
+
+        query = (
+            db.query(
+                Club.id.label("club_id"),
+                Club.display_id.label("club_display_id"),
+                Club.name.label("club_name"),
+                User.id.label("user_id"),
+                User.realname.label("realname"),
+                User.nickname.label("nickname"),
+                User.gender.label("gender"),
+                User.handicap.label("handicap"),
+                User.handicap_init.label("handicap_init"),
+            )
+            .join(ClubMembership, ClubMembership.club_id == Club.id)
+            .join(User, User.id == ClubMembership.user_id)
+            .filter(
+                Club.id.in_(my_club_ids),
+                Club.deleted_at.is_(None),
+                ClubMembership.status.in_([MembershipStatus.ACTIVE, "APPROVED"]),
+                User.deleted_at.is_(None),
+                ~User.email.like("%@guest.local"),
+                ~User.nickname.like("guest_%"),
+            )
+        )
+
+        if keyword:
+            search_term = f"%{keyword}%"
+            # name 파라미터로 realname/nickname 모두 부분 검색
+            query = query.filter(or_(User.realname.ilike(search_term), User.nickname.ilike(search_term)))
+
+        rows = query.order_by(Club.name.asc(), User.realname.asc(), User.nickname.asc()).limit(limit).all()
+
+        club_map = {}
+        for row in rows:
+            if row.club_id not in club_map:
+                club_map[row.club_id] = {
+                    "club_id": row.club_id,
+                    "club_display_id": row.club_display_id,
+                    "club_name": row.club_name,
+                    "members": []
+                }
+
+            gender_value = row.gender.value if hasattr(row.gender, "value") else row.gender
+            handicap_source = row.handicap if row.handicap is not None else row.handicap_init
+            handicap_value = float(handicap_source) if handicap_source is not None else None
+
+            club_map[row.club_id]["members"].append({
+                "id": row.user_id,
+                "name": row.realname or row.nickname or "Unknown",
+                "gender": gender_value,
+                "handicap": handicap_value,
+            })
+
+        data = list(club_map.values())
+        total_members = sum(len(club["members"]) for club in data)
+
+        response_payload = {
+            "keyword": keyword,
+            "data": data,
+            "total_clubs": len(data),
+            "total_members": total_members
+        }
+        print(f"[DEBUG] /clubs/members/search response: {response_payload}")
+        return response_payload
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"클럽 구성원 이름 검색 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
 
 @router.get("/{club_id}/members", response_model=dict)
 async def get_club_members(
