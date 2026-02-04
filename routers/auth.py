@@ -253,6 +253,19 @@ def get_current_active_user(current_user: User = Depends(get_current_user)) -> U
     return current_user
 
 
+def get_current_authenticated_user(credentials: HTTPAuthorizationCredentials = Depends(security),
+                                   db: Session = Depends(get_db)) -> Union[User, Admin]:
+    """현재 인증된 사용자 조회 (USER/ADMIN 모두 허용)"""
+    return get_current_user(credentials=credentials, db=db, required_type=None, check_status=True)
+
+
+def get_current_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security),
+                           db: Session = Depends(get_db)) -> Admin:
+    """현재 인증된 관리자 조회"""
+    current_user = get_current_user(credentials=credentials, db=db, required_type="admin", check_status=False)
+    return current_user
+
+
 def get_current_profile_completed_user(current_user: User = Depends(get_current_active_user), ) -> User:
     """
     활성 사용자 + 필수 약관 동의 + 프로필 작성 완료 사용자만 허용

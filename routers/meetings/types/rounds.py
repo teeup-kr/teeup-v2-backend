@@ -17,7 +17,7 @@ from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatu
                      MeetingParticipantRole, ClubRole, TeamFormationMode)
 from schemas import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
                      PaginatedResponse, TeamResponse, TeamMemberResponse, TeamStatus)
-from routers.auth import get_current_active_user, get_current_user, get_user_role_from_token
+from routers.auth import get_current_active_user, get_user_role_from_token
 from fastapi.security import HTTPAuthorizationCredentials
 from utils.jwt_auth import security
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
@@ -125,7 +125,6 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
             MeetingResponse(**meeting_dict,
                             club_name=meeting.club.name,
                             participant_count=participant_count,
-                            created_by=meeting.created_by,
                             created_by_name=created_by_name,
                             tee_time=tee_time))
 
@@ -148,10 +147,10 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
 
 @router.post("/", response_model=MeetingResponse)
 async def create_round(meeting_data: RoundingMeetingCreate,
-                       club_id: str = Query(..., description="클럽 ID"),
-                       current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                       current_user: User = Depends(get_current_active_user),
                        db: Session = Depends(get_db)):
     """라운딩 생성 (리더/매니저만 가능)"""
+    club_id = meeting_data.club_id
 
     # 클럽 멤버십 확인
     membership = db.query(ClubMembership).filter(
@@ -191,7 +190,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                       application_deadline=meeting_data.application_deadline,
                       team_formation_mode=meeting_data.team_formation_mode,
                       team_size=meeting_data.team_size,
-                      club_id=club_id,
+                      club_id=meeting_data.club_id,
                       status=MeetingStatus.SCHEDULED,
                       is_private=is_private,
                       created_by=current_user.id)
@@ -320,7 +319,6 @@ async def create_round(meeting_data: RoundingMeetingCreate,
     return MeetingResponse(**meeting_dict,
                            club_name=club.name,
                            participant_count=participant_count,
-                           created_by=meeting.created_by,
                            created_by_name=created_by_name,
                            tee_time=tee_time)
 
@@ -332,7 +330,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
 
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_round(meeting_id: int,
-                    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                    current_user: User = Depends(get_current_active_user),
                     db: Session = Depends(get_db)):
     """라운딩 상세 조회"""
 
@@ -391,7 +389,6 @@ async def get_round(meeting_id: int,
     return MeetingResponse(**meeting_dict,
                            club_name=meeting.club.name,
                            participant_count=participant_count,
-                           created_by=meeting.created_by,
                            created_by_name=created_by_name)
 
 
@@ -403,7 +400,7 @@ async def get_round(meeting_id: int,
 @router.put("/{meeting_id}", response_model=MeetingResponse)
 async def update_round(meeting_id: int,
                        meeting_data: MeetingUpdate,
-                       current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                       current_user: User = Depends(get_current_active_user),
                        db: Session = Depends(get_db)):
     """라운딩 수정 (매니저만 가능)"""
 
@@ -463,7 +460,6 @@ async def update_round(meeting_id: int,
     return MeetingResponse(**meeting_dict,
                            club_name=club.name,
                            participant_count=participant_count,
-                           created_by=meeting.created_by,
                            created_by_name=created_by_name)
 
 
@@ -474,7 +470,7 @@ async def update_round(meeting_id: int,
 
 @router.delete("/{meeting_id}")
 async def delete_round(meeting_id: int,
-                       current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                       current_user: User = Depends(get_current_active_user),
                        db: Session = Depends(get_db)):
     """라운딩 삭제 (매니저만 가능)"""
 
@@ -505,7 +501,7 @@ async def delete_round(meeting_id: int,
 
 @router.post("/{meeting_id}/join")
 async def join_round(meeting_id: int,
-                     current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                     current_user: User = Depends(get_current_active_user),
                      db: Session = Depends(get_db)):
     """라운딩 참가"""
 
@@ -553,7 +549,7 @@ async def join_round(meeting_id: int,
 
 @router.delete("/{meeting_id}/leave")
 async def leave_round(meeting_id: int,
-                      current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                      current_user: User = Depends(get_current_active_user),
                       db: Session = Depends(get_db)):
     """라운딩 탈퇴"""
 
@@ -582,7 +578,7 @@ async def leave_round(meeting_id: int,
 @router.get("/{meeting_id}/participants")
 async def get_round_participants(
     meeting_id: int,
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+    current_user: User = Depends(get_current_active_user),
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)):
     """라운딩 참가자 목록 조회"""
@@ -741,7 +737,7 @@ async def get_round_participants(
 
 @router.get("/{meeting_id}/teams", response_model=List[TeamResponse])
 async def get_round_teams(meeting_id: int,
-                          current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+                          current_user: User = Depends(get_current_active_user),
                           credentials: HTTPAuthorizationCredentials = Depends(security),
                           db: Session = Depends(get_db)):
     """라운딩의 팀 목록 조회"""
@@ -899,7 +895,7 @@ async def add_team_member(
     meeting_id: int,
     team_id: int,
     member_data: dict,  # { user_id: int }
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)):
     """팀 멤버 추가"""
     try:
@@ -1046,7 +1042,7 @@ async def remove_team_member(
     meeting_id: int,
     team_id: int,
     member_id: int,
-    current_user: User = Depends(lambda: get_current_user(required_type=None, check_status=True)),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)):
     """팀 멤버 제거"""
     try:
