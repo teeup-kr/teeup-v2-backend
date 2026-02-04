@@ -205,6 +205,7 @@
 
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
+| GET | `/members/search` | 내가 속한 클럽 구성원 이름 검색 | Query: `name(required), limit?(default:100,max:500)` | [ClubMemberSearchResponse](#clubmembersearchresponse) | ✅ |
 | GET | `/{club_id}/members` | 클럽 멤버 목록 조회 | Query: `status?, role?` | `{members: [], total: int}` | ✅ |
 | POST | `/{club_id}/join` | 클럽 가입 신청 | - | [MessageResponse](#messageresponse) | ✅ |
 | POST | `/{club_id}/members` | 클럽 멤버 추가 | [ClubMemberAddRequest](#clubmemberaddrequest) | [MessageResponse](#messageresponse) | ✅ |
@@ -907,6 +908,44 @@
   "updated_at": datetime (ISO 8601),
   "membership_status": "ACTIVE",
   "membership_role": "MEMBER"
+}
+```
+
+#### ClubMemberSearchResponse
+
+**사용되는 엔드포인트:**
+- [GET `/api/v1/clubs/members/search`](#4-클럽-clubs) - 내가 속한 클럽 구성원 이름 검색
+
+**요청 예시:**
+```http
+GET /api/v1/clubs/members/search?name=홍&limit=50
+Authorization: Bearer {access_token}
+```
+
+**응답 규칙:**
+- `data[].members[].handicap` 값은 `handicap`이 있으면 해당 값을 사용합니다.
+- `handicap`이 없으면 `handicap_init` 값을 `handicap` 필드로 내려줍니다.
+
+```json
+{
+  "keyword": string,
+  "data": [
+    {
+      "club_id": int,
+      "club_display_id": string (optional),
+      "club_name": string,
+      "members": [
+        {
+          "id": int,
+          "name": string,
+          "gender": string (optional),
+          "handicap": float (optional)
+        }
+      ]
+    }
+  ],
+  "total_clubs": int,
+  "total_members": int
 }
 ```
 

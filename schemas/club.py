@@ -73,6 +73,30 @@ class ClubMembersResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClubMemberSearchItem(BaseModel):
+    id: int = Field(..., description="구성원 사용자 ID")
+    name: str = Field(..., description="구성원 이름 (realname 우선, 없으면 nickname)")
+    gender: Optional[str] = Field(None, description="성별")
+    handicap: Optional[float] = Field(
+        None,
+        description="핸디캡 (handicap 우선, 없으면 handicap_init 사용)",
+    )
+
+
+class ClubMemberSearchClub(BaseModel):
+    club_id: int = Field(..., description="클럽 ID")
+    club_display_id: Optional[str] = Field(None, description="클럽 display_id")
+    club_name: str = Field(..., description="클럽 이름")
+    members: List[ClubMemberSearchItem] = Field(..., description="검색된 구성원 목록")
+
+
+class ClubMemberSearchResponse(BaseModel):
+    keyword: str = Field(..., description="검색어")
+    data: List[ClubMemberSearchClub] = Field(..., description="클럽별 검색 결과")
+    total_clubs: int = Field(..., description="검색 결과에 포함된 클럽 수")
+    total_members: int = Field(..., description="검색된 전체 구성원 수")
+
+
 class ClubMembershipResponse(BaseModel):
     id: int
     club_id: int
