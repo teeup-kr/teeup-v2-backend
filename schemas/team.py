@@ -45,7 +45,8 @@ class TeamResponse(BaseModel):
 class TeamMemberResponse(BaseModel):
     id: int
     team_id: int
-    user_id: int
+    user_id: Optional[int] = Field(None, description="일반 사용자 ID (게스트가 아닌 경우)")
+    guest_id: Optional[int] = Field(None, description="게스트 ID (게스트인 경우)")
     user_name: str
     user_nickname: str
     order: Optional[int]
@@ -99,6 +100,12 @@ class GuestResponse(BaseModel):
     created_at: datetime
     
     model_config = {"from_attributes": True}
+
+class TeamMemberAddRequest(BaseModel):
+    """팀 멤버 추가 요청 (user_id, guest_id, participant_id 중 하나 필수)"""
+    user_id: Optional[int] = Field(None, description="사용자 ID")
+    guest_id: Optional[int] = Field(None, description="게스트 ID")
+    participant_id: Optional[int] = Field(None, description="참가자 ID (MeetingParticipant.id)")
 
 class TeamFormationRequest(BaseModel):
     formation_mode: TeamFormationMode = Field(..., description="편성 모드")

@@ -82,10 +82,23 @@ class TermsType(str, enum.Enum):
     PRIVACY_COLLECTION = "PRIVACY_COLLECTION"
     MARKETING = "MARKETING"
 
+class InquiryType(str, enum.Enum):
+    GENERAL = "GENERAL"
+    TECHNICAL = "TECHNICAL"
+    BILLING = "BILLING"
+    FEATURE_REQUEST = "FEATURE_REQUEST"
+    BUG_REPORT = "BUG_REPORT"
+    ACCOUNT = "ACCOUNT"
+    PAYMENT = "PAYMENT"
+
+
 class InquiryStatus(str, enum.Enum):
+    PENDING = "PENDING"
     SUBMITTED = "SUBMITTED"
     IN_PROGRESS = "IN_PROGRESS"
     RESOLVED = "RESOLVED"
+    COMPLETED = "COMPLETED"
+    CLOSED = "CLOSED"
 
 class FeeType(str, enum.Enum):
     MONTHLY = "MONTHLY"
@@ -95,6 +108,15 @@ class ExpenseStatus(str, enum.Enum):
     PENDING = "PENDING"
     PAID = "PAID"
     CANCELED = "CANCELED"
+
+
+class ExpenseItemType(str, enum.Enum):
+    """비용 항목 타입 (그린피/캐디피/카트비/기타 = 행으로 관리)"""
+    TOTAL = "TOTAL"          # 총액 (나머지 금액 등)
+    GREEN_FEE = "GREEN_FEE"  # 그린피
+    CADDY_FEE = "CADDY_FEE"  # 캐디피
+    CART_FEE = "CART_FEE"    # 카트비
+    OTHER = "OTHER"          # 기타 (소셜 커스텀 항목 포함)
 
 class NoticeType(str, enum.Enum):
     GENERAL = "GENERAL"

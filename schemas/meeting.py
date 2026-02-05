@@ -107,10 +107,11 @@ class MeetingResponse(BaseModel):
     rounding_started_at: Optional[datetime] = None
     rounding_completed_at: Optional[datetime] = None
     settlement_confirmed: bool = False
+    is_completed: bool = False
     is_private: bool = False
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
-    
+
     model_config = {"from_attributes": True}
 
 class MeetingParticipantResponse(BaseModel):
@@ -138,7 +139,7 @@ class SocialMeetingCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="소셜 모임 이름")
     description: Optional[str] = Field(None, description="소셜 모임 설명")
     meeting_time: datetime = Field(..., description="모임 시간")
-    max_participants: Optional[int] = Field(None, ge=1, description="최대 참가자 수 (null이면 모든 클럽 멤버)")
+    max_participants: Optional[int] = Field(None, ge=0, description="최대 참가자 수 (0 또는 null이면 제한 없음)")
     venue_name: str = Field(..., min_length=1, max_length=255, description="장소명")
     social_cost: float = Field(..., ge=0, description="소셜 비용 (필수)")
     social_settlement_method: SettlementMethod = Field(..., description="소셜 정산 방법")

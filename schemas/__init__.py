@@ -41,7 +41,7 @@ from .meeting import (
 
 # 팀 관련 스키마
 from .team import (
-    TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse,
+    TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, TeamMemberAddRequest,
     GuestCreate, GuestUpdate, GuestResponse,
     TeamFormationRequest, TeamFormationResponse
 )
@@ -139,7 +139,7 @@ __all__ = [
     "RoundingMeetingCreate", "MeetingUpdate", "MeetingResponse",
     "MeetingParticipantResponse", "SocialMeetingCreate",
     # Team
-    "TeamCreate", "TeamUpdate", "TeamResponse", "TeamMemberResponse",
+    "TeamCreate", "TeamUpdate", "TeamResponse", "TeamMemberResponse", "TeamMemberAddRequest",
     "GuestCreate", "GuestUpdate", "GuestResponse",
     "TeamFormationRequest", "TeamFormationResponse",
     # Payment

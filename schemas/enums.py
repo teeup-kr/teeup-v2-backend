@@ -160,11 +160,17 @@ class InquiryType(str, Enum):
     BILLING = "BILLING"
     FEATURE_REQUEST = "FEATURE_REQUEST"
     BUG_REPORT = "BUG_REPORT"
+    ACCOUNT = "ACCOUNT"
+    PAYMENT = "PAYMENT"
+
 
 class InquiryStatus(str, Enum):
+    PENDING = "PENDING"
     SUBMITTED = "SUBMITTED"
     IN_PROGRESS = "IN_PROGRESS"
     RESOLVED = "RESOLVED"
+    COMPLETED = "COMPLETED"
+    CLOSED = "CLOSED"
 
 class Provider(str, Enum):
     LOCAL = "LOCAL"
