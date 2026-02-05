@@ -234,6 +234,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰 검증 중 오류가 발생했습니다.")
 
 
+def get_current_user_allow_both(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> Union[User, Admin]:
+    """User 또는 Admin 토큰 모두 허용 (required_type=None) - 라운딩/정산 등 공통 API용"""
+    return get_current_user(credentials, db, required_type=None, check_status=True)
+
+
 def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     """현재 활성 사용자 조회"""
     if current_user.status != UserStatus.ACTIVE:
@@ -250,44 +258,6 @@ def get_current_active_user(current_user: User = Depends(get_current_user)) -> U
                 "message": "필수 약관 동의 필요",
             },
         )
-    return current_user
-
-
-def get_current_authenticated_user(credentials: HTTPAuthorizationCredentials = Depends(security),
-                                   db: Session = Depends(get_db)) -> Union[User, Admin]:
-    """현재 인증된 사용자 조회 (USER/ADMIN 모두 허용)"""
-    return get_current_user(credentials=credentials, db=db, required_type=None, check_status=True)
-
-
-def get_current_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security),
-                           db: Session = Depends(get_db)) -> Admin:
-    """현재 인증된 관리자 조회"""
-    current_user = get_current_user(credentials=credentials, db=db, required_type="admin", check_status=False)
-    return current_user
-
-
-def get_current_profile_completed_user(current_user: User = Depends(get_current_active_user), ) -> User:
-    """
-    활성 사용자 + 필수 약관 동의 + 프로필 작성 완료 사용자만 허용
-    """
-
-    required = [
-        current_user.realname,
-        current_user.phone_number,
-        current_user.gender,
-        current_user.birthdate,
-        current_user.average_score,
-    ]
-
-    if any(field is None for field in required):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "PROFILE_NOT_COMPLETED",
-                "message": "프로필 작성이 필요합니다.",
-            },
-        )
-
     return current_user
 
 
@@ -808,7 +778,12 @@ async def get_terms_public(terms_type: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 약관 타입입니다")
 
         # 약관 타입 매핑
-        type_mapping = {'service': 'SERVICE', 'privacy': 'PRIVACY', 'marketing': 'MARKETING'}
+        type_mapping = {
+            'service': 'SERVICE',
+            'privacy': 'PRIVACY',
+            'collection': 'PRIVACY_COLLECTION',
+            'marketing': 'MARKETING',
+        }
 
         if terms_type not in type_mapping:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 약관 타입입니다")
