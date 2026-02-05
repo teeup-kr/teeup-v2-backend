@@ -356,7 +356,7 @@ class TeamFormationEngine:
             # 팀 합계 핸디캡 계산 (게스트 포함)
             total_handicap = 0.0
             for member in team_members:
-                if member.is_guest:
+                if member.guest_id is not None:
                     # 게스트는 guest_id를 통해 Guest 모델에서 핸디캡 조회
                     if member.guest_id:
                         guest = self.db.query(Guest).filter(Guest.id == member.guest_id).first()
@@ -384,8 +384,8 @@ class TeamFormationEngine:
                 # 게스트인 경우 guest_id, 일반 사용자인 경우 user_id 사용
                 team_member = TeamMember(
                     team_id=team.id,
-                    user_id=member.user_id if not member.is_guest else None,
-                    guest_id=member.guest_id if member.is_guest else None,
+                    user_id=member.user_id if member.guest_id is None else None,
+                    guest_id=member.guest_id if member.guest_id is not None else None,
                     order=j + 1
                 )
                 self.db.add(team_member)
@@ -603,15 +603,12 @@ def sort_by_handicap(participants: List[MeetingParticipant], db: Session) -> Lis
     def get_handicap_value(participant: MeetingParticipant) -> float:
         """참가자의 핸디캡 값을 반환"""
         # 게스트인 경우
-        if participant.is_guest:
+        if participant.guest_id is not None:
             # guest_id를 통해 Guest 모델에서 핸디캡 조회
             if participant.guest_id:
                 guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
                 if guest and guest.handicap is not None:
                     return float(guest.handicap)
-            # 하위 호환성: guest_handicap 필드도 확인
-            if participant.guest_handicap is not None:
-                return float(participant.guest_handicap)
             return 72.0  # 기본값 (게스트 핸디캡이 없으면 높은 값으로 처리)
         
         # 멤버인 경우
@@ -647,7 +644,7 @@ def sort_by_previous_record(participants: List[MeetingParticipant], db: Session)
     def get_net_score_value(participant: MeetingParticipant) -> Tuple[bool, float]:
         """참가자의 Net Score 값을 반환 (기록 여부, Net Score)"""
         # 게스트는 기록이 없으므로 마지막에 배치
-        if participant.is_guest:
+        if participant.guest_id is not None:
             return (False, 999.0)
         
         # 멤버인 경우 직전 대회 성적 조회
@@ -695,15 +692,12 @@ def separate_by_gender(participants: List[MeetingParticipant], db: Session) -> D
     
     for participant in participants:
         # 게스트인 경우 guest_id를 통해 Guest 모델에서 성별 조회
-        if participant.is_guest:
+        if participant.guest_id is not None:
             gender = None
             if participant.guest_id:
                 guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
                 if guest:
                     gender = guest.gender
-            # 하위 호환성: guest_gender 필드도 확인
-            if gender is None:
-                gender = participant.guest_gender
             
             if gender == Gender.MALE:
                 male_participants.append(participant)

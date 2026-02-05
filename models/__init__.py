@@ -4,7 +4,7 @@
 # Enum 클래스들
 from .enums import (UserStatus, Provider, Gender, ClubType, ClubStatus, ClubRole, MembershipStatus, MeetingStatus,
                     ParticipantStatus, ParticipantRole, ParticipantType, PaymentStatus, SubscriptionStatus,
-                    BillingCycle, TermsType, InquiryStatus, FeeType, ExpenseStatus, NoticeType, TokenRevokeReason,
+                    BillingCycle, TermsType, InquiryType, InquiryStatus, FeeType, ExpenseStatus, ExpenseItemType, NoticeType, TokenRevokeReason,
                     HandicapUpdateMethod, NotificationType, NotificationStatus)
 
 # User 관련 모델
@@ -17,8 +17,8 @@ from .admin import Admin
 from .club import (Club, ClubMembership, ClubNotice, ClubFee, RegulationCategory, Regulation, ClubRegion)
 
 # Meeting 관련 모델
-from .meeting import (Guest, Meeting, MeetingParticipant, Team, TeamMember, Expense, ExpenseParticipant, Score,
-                      UserScoreHistory, MeetingResult)
+from .meeting import (Guest, Meeting, MeetingParticipant, Team, TeamMember, Expense, ExpenseItem, ExpenseItemParticipant,
+                      Score, UserScoreHistory, MeetingResult)
 
 # Payment 관련 모델
 from .payment import Plan, Payment, UserPaymentMethod, Subscription
@@ -54,9 +54,11 @@ __all__ = [
     "SubscriptionStatus",
     "BillingCycle",
     "TermsType",
+    "InquiryType",
     "InquiryStatus",
     "FeeType",
     "ExpenseStatus",
+    "ExpenseItemType",
     "NoticeType",
     "TokenRevokeReason",
     "HandicapUpdateMethod",
@@ -82,7 +84,8 @@ __all__ = [
     "Team",
     "TeamMember",
     "Expense",
-    "ExpenseParticipant",
+    "ExpenseItem",
+    "ExpenseItemParticipant",
     "Score",
     "UserScoreHistory",
     "MeetingResult",
