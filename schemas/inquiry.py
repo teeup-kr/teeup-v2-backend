@@ -8,14 +8,12 @@ class InquiryCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="문의 제목")
     content: str = Field(..., min_length=1, description="문의 내용")
     type: InquiryType = Field(..., description="문의 타입")
-    priority: int = Field(default=1, ge=1, le=5, description="우선순위")
 
 class InquiryUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255, description="문의 제목")
     content: Optional[str] = Field(None, min_length=1, description="문의 내용")
     type: Optional[InquiryType] = Field(None, description="문의 타입")
     status: Optional[InquiryStatus] = Field(None, description="문의 상태")
-    priority: Optional[int] = Field(None, ge=1, le=5, description="우선순위")
 
 class InquiryResponse(BaseModel):
     id: int
@@ -26,7 +24,6 @@ class InquiryResponse(BaseModel):
     content: str
     type: str
     status: str
-    priority: int
     created_at: datetime
     updated_at: datetime
     
