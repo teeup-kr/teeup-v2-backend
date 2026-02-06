@@ -56,13 +56,12 @@ async def create_club(club_data: ClubCreate,
         # 시도/군구 유효성 검사 (등록 전)
         unique_gungu_codes = validate_gungu_codes(db, club_data.sido_code, club_data.gungu_codes)
 
-        # 클럽 생성 (바로 활성 상태로 생성)
+        # 클럽 생성 (바로 활성 상태로 생성) - location은 sido_code/gungu_codes로 대체
         club = Club(display_id=display_id,
                     name=club_data.name,
                     sido_code=club_data.sido_code,
                     type=club_data.type,
                     description=club_data.description,
-                    location=club_data.location,
                     contact_info=club_data.contact_info,
                     representative_name=club_data.representative_name,
                     additional_info=club_data.additional_info,
@@ -221,7 +220,6 @@ async def get_clubs(page: int = 1,
                 "type": club.type,
                 "description": club.description,
                 "member_count": actual_member_count,  # 실제 멤버 수 사용
-                "location": club.location,
                 "contact_info": club.contact_info,
                 "representative_name": representative_name,
                 "additional_info": club.additional_info,
@@ -311,7 +309,6 @@ async def get_my_clubs(page: int = 1,
                 "type": club.type.value if club.type else None,
                 "description": club.description,
                 "member_count": actual_member_count,  # 실제 멤버 수 사용
-                "location": club.location,
                 "status": club.status.value if club.status else None,
                 "my_role": membership.role.value if hasattr(membership.role, "value") else membership.role,
                 "membership_role": membership.role.value if hasattr(membership.role, "value") else membership.role,
@@ -490,8 +487,6 @@ async def update_club(club_id: str,
             club.description = club_data.description
         if club_data.member_count is not None:
             club.member_count = club_data.member_count
-        if club_data.location is not None:
-            club.location = club_data.location
         if club_data.contact_info is not None:
             club.contact_info = club_data.contact_info
         # 대표자명은 개인정보이므로 수정 불가 (제거)

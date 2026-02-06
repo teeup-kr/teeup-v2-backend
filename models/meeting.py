@@ -148,41 +148,20 @@ class TeamMember(Base):
 
 
 class Expense(Base):
+    """정산 묶음 (Expense → ExpenseItem → ExpenseItemParticipant)"""
     __tablename__ = "expenses"
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
-    title = Column(String(255), nullable=False)
-    description = Column(Text)
-    amount = Column(DECIMAL(10, 2), nullable=False)
-    total_participants = Column(Integer, nullable=False)
-    amount_per_person = Column(DECIMAL(10, 2), nullable=False)
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
     club_id = Column(Integer, ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     notes = Column(Text)
-    expense_items = Column(JSON, nullable=True)  # 소셜 정산의 비용 항목 배열
-    exclude_remaining_amount = Column(Boolean, default=False, nullable=True)  # 나머지 금액 정산 제외 여부
-    # 라운딩 정산 필드
-    green_fee = Column(DECIMAL(10, 2), nullable=True, comment="그린피")
-    caddy_fee = Column(DECIMAL(10, 2), nullable=True, comment="캐디피")
-    cart_fee = Column(DECIMAL(10, 2), nullable=True, comment="카트비")
-    other_fee = Column(DECIMAL(10, 2), nullable=True, comment="기타 비용")
-    # 필드별 정산 대상자 (JSON 배열)
-    total_cost_participants = Column(JSON, nullable=True, comment="총 비용 정산 대상자")
-    total_cost_exempted = Column(JSON, nullable=True, comment="총 비용 면제자")
-    green_fee_participants = Column(JSON, nullable=True, comment="그린피 정산 대상자")
-    green_fee_exempted = Column(JSON, nullable=True, comment="그린피 면제자")
-    cart_fee_participants = Column(JSON, nullable=True, comment="카트비 정산 대상자")
-    cart_fee_exempted = Column(JSON, nullable=True, comment="카트비 면제자")
-    caddy_fee_participants = Column(JSON, nullable=True, comment="캐디피 정산 대상자")
-    caddy_fee_exempted = Column(JSON, nullable=True, comment="캐디피 면제자")
-    other_expense_items = Column(JSON, nullable=True, comment="기타 비용 항목 배열")
-    exempted_participants = Column(JSON, nullable=True, comment="전체 면제자 목록")
-    # 회비 처리 필드
-    all_covered_by_fee = Column(Boolean, default=False, nullable=True, comment="모두 회비에서 처리")
-    green_fee_covered_by_fee = Column(Boolean, default=False, nullable=True, comment="그린피 회비에서 처리")
-    caddy_fee_covered_by_fee = Column(Boolean, default=False, nullable=True, comment="캐디피 회비에서 처리")
-    cart_fee_covered_by_fee = Column(Boolean, default=False, nullable=True, comment="카트비 회비에서 처리")
+    exclude_remaining_amount = Column(Boolean, default=False, nullable=True, comment="나머지 금액 정산 제외")
+    amount = Column(DECIMAL(10, 2), nullable=True, comment="총액 (ExpenseItem 합계 캐시)")
+    total_participants = Column(Integer, default=0, nullable=True, comment="정산 대상자 수 캐시")
+    amount_per_person = Column(DECIMAL(10, 2), nullable=True, comment="1인당 금액 캐시")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -190,29 +169,55 @@ class Expense(Base):
     meeting = relationship("Meeting", backref="expenses")
     club = relationship("Club", backref="expenses")
     creator = relationship("User", backref="created_expenses")
+    items = relationship("ExpenseItem", backref="expense", cascade="all, delete-orphan", order_by="ExpenseItem.id")
 
 
-class ExpenseParticipant(Base):
-    __tablename__ = "expense_participants"
+class ExpenseItem(Base):
+    """비용 항목 (그린피/캐디피/카트비/기타 = 행으로 관리)"""
+    __tablename__ = "expense_items"
 
-    id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
+    id = Column(Integer, primary_key=True, autoincrement=True)
     expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, comment="사용자 ID (게스트가 아닌 경우)")
-    guest_id = Column(Integer, ForeignKey("guests.id", ondelete="CASCADE"), nullable=True, comment="게스트 ID (게스트인 경우)")
-    amount_paid = Column(DECIMAL(10, 2))
-    is_paid = Column(Boolean, default=False)
-    paid_at = Column(DateTime)
+
+    type = Column(Enum(ExpenseItemType), nullable=False, comment="TOTAL/GREEN_FEE/CADDY_FEE/CART_FEE/OTHER")
+    title = Column(String(255), nullable=True, comment="OTHER 타입 시 항목명 (예: 점심비)")
+    amount = Column(DECIMAL(10, 2), nullable=False)
+    covered_by_fee = Column(Boolean, default=False, comment="회비에서 처리 여부")
+    order_index = Column(Integer, default=0, comment="표시 순서")
+
     created_at = Column(DateTime, default=func.now())
 
-    # 제약조건: user_id와 guest_id 중 하나만 존재해야 함
-    __table_args__ = (CheckConstraint(
-        '(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)',
-        name='chk_expense_user_or_guest_id'), )
+    # 관계 설정
+    participants = relationship("ExpenseItemParticipant", backref="expense_item", cascade="all, delete-orphan")
+
+
+class ExpenseItemParticipant(Base):
+    """비용 항목별 정산 대상자"""
+    __tablename__ = "expense_item_participants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    expense_item_id = Column(Integer, ForeignKey("expense_items.id", ondelete="CASCADE"), nullable=False)
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    guest_id = Column(Integer, ForeignKey("guests.id", ondelete="CASCADE"), nullable=True)
+
+    is_exempted = Column(Boolean, default=False, comment="면제 여부")
+    amount = Column(DECIMAL(10, 2), nullable=True, comment="해당 참가자 부담액")
+    amount_paid = Column(DECIMAL(10, 2), nullable=True, comment="실제 지불액")
+    is_paid = Column(Boolean, default=False)
+    paid_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)",
+            name="chk_expense_item_user_or_guest",
+        ),
+    )
 
     # 관계 설정
-    expense = relationship("Expense", backref="participants")
-    user = relationship("User", backref="expense_participations")
-    guest = relationship("Guest", backref="expense_participations", foreign_keys=[guest_id])
+    user = relationship("User", backref="expense_item_participations")
+    guest = relationship("Guest", backref="expense_item_participations", foreign_keys=[guest_id])
+
 
 
 class Score(Base):

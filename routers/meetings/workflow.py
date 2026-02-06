@@ -5,7 +5,7 @@
 - 정산 관리
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_
 from typing import List, Optional
@@ -557,6 +557,20 @@ async def confirm_team_formation(meeting_id: int,
     except Exception as e:
         logger.error(f"팀 편성 확정 오류: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+
+
+@router.post("/{meeting_id}/teams/{team_id}/members", response_model=TeamMemberResponse)
+async def add_team_member_workflow(
+    meeting_id: int,
+    team_id: int,
+    member_data: TeamMemberAddRequest = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_allow_both)
+):
+    """팀 멤버 추가 (POST /meetings/... 경로)"""
+    from routers.meetings.types.rounds import add_team_member
+    return await add_team_member(meeting_id, team_id, member_data, current_user, db)
 
 
 @router.post("/{meeting_id}/teams/{team_id}/members/{member_id}/confirm")

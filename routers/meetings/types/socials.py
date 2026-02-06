@@ -21,7 +21,7 @@ from schemas import (
     SocialMeetingCreate, MeetingUpdate, MeetingResponse,
     MeetingParticipantResponse, PaginatedResponse, MessageResponse
 )
-from routers.auth import get_current_active_user
+from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 
 router = APIRouter(prefix="/socials", tags=["소셜 모임 관리"])
@@ -38,7 +38,7 @@ async def get_socials(
     limit: int = Query(10, ge=1, le=100, description="페이지당 항목 수"),
     status: Optional[MeetingStatus] = Query(None, description="모임 상태 필터"),
     search: Optional[str] = Query(None, description="검색어"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 목록 조회"""
@@ -123,7 +123,7 @@ async def get_socials(
 @router.post("/", response_model=MeetingResponse)
 async def create_social(
     meeting_data: SocialMeetingCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 생성 (모든 멤버 가능)"""
@@ -223,7 +223,7 @@ async def create_social(
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_social(
     meeting_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 상세 조회"""
@@ -296,7 +296,7 @@ async def get_social(
 async def update_social(
     meeting_id: int,
     meeting_data: MeetingUpdate,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 수정 (매니저만 가능)"""
@@ -354,7 +354,7 @@ async def update_social(
 @router.delete("/{meeting_id}")
 async def delete_social(
     meeting_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 삭제 (매니저만 가능)"""
@@ -387,13 +387,91 @@ async def delete_social(
     return {"message": "소셜 모임이 삭제되었습니다."}
 
 # =============================================================================
+# 소셜 모임 참가자 목록 조회
+# =============================================================================
+
+@router.get("/{meeting_id}/participants")
+async def get_social_participants(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user_allow_both),
+    db: Session = Depends(get_db)
+):
+    """소셜 모임 참가자 목록 조회 (하단 참가탭용)"""
+    meeting = db.query(Meeting).filter(
+        and_(
+            Meeting.id == meeting_id,
+            Meeting.meeting_type == MeetingType.SOCIAL
+        )
+    ).first()
+
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="소셜 모임을 찾을 수 없습니다."
+        )
+
+    # 클럽 멤버십 확인
+    membership = db.query(ClubMembership).filter(
+        and_(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        )
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="해당 클럽의 멤버가 아닙니다."
+        )
+
+    # 참가자 목록 조회 (게스트 포함)
+    participants = db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting_id
+    ).all()
+
+    result = []
+    for p in participants:
+        if p.guest_id:
+            guest = db.query(Guest).filter(Guest.id == p.guest_id).first()
+            result.append({
+                "id": p.id,
+                "user_id": None,
+                "guest_id": p.guest_id,
+                "user_name": guest.name if guest else "게스트",
+                "user_nickname": guest.name if guest else "게스트",
+                "name": guest.name if guest else "게스트",
+                "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+                "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                "is_guest": True,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            })
+        else:
+            user = db.query(User).filter(User.id == p.user_id).first() if p.user_id else None
+            if user:
+                result.append({
+                    "id": p.id,
+                    "user_id": p.user_id,
+                    "guest_id": None,
+                    "user_name": user.realname or user.nickname or "이름 없음",
+                    "user_nickname": user.nickname or "닉네임 없음",
+                    "name": user.realname or user.nickname or "이름 없음",
+                    "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+                    "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                    "is_guest": False,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                })
+    return result
+
+
+# =============================================================================
 # 소셜 모임 참가/탈퇴
 # =============================================================================
 
 @router.post("/{meeting_id}/join")
 async def join_social(
     meeting_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 참가"""
@@ -436,10 +514,8 @@ async def join_social(
     ).first()
     
     if existing_participant:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="이미 참가한 소셜 모임입니다."
-        )
+        # 이미 참가한 경우에도 200 (idempotent - 프론트 반복 클릭 대응)
+        return {"message": "이미 참가한 소셜 모임입니다.", "already_joined": True}
     
     # 최대 참가자 수 확인 (max_participants가 null이면 제한 없음)
     if meeting.max_participants is not None:
@@ -468,7 +544,7 @@ async def join_social(
 @router.delete("/{meeting_id}/leave")
 async def leave_social(
     meeting_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 탈퇴"""
@@ -508,7 +584,7 @@ async def leave_social(
 async def cancel_social(
     meeting_id: int,
     reason: str,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
     """소셜 모임 취소 (매니저만 가능)"""

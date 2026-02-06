@@ -1,8 +1,10 @@
 # Inquiry 관련 모델
-from sqlalchemy import Column, String, Text, DateTime, Integer, ForeignKey, Boolean
+from sqlalchemy import Column, String, Text, DateTime, Integer, ForeignKey, Boolean, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
+from .enums import InquiryType, InquiryStatus
+
 
 class Inquiry(Base):
     __tablename__ = "inquiries"
@@ -11,9 +13,8 @@ class Inquiry(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
-    type = Column(String(50), nullable=False)
-    status = Column(String(50), default="PENDING")
-    priority = Column(Integer, default=1)
+    type = Column(Enum(InquiryType), nullable=False)
+    status = Column(Enum(InquiryStatus), default=InquiryStatus.PENDING)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     

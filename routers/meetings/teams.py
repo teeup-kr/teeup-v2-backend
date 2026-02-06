@@ -176,6 +176,7 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                         member_response = TeamMemberResponse(id=team_member.id,
                                                              team_id=team_member.team_id,
                                                              user_id=team_member.user_id,
+                                                             guest_id=team_member.guest_id,
                                                              user_name=user_name,
                                                              user_nickname=user_nickname,
                                                              order=team_member.order,
@@ -336,19 +337,13 @@ async def get_team(team_id: int, db: Session = Depends(get_db), current_user: di
         # 게스트인 경우와 멤버인 경우 구분
         if participant.guest_id:
             # guest_id를 통해 Guest 모델에서 정보 조회
-            if participant.guest_id:
-                guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
-                if guest:
-                    user_name = guest.name or "게스트"
-                    user_nickname = guest.name or "게스트"
-                else:
-                    # 하위 호환성: guest 필드 사용
-                    user_name = participant.guest_name or "게스트"
-                    user_nickname = participant.guest_name or "게스트"
+            guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
+            if guest:
+                user_name = guest.name or "게스트"
+                user_nickname = guest.name or "게스트"
             else:
-                # 하위 호환성: guest 필드 사용
-                user_name = participant.guest_name or "게스트"
-                user_nickname = participant.guest_name or "게스트"
+                user_name = "게스트"
+                user_nickname = "게스트"
         else:
             if participant.user_id:
                 user = participant.user
@@ -362,6 +357,7 @@ async def get_team(team_id: int, db: Session = Depends(get_db), current_user: di
         member_response = TeamMemberResponse(id=team_member.id,
                                              team_id=team_member.team_id,
                                              user_id=team_member.user_id,
+                                             guest_id=team_member.guest_id,
                                              user_name=user_name,
                                              user_nickname=user_nickname,
                                              order=team_member.order,
@@ -423,19 +419,13 @@ async def update_team(team_id: int,
         # 게스트인 경우와 멤버인 경우 구분
         if participant.guest_id:
             # guest_id를 통해 Guest 모델에서 정보 조회
-            if participant.guest_id:
-                guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
-                if guest:
-                    user_name = guest.name or "게스트"
-                    user_nickname = guest.name or "게스트"
-                else:
-                    # 하위 호환성: guest 필드 사용
-                    user_name = participant.guest_name or "게스트"
-                    user_nickname = participant.guest_name or "게스트"
+            guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
+            if guest:
+                user_name = guest.name or "게스트"
+                user_nickname = guest.name or "게스트"
             else:
-                # 하위 호환성: guest 필드 사용
-                user_name = participant.guest_name or "게스트"
-                user_nickname = participant.guest_name or "게스트"
+                user_name = "게스트"
+                user_nickname = "게스트"
         else:
             if participant.user_id:
                 user = participant.user
@@ -449,6 +439,7 @@ async def update_team(team_id: int,
         member_response = TeamMemberResponse(id=team_member.id,
                                              team_id=team_member.team_id,
                                              user_id=team_member.user_id,
+                                             guest_id=team_member.guest_id,
                                              user_name=user_name,
                                              user_nickname=user_nickname,
                                              order=team_member.order,
@@ -605,6 +596,7 @@ async def auto_form_teams(meeting_id: int,
             member_response = TeamMemberResponse(id=team_member.id,
                                                  team_id=team.id,
                                                  user_id=team_member.user_id,
+                                                 guest_id=team_member.guest_id,
                                                  user_name=user_name,
                                                  user_nickname=user_nickname,
                                                  order=team_member.order,

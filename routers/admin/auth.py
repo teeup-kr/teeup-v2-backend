@@ -28,7 +28,8 @@ async def admin_login(login_data: AdminLoginRequest, db: Session = Depends(get_d
     try:
         admin = verify_admin_credentials(login_data.email, login_data.password, db)
         token_payload = {"id": admin.id, "email": admin.email, "name": admin.name}
-        access_token = jwt_auth.create_access_token(token_payload)
+        # 관리자 액세스 토큰: 8시간 유효 (업무 시간 동안 세션 유지)
+        access_token = jwt_auth.create_access_token(token_payload, expires_delta=timedelta(hours=8))
         refresh_token = jwt_auth.create_refresh_token(token_payload)
         return AdminLoginResponse(
             access_token=access_token,

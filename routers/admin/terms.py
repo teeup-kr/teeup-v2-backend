@@ -42,6 +42,7 @@ def _get_default_terms_content(terms_type: str) -> str:
 TYPE_MAPPING = {
     "service": TermsType.SERVICE,
     "privacy": TermsType.PRIVACY,
+    "collection": TermsType.PRIVACY_COLLECTION,
     "privacy_collection": TermsType.PRIVACY_COLLECTION,
     "marketing": TermsType.MARKETING,
 }

@@ -2,13 +2,15 @@
 모임 참가자 관리 API
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from database import get_db
-from models import MeetingParticipant, User, Meeting, Guest
-from schemas import MessageResponse
-from routers.auth import get_current_active_user
+from models import MeetingParticipant, User, Meeting, Guest, ClubMembership
+from schemas import MessageResponse, GuestCreate
+from routers.auth import get_current_active_user, get_current_user_allow_both
+from utils.team_formation import add_guest_to_meeting
+from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 
 router = APIRouter(prefix="/meetings", tags=["모임 참가자 관리"])
 

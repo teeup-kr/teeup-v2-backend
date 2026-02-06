@@ -15,9 +15,10 @@ import logging
 
 from database import get_db
 from models import (
-    User, Club, ClubMembership, Meeting, MeetingParticipant, 
-    Team, TeamMember, Expense, ExpenseParticipant, Guest
+    User, Club, ClubMembership, Meeting, MeetingParticipant,
+    Team, TeamMember, Expense, ExpenseItem, ExpenseItemParticipant, Guest
 )
+from models.enums import ExpenseItemType
 from schemas import (
     MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod,
     MeetingStatus,
@@ -27,7 +28,7 @@ from schemas import (
     RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, 
     MeetingResponse, MeetingParticipantResponse, PaginatedResponse
 )
-from routers.auth import get_current_active_user, get_current_authenticated_user
+from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from models import Notification
 from schemas import NotificationType, NotificationStatus
@@ -194,18 +195,6 @@ async def create_rounding_settlement(
                 detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산을 생성할 수 있습니다."
             )
         
-        # 기존 정산 삭제 (수정인지 확인)
-        existing_expenses = db.query(Expense).filter(Expense.meeting_id == meeting_id).all()
-        is_edit = len(existing_expenses) > 0
-        for expense in existing_expenses:
-            # 기존 정산의 expense_participants도 함께 삭제
-            existing_participants = db.query(ExpenseParticipant).filter(
-                ExpenseParticipant.expense_id == expense.id
-            ).all()
-            for participant in existing_participants:
-                db.delete(participant)
-            db.delete(expense)
-        
         # 정산 데이터 추출
         total_cost = Decimal(str(settlement_data.get('total_cost', 0)))
         green_fee = Decimal(str(settlement_data.get('green_fee', 0)))
@@ -213,10 +202,6 @@ async def create_rounding_settlement(
         cart_fee = Decimal(str(settlement_data.get('cart_fee', 0)))
         other_fee = Decimal(str(settlement_data.get('other_fee', 0)))
         notes = settlement_data.get('notes', '')
-        
-        # 필드별 정산 대상자 추출
-        total_cost_participants = settlement_data.get('total_cost_participants', [])
-        total_cost_exempted = settlement_data.get('total_cost_exempted', [])
         green_fee_participants = settlement_data.get('green_fee_participants', [])
         green_fee_exempted = settlement_data.get('green_fee_exempted', [])
         cart_fee_participants = settlement_data.get('cart_fee_participants', [])
@@ -224,147 +209,145 @@ async def create_rounding_settlement(
         caddy_fee_participants = settlement_data.get('caddy_fee_participants', [])
         caddy_fee_exempted = settlement_data.get('caddy_fee_exempted', [])
         other_expense_items = settlement_data.get('other_expense_items', [])
-        exempted_participants = settlement_data.get('exempted_participants', [])
         exclude_remaining_amount = settlement_data.get('exclude_remaining_amount', False)
-        
-        # 회비 처리 필드 추출 (검증 전에)
         all_covered_by_fee = settlement_data.get('all_covered_by_fee', False)
         green_fee_covered_by_fee = settlement_data.get('green_fee_covered_by_fee', False)
         caddy_fee_covered_by_fee = settlement_data.get('caddy_fee_covered_by_fee', False)
         cart_fee_covered_by_fee = settlement_data.get('cart_fee_covered_by_fee', False)
-        
-        # 전체 정산 대상자 수집 (중복 제거, 회비 처리된 항목 제외)
+
         all_settlement_targets = set()
-        # 그린피: 모두 회비 처리 또는 그린피 회비 처리가 아닌 경우만 수집
         if not all_covered_by_fee and not green_fee_covered_by_fee:
             all_settlement_targets.update(green_fee_participants)
-        # 카트비: 모두 회비 처리 또는 카트비 회비 처리가 아닌 경우만 수집
         if not all_covered_by_fee and not cart_fee_covered_by_fee:
             all_settlement_targets.update(cart_fee_participants)
-        # 캐디피: 모두 회비 처리 또는 캐디피 회비 처리가 아닌 경우만 수집
         if not all_covered_by_fee and not caddy_fee_covered_by_fee:
             all_settlement_targets.update(caddy_fee_participants)
-        # 기타 비용: 모두 회비 처리가 아닌 경우만 수집
         if not all_covered_by_fee:
             for item in other_expense_items:
-                item_participants = item.get('participants', [])
-                if isinstance(item_participants, list):
-                    for participant_id in item_participants:
-                        if participant_id and participant_id != 'UNSETTLED':
-                            all_settlement_targets.add(participant_id)
-        
+                for pid in (item.get('participants') or []):
+                    if pid and pid != 'UNSETTLED':
+                        all_settlement_targets.add(pid)
+
         settlement_targets = list(all_settlement_targets)
-        
-        # 정산 대상자 수 계산
         target_count = len(settlement_targets)
-        # 모두 회비에서 처리되면 정산 대상자가 0명이어도 괜찮음
         if target_count == 0 and not exclude_remaining_amount and not all_covered_by_fee:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="정산 대상자를 선택해주세요."
-            )
-        
-        # 필수 필드별 정산 대상자 확인 (회비 처리되지 않은 경우만)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자를 선택해주세요.")
         if not all_covered_by_fee and not green_fee_covered_by_fee and len(green_fee_participants) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="그린피의 정산 대상자를 선택해주세요."
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="그린피의 정산 대상자를 선택해주세요.")
         if not all_covered_by_fee and not cart_fee_covered_by_fee and len(cart_fee_participants) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="카트비의 정산 대상자를 선택해주세요."
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="카트비의 정산 대상자를 선택해주세요.")
         if not all_covered_by_fee and not caddy_fee_covered_by_fee and len(caddy_fee_participants) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="캐디피의 정산 대상자를 선택해주세요."
-            )
-        
-        # 기타 비용 항목 검증 (모두 회비에서 처리되지 않은 경우만)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="캐디피의 정산 대상자를 선택해주세요.")
         if not all_covered_by_fee:
             for idx, item in enumerate(other_expense_items):
-                item_participants = item.get('participants', [])
-                if not item_participants or len(item_participants) == 0:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"기타 비용 항목 {idx + 1}의 정산 대상자를 선택해주세요."
-                    )
-        
-        # 1인당 비용 계산 (모두 회비에서 처리되면 0원)
+                if not (item.get('participants') or []):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"기타 비용 항목 {idx + 1}의 정산 대상자를 선택해주세요.")
+
         amount_per_person = Decimal('0') if all_covered_by_fee else (total_cost / target_count if target_count > 0 else Decimal('0'))
-        
-        # 정산 생성
-        expense = Expense(            title=f"{meeting.name} 라운딩 정산",
+
+        def _add_item_participants(expense_item, participant_ids, exempted_ids, amount_per_person_val):
+            for pid in participant_ids:
+                if pid in (exempted_ids or []):
+                    continue
+                mp = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    or_(MeetingParticipant.user_id == pid, MeetingParticipant.guest_id == pid)
+                ).first()
+                if mp:
+                    eip = ExpenseItemParticipant(
+                        expense_item_id=expense_item.id,
+                        user_id=mp.user_id,
+                        guest_id=mp.guest_id,
+                        is_exempted=False,
+                        amount=amount_per_person_val
+                    )
+                    db.add(eip)
+
+        expense = Expense(
+            title=f"{meeting.name} 라운딩 정산",
             description=f"그린피: {green_fee:,}원, 캐디피: {caddy_fee:,}원, 카트비: {cart_fee:,}원, 기타: {other_fee:,}원",
-            amount=total_cost,
-            green_fee=green_fee,
-            caddy_fee=caddy_fee,
-            cart_fee=cart_fee,
-            other_fee=other_fee,
-            total_participants=target_count,
-            amount_per_person=amount_per_person,
             meeting_id=meeting_id,
             club_id=meeting.club_id,
             created_by=current_user.id,
             notes=notes,
-            # 필드별 participants와 기타 비용 항목 저장
-            total_cost_participants=total_cost_participants,
-            total_cost_exempted=total_cost_exempted if total_cost_exempted else [],
-            green_fee_participants=green_fee_participants,
-            green_fee_exempted=green_fee_exempted if green_fee_exempted else [],
-            cart_fee_participants=cart_fee_participants,
-            cart_fee_exempted=cart_fee_exempted if cart_fee_exempted else [],
-            caddy_fee_participants=caddy_fee_participants,
-            caddy_fee_exempted=caddy_fee_exempted if caddy_fee_exempted else [],
-            other_expense_items=other_expense_items if other_expense_items else [],
-            exempted_participants=exempted_participants if exempted_participants else [],
             exclude_remaining_amount=exclude_remaining_amount,
-            # 회비 처리 필드
-            all_covered_by_fee=all_covered_by_fee,
-            green_fee_covered_by_fee=green_fee_covered_by_fee,
-            caddy_fee_covered_by_fee=caddy_fee_covered_by_fee,
-            cart_fee_covered_by_fee=cart_fee_covered_by_fee
         )
-        
         db.add(expense)
-        db.flush()  # ID 생성
-        
-        # 정산 대상자별 비용 정산 생성 (게스트 지원)
-        logger.info(f"라운딩 정산 생성 - settlement_targets: {settlement_targets}, target_count: {target_count}")
-        for target_id in settlement_targets:
-            # MeetingParticipant 조회하여 user_id 또는 guest_id 설정
-            meeting_participant = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting_id,
-                or_(
-                    MeetingParticipant.user_id == target_id,
-                    MeetingParticipant.guest_id == target_id
-                )
-            ).first()
-            
-            if meeting_participant:
-                if meeting_participant.guest_id:
-                    expense_participant = ExpenseParticipant(
-                        expense_id=expense.id,
-                        user_id=None,
-                        guest_id=meeting_participant.guest_id
-                    )
-                    logger.info(f"라운딩 정산 생성 - ExpenseParticipant 생성: guest_id={meeting_participant.guest_id}")
-                else:
-                    expense_participant = ExpenseParticipant(
-                        expense_id=expense.id,
-                        user_id=meeting_participant.user_id,
-                        guest_id=None
-                    )
-                    logger.info(f"라운딩 정산 생성 - ExpenseParticipant 생성: user_id={meeting_participant.user_id}")
-                db.add(expense_participant)
-        
+        db.flush()
+
+        order_idx = 0
+        if green_fee > 0:
+            gf_item = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.GREEN_FEE,
+                amount=green_fee,
+                covered_by_fee=green_fee_covered_by_fee,
+                order_index=order_idx,
+            )
+            db.add(gf_item)
+            db.flush()
+            if not green_fee_covered_by_fee and green_fee_participants:
+                amt = green_fee / len(green_fee_participants)
+                _add_item_participants(gf_item, green_fee_participants, green_fee_exempted, amt)
+            order_idx += 1
+
+        if caddy_fee > 0:
+            cf_item = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.CADDY_FEE,
+                amount=caddy_fee,
+                covered_by_fee=caddy_fee_covered_by_fee,
+                order_index=order_idx,
+            )
+            db.add(cf_item)
+            db.flush()
+            if not caddy_fee_covered_by_fee and caddy_fee_participants:
+                amt = caddy_fee / len(caddy_fee_participants)
+                _add_item_participants(cf_item, caddy_fee_participants, caddy_fee_exempted, amt)
+            order_idx += 1
+
+        if cart_fee > 0:
+            crf_item = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.CART_FEE,
+                amount=cart_fee,
+                covered_by_fee=cart_fee_covered_by_fee,
+                order_index=order_idx,
+            )
+            db.add(crf_item)
+            db.flush()
+            if not cart_fee_covered_by_fee and cart_fee_participants:
+                amt = cart_fee / len(cart_fee_participants)
+                _add_item_participants(crf_item, cart_fee_participants, cart_fee_exempted, amt)
+            order_idx += 1
+
+        for oi in (other_expense_items or []):
+            amt = Decimal(str(oi.get('amount', 0)))
+            if amt <= 0:
+                continue
+            participants = oi.get('participants') or []
+            title = oi.get('title') or oi.get('name') or '기타 비용'
+            other_item = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.OTHER,
+                title=title,
+                amount=amt,
+                covered_by_fee=False,
+                order_index=order_idx,
+            )
+            db.add(other_item)
+            db.flush()
+            if participants:
+                per_amt = amt / len(participants)
+                _add_item_participants(other_item, participants, [], per_amt)
+            order_idx += 1
+
         db.commit()
-        logger.info(f"라운딩 정산 생성 완료 - expense.id: {expense.id}, 생성된 ExpenseParticipant 수: {len(settlement_targets)}")
+        logger.info(f"라운딩 정산 생성 완료 - expense.id: {expense.id}")
         
         # 정산 생성/수정 완료 알림 전송
         try:
-            send_settlement_created_notification(meeting_id, db, is_edit=is_edit)
+            send_settlement_created_notification(meeting_id, db, is_edit=False)
         except Exception as e:
             logger.error(f"정산 생성 알림 전송 실패: {str(e)}")
         
@@ -426,106 +409,93 @@ async def create_social_settlement(
                 detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산을 생성할 수 있습니다."
             )
         
-        # 기존 정산 삭제 (수정인지 확인)
-        existing_expenses = db.query(Expense).filter(Expense.meeting_id == meeting_id).all()
-        is_edit = len(existing_expenses) > 0
-        for expense in existing_expenses:
-            db.delete(expense)
-        
-        # 정산 데이터 추출
-        expense_items = settlement_data.get('expense_items', [])
+        expense_items_data = settlement_data.get('expense_items', [])
         settlement_targets = settlement_data.get('settlement_targets', [])
         notes = settlement_data.get('notes', '')
         exclude_remaining_amount = settlement_data.get('exclude_remaining_amount', False)
-        
-        # 입력 데이터 확인 로그
-        logger.info(f"소셜 정산 생성 요청 데이터 - expense_items: {expense_items}, type: {type(expense_items)}, len: {len(expense_items) if isinstance(expense_items, list) else 'N/A'}")
-        logger.info(f"소셜 정산 생성 요청 데이터 - settlement_targets: {settlement_targets}, exclude_remaining_amount: {exclude_remaining_amount}")
-        
-        # 총 비용 계산: total_cost 필드 우선 사용, 없으면 expense_items 합계
+
         total_cost = settlement_data.get('total_cost')
         if total_cost is None:
-            total_cost = sum(Decimal(str(item.get('amount', 0))) for item in expense_items)
+            total_cost = sum(Decimal(str(item.get('amount', 0))) for item in expense_items_data)
         else:
             total_cost = Decimal(str(total_cost))
-        
-        # 정산 대상자 수 계산
+
         target_count = len(settlement_targets)
-        
-        # exclude_remaining_amount가 false일 때만 settlement_targets 검증
         if not exclude_remaining_amount and target_count == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="정산 대상자를 선택해주세요."
-            )
-        
-        # 1인당 비용 계산 (exclude_remaining_amount가 true이거나 target_count가 0이면 0)
-        if exclude_remaining_amount or target_count == 0:
-            amount_per_person = Decimal('0')
-        else:
-            amount_per_person = total_cost / target_count
-        
-        # 정산 생성
-        logger.info(f"소셜 정산 생성 - expense_items: {expense_items}, exclude_remaining_amount: {exclude_remaining_amount}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자를 선택해주세요.")
+
+        amount_per_person = Decimal('0') if (exclude_remaining_amount or target_count == 0) else total_cost / target_count
+
+        def _add_social_participants(expense_item, participant_ids, amount_per_person_val):
+            for pid in participant_ids:
+                mp = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    or_(MeetingParticipant.user_id == pid, MeetingParticipant.guest_id == pid)
+                ).first()
+                if mp:
+                    eip = ExpenseItemParticipant(
+                        expense_item_id=expense_item.id,
+                        user_id=mp.user_id,
+                        guest_id=mp.guest_id,
+                        is_exempted=False,
+                        amount=amount_per_person_val
+                    )
+                    db.add(eip)
+
         expense = Expense(
             title=f"{meeting.name} 소셜 모임 정산",
-            description=f"총 {len(expense_items)}개 항목",
-            amount=total_cost,
-            total_participants=target_count,
-            amount_per_person=amount_per_person,
+            description=f"총 {len(expense_items_data)}개 항목",
             meeting_id=meeting_id,
             club_id=meeting.club_id,
             created_by=current_user.id,
             notes=notes,
-            expense_items=expense_items,  # 비용 항목 배열 저장
-            exclude_remaining_amount=exclude_remaining_amount  # 나머지 금액 정산 제외 여부 저장
+            exclude_remaining_amount=exclude_remaining_amount,
         )
-        
         db.add(expense)
-        db.flush()  # ID 생성
-        
-        # 저장된 데이터 확인
-        logger.info(f"소셜 정산 저장 후 - expense.expense_items: {expense.expense_items}, expense.exclude_remaining_amount: {expense.exclude_remaining_amount}")
-        
-        # 정산 대상자별 비용 정산 생성 (게스트 지원)
-        logger.info(f"소셜 정산 생성 - settlement_targets: {settlement_targets}, target_count: {target_count}")
-        for target_id in settlement_targets:
-            # MeetingParticipant 조회하여 user_id 또는 guest_id 설정
-            meeting_participant = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting_id,
-                or_(
-                    MeetingParticipant.user_id == target_id,
-                    MeetingParticipant.guest_id == target_id
-                )
-            ).first()
-            
-            if meeting_participant:
-                if meeting_participant.guest_id:
-                    expense_participant = ExpenseParticipant(
-                        expense_id=expense.id,
-                        user_id=None,
-                        guest_id=meeting_participant.guest_id
-                    )
-                    logger.info(f"소셜 정산 생성 - ExpenseParticipant 생성: guest_id={meeting_participant.guest_id}")
-                else:
-                    expense_participant = ExpenseParticipant(
-                        expense_id=expense.id,
-                        user_id=meeting_participant.user_id,
-                        guest_id=None
-                    )
-                    logger.info(f"소셜 정산 생성 - ExpenseParticipant 생성: user_id={meeting_participant.user_id}")
-                db.add(expense_participant)
-        
+        db.flush()
+
+        for idx, item in enumerate(expense_items_data or []):
+            amt = Decimal(str(item.get('amount', 0)))
+            if amt <= 0:
+                continue
+            participants = item.get('participants') or []
+            title = item.get('title') or item.get('name') or f"항목 {idx + 1}"
+            ei = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.OTHER,
+                title=title,
+                amount=amt,
+                covered_by_fee=False,
+                order_index=idx,
+            )
+            db.add(ei)
+            db.flush()
+            if participants:
+                per_amt = amt / len(participants)
+                _add_social_participants(ei, participants, per_amt)
+
+        items_sum = sum(Decimal(str(i.get('amount', 0))) for i in (expense_items_data or []))
+        remaining = total_cost - items_sum
+        if remaining > 0 and not exclude_remaining_amount and settlement_targets:
+            total_item = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.TOTAL,
+                title="나머지 금액",
+                amount=remaining,
+                covered_by_fee=False,
+                order_index=999,
+            )
+            db.add(total_item)
+            db.flush()
+            per_amt = remaining / len(settlement_targets)
+            _add_social_participants(total_item, settlement_targets, per_amt)
+
         db.commit()
-        logger.info(f"소셜 정산 생성 완료 - expense.id: {expense.id}, 생성된 ExpenseParticipant 수: {len(settlement_targets)}")
-        
-        # commit 후 실제 저장된 데이터 확인 (DB에서 다시 조회)
-        db.refresh(expense)
-        logger.info(f"소셜 정산 commit 후 - expense.expense_items: {expense.expense_items}, type: {type(expense.expense_items)}, expense.exclude_remaining_amount: {expense.exclude_remaining_amount}")
+        logger.info(f"소셜 정산 생성 완료 - expense.id: {expense.id}")
         
         # 정산 생성/수정 완료 알림 전송
         try:
-            send_settlement_created_notification(meeting_id, db, is_edit=is_edit)
+            send_settlement_created_notification(meeting_id, db, is_edit=False)
         except Exception as e:
             logger.error(f"정산 생성 알림 전송 실패: {str(e)}")
         
@@ -550,11 +520,137 @@ async def create_social_settlement(
 # 정산 조회 API
 # =============================================================================
 
+
+def _build_settlement_response(meeting_id: int, db: Session) -> dict:
+    """정산 데이터 조회 (권한 체크 없음) - admin 등에서 재사용"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+    expense = db.query(Expense).options(joinedload(Expense.items)).filter(Expense.meeting_id == meeting_id).first()
+    if not expense:
+        return {"settlement": None}
+
+    total_cost = sum(float(item.amount or 0) for item in expense.items)
+    all_eips = []
+    for item in expense.items:
+        eips = db.query(ExpenseItemParticipant).options(
+            joinedload(ExpenseItemParticipant.user), joinedload(ExpenseItemParticipant.guest)
+        ).filter(ExpenseItemParticipant.expense_item_id == item.id).all()
+        all_eips.extend(eips)
+
+    seen = set()
+    participant_list = []
+    settlement_targets = []
+    for ep in all_eips:
+        key = (ep.user_id, ep.guest_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        if ep.guest_id:
+            g = ep.guest
+            participant_list.append({
+                "id": ep.id, "user_id": None, "guest_id": ep.guest_id,
+                "user_name": g.name if g else "게스트", "user_email": None, "is_guest": True,
+                "amount_paid": float(ep.amount_paid or 0), "is_paid": ep.is_paid or False,
+                "paid_at": ep.paid_at.isoformat() if ep.paid_at else None, "is_settlement_target": True,
+            })
+            settlement_targets.append(ep.guest_id)
+        else:
+            u = ep.user
+            participant_list.append({
+                "id": ep.id, "user_id": u.id if u else None, "guest_id": None,
+                "user_name": u.nickname if u else "알 수 없음", "user_email": u.email if u else None, "is_guest": False,
+                "amount_paid": float(ep.amount_paid or 0), "is_paid": ep.is_paid or False,
+                "paid_at": ep.paid_at.isoformat() if ep.paid_at else None, "is_settlement_target": True,
+            })
+            if u:
+                settlement_targets.append(u.id)
+
+    amount_per_person = total_cost / len(settlement_targets) if settlement_targets else 0
+    settlement_data = {
+        "id": expense.id, "title": expense.title, "description": expense.description,
+        "total_cost": total_cost, "amount_per_person": amount_per_person,
+        "total_participants": len(settlement_targets), "notes": expense.notes,
+        "created_at": expense.created_at, "participants": participant_list, "settlement_targets": settlement_targets,
+    }
+    meeting_type_val = meeting.meeting_type.value if hasattr(meeting.meeting_type, "value") else str(meeting.meeting_type)
+
+    if meeting_type_val == "SOCIAL":
+        settlement_data["exclude_remaining_amount"] = bool(expense.exclude_remaining_amount)
+        expense_items_api = []
+        for item in sorted(expense.items, key=lambda x: x.order_index):
+            if item.type == ExpenseItemType.TOTAL:
+                continue
+            pids = []
+            for eip in db.query(ExpenseItemParticipant).filter(ExpenseItemParticipant.expense_item_id == item.id).all():
+                if eip.user_id:
+                    pids.append(eip.user_id)
+                elif eip.guest_id:
+                    pids.append(eip.guest_id)
+            expense_items_api.append({
+                "id": item.id, "title": item.title or "항목", "amount": float(item.amount or 0),
+                "participants": pids,
+            })
+        settlement_data["expense_items"] = expense_items_api
+
+    if meeting_type_val == "ROUND":
+        green_fee = caddy_fee = cart_fee = other_fee = Decimal("0")
+        green_fee_participants = green_fee_exempted = []
+        caddy_fee_participants = caddy_fee_exempted = []
+        cart_fee_participants = cart_fee_exempted = []
+        other_expense_items = []
+        green_covered = caddy_covered = cart_covered = False
+        for item in expense.items:
+            amt = float(item.amount or 0)
+            pids = []
+            for eip in db.query(ExpenseItemParticipant).filter(ExpenseItemParticipant.expense_item_id == item.id).all():
+                if not eip.is_exempted:
+                    if eip.user_id:
+                        pids.append(eip.user_id)
+                    elif eip.guest_id:
+                        pids.append(eip.guest_id)
+            t = item.type.value if hasattr(item.type, "value") else str(item.type)
+            if t == "GREEN_FEE":
+                green_fee = amt
+                green_fee_participants = pids
+                green_covered = bool(item.covered_by_fee)
+            elif t == "CADDY_FEE":
+                caddy_fee = amt
+                caddy_fee_participants = pids
+                caddy_covered = bool(item.covered_by_fee)
+            elif t == "CART_FEE":
+                cart_fee = amt
+                cart_fee_participants = pids
+                cart_covered = bool(item.covered_by_fee)
+            elif t == "OTHER":
+                other_expense_items.append({"title": item.title or "기타", "amount": amt, "participants": pids})
+                other_fee += amt
+        settlement_data["green_fee"] = green_fee
+        settlement_data["caddy_fee"] = caddy_fee
+        settlement_data["cart_fee"] = cart_fee
+        settlement_data["other_fee"] = other_fee
+        settlement_data["green_fee_participants"] = green_fee_participants
+        settlement_data["green_fee_exempted"] = green_fee_exempted
+        settlement_data["caddy_fee_participants"] = caddy_fee_participants
+        settlement_data["caddy_fee_exempted"] = caddy_fee_exempted
+        settlement_data["cart_fee_participants"] = cart_fee_participants
+        settlement_data["cart_fee_exempted"] = cart_fee_exempted
+        settlement_data["other_expense_items"] = other_expense_items
+        settlement_data["total_cost_participants"] = settlement_targets
+        settlement_data["total_cost_exempted"] = []
+        settlement_data["exempted_participants"] = []
+        settlement_data["all_covered_by_fee"] = False
+        settlement_data["green_fee_covered_by_fee"] = green_covered
+        settlement_data["caddy_fee_covered_by_fee"] = caddy_covered
+        settlement_data["cart_fee_covered_by_fee"] = cart_covered
+    return {"settlement": settlement_data}
+
+
 @router.get("/{meeting_id}/settlement")
 async def get_meeting_settlement(
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_authenticated_user)
+    current_user: User = Depends(get_current_user_allow_both)
 ):
     """모임 정산 조회"""
     try:
@@ -609,206 +705,7 @@ async def get_meeting_settlement(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="클럽 멤버만 정산을 조회할 수 있습니다."
                     )
-        
-        # 정산 조회
-        expense = db.query(Expense).filter(Expense.meeting_id == meeting_id).first()
-        
-        if not expense:
-            return {"settlement": None}
-        
-        # 조회된 데이터 확인
-        logger.info(f"정산 조회 - expense.id: {expense.id}, expense.expense_items: {expense.expense_items}, expense.exclude_remaining_amount: {expense.exclude_remaining_amount}")
-        
-        # 정산 대상자 조회 (게스트 포함)
-        participants = db.query(ExpenseParticipant).options(
-            joinedload(ExpenseParticipant.user),
-            joinedload(ExpenseParticipant.guest)
-        ).filter(ExpenseParticipant.expense_id == expense.id).all()
-        
-        logger.info(f"정산 조회 - ExpenseParticipant 수: {len(participants)}")
-        
-        participant_list = []
-        settlement_targets = []  # 정산 대상자 user_id 또는 guest_id 배열
-        
-        # ExpenseParticipant 모델에 is_settlement_target 필드가 없으므로
-        # 모든 ExpenseParticipant를 정산 대상자로 간주
-        for expense_participant in participants:
-            if expense_participant.guest_id:
-                # 게스트인 경우
-                guest = expense_participant.guest
-                participant_data = {
-                    "id": expense_participant.id,
-                    "user_id": None,
-                    "guest_id": expense_participant.guest_id,
-                    "user_name": guest.name if guest else "게스트",
-                    "user_email": None,
-                    "is_guest": True,
-                    "amount_paid": float(expense_participant.amount_paid) if expense_participant.amount_paid else 0,
-                    "is_paid": expense_participant.is_paid,
-                    "paid_at": expense_participant.paid_at.isoformat() if expense_participant.paid_at else None,
-                    "is_settlement_target": True,
-                }
-                settlement_targets.append(expense_participant.guest_id)
-            else:
-                # 일반 사용자인 경우
-                user = expense_participant.user
-                participant_data = {
-                    "id": expense_participant.id,
-                    "user_id": user.id if user else None,
-                    "guest_id": None,
-                    "user_name": user.nickname if user else "알 수 없음",
-                    "user_email": user.email if user else None,
-                    "is_guest": False,
-                    "amount_paid": float(expense_participant.amount_paid) if expense_participant.amount_paid else 0,
-                    "is_paid": expense_participant.is_paid,
-                    "paid_at": expense_participant.paid_at.isoformat() if expense_participant.paid_at else None,
-                    "is_settlement_target": True,
-                }
-                if user:
-                    settlement_targets.append(user.id)
-            
-            # 존재하는 필드만 추가
-            if hasattr(expense_participant, 'amount_due'):
-                participant_data["amount_due"] = float(expense_participant.amount_due) if expense_participant.amount_due else 0
-            if hasattr(expense_participant, 'status'):
-                participant_data["status"] = expense_participant.status
-            if hasattr(expense_participant, 'notes'):
-                participant_data["notes"] = expense_participant.notes
-            
-            participant_list.append(participant_data)
-        
-        # 정산 대상자 수 계산: 모든 ExpenseParticipant를 정산 대상자로 간주
-        total_participants_count = len(participants)
-        logger.info(f"정산 조회 - total_participants_count: {total_participants_count}, settlement_targets: {len(settlement_targets)}")
-        
-        # 기본 정산 정보
-        settlement_data = {
-            "id": expense.id,            "title": expense.title,
-            "description": expense.description,
-            "total_cost": float(expense.amount),
-            "amount_per_person": float(expense.amount_per_person),
-            "total_participants": total_participants_count,  # 실제 정산 대상자 수 사용
-            "notes": expense.notes,
-            "created_at": expense.created_at,
-            "participants": participant_list,
-            "settlement_targets": settlement_targets  # 정산 대상자 user_id 배열
-        }
-        
-        # 소셜 정산일 때 expense_items와 exclude_remaining_amount 포함
-        if meeting.meeting_type == MeetingType.SOCIAL:
-            # expense_items는 항상 배열로 반환 (None이면 빈 배열)
-            logger.info(f"정산 조회 - expense.expense_items: {expense.expense_items}, type: {type(expense.expense_items)}, is None: {expense.expense_items is None}")
-            logger.info(f"정산 조회 - hasattr(expense, 'expense_items'): {hasattr(expense, 'expense_items')}")
-            
-            # expense_items 처리
-            if hasattr(expense, 'expense_items'):
-                if expense.expense_items is None:
-                    settlement_data["expense_items"] = []
-                    logger.info("정산 조회 - expense.expense_items가 None이므로 빈 배열로 설정")
-                elif isinstance(expense.expense_items, (list, dict)):
-                    # JSON 필드가 이미 Python 객체로 역직렬화되어 있음
-                    if isinstance(expense.expense_items, dict):
-                        # dict인 경우 (잘못된 형식) 빈 배열로 처리
-                        logger.warning(f"정산 조회 - expense.expense_items가 dict 형식입니다: {expense.expense_items}")
-                        settlement_data["expense_items"] = []
-                    else:
-                        settlement_data["expense_items"] = expense.expense_items
-                        logger.info(f"정산 조회 - expense.expense_items를 그대로 사용: {settlement_data['expense_items']}")
-                else:
-                    # 문자열인 경우 JSON 파싱 시도
-                    logger.warning(f"정산 조회 - expense.expense_items가 예상치 못한 형식입니다: {type(expense.expense_items)}")
-                    settlement_data["expense_items"] = []
-            else:
-                settlement_data["expense_items"] = []
-                logger.info("정산 조회 - expense에 expense_items 속성이 없음")
-            
-            # exclude_remaining_amount는 Boolean 또는 None
-            logger.info(f"정산 조회 - expense.exclude_remaining_amount: {expense.exclude_remaining_amount}, type: {type(expense.exclude_remaining_amount)}, is None: {expense.exclude_remaining_amount is None if hasattr(expense, 'exclude_remaining_amount') else 'N/A'}")
-            if hasattr(expense, 'exclude_remaining_amount'):
-                settlement_data["exclude_remaining_amount"] = expense.exclude_remaining_amount if expense.exclude_remaining_amount is not None else False
-            else:
-                settlement_data["exclude_remaining_amount"] = False
-                logger.info("정산 조회 - expense에 exclude_remaining_amount 속성이 없음")
-            
-            logger.info(f"정산 조회 최종 응답 - expense_items: {settlement_data['expense_items']}, exclude_remaining_amount: {settlement_data['exclude_remaining_amount']}")
-            
-            # exclude_remaining_amount가 true이고 ExpenseParticipant가 없을 때
-            # expense_items의 participants를 기반으로 total_participants 계산
-            if settlement_data.get('exclude_remaining_amount') and total_participants_count == 0:
-                expense_items = settlement_data.get('expense_items', [])
-                if expense_items:
-                    all_participants_from_items = set()
-                    for item in expense_items:
-                        item_participants = item.get('participants', [])
-                        if isinstance(item_participants, list):
-                            for participant_id in item_participants:
-                                if participant_id and participant_id != 'UNSETTLED':
-                                    all_participants_from_items.add(participant_id)
-                    
-                    if all_participants_from_items:
-                        total_participants_count = len(all_participants_from_items)
-                        settlement_targets = list(all_participants_from_items)
-                        settlement_data["total_participants"] = total_participants_count
-                        settlement_data["settlement_targets"] = settlement_targets
-                        logger.info(f"정산 조회 - exclude_remaining_amount=true이고 ExpenseParticipant가 없어서 expense_items 기반으로 계산: total_participants={total_participants_count}, settlement_targets={settlement_targets}")
-        
-        # 라운딩 정산일 때만 추가 필드 포함
-        if meeting.meeting_type == MeetingType.ROUND:
-            # Expense 모델에 해당 필드가 있는지 확인 후 포함
-            if hasattr(expense, 'green_fee'):
-                settlement_data["green_fee"] = float(expense.green_fee) if expense.green_fee else 0
-            if hasattr(expense, 'caddy_fee'):
-                settlement_data["caddy_fee"] = float(expense.caddy_fee) if expense.caddy_fee else 0
-            if hasattr(expense, 'cart_fee'):
-                settlement_data["cart_fee"] = float(expense.cart_fee) if expense.cart_fee else 0
-            if hasattr(expense, 'other_fee'):
-                settlement_data["other_fee"] = float(expense.other_fee) if expense.other_fee else 0
-            if hasattr(expense, 'status'):
-                settlement_data["status"] = expense.status
-            
-            # 필드별 정산 대상자 포함
-            if hasattr(expense, 'total_cost_participants'):
-                settlement_data["total_cost_participants"] = expense.total_cost_participants if expense.total_cost_participants else []
-            if hasattr(expense, 'total_cost_exempted'):
-                settlement_data["total_cost_exempted"] = expense.total_cost_exempted if expense.total_cost_exempted else []
-            if hasattr(expense, 'green_fee_participants'):
-                settlement_data["green_fee_participants"] = expense.green_fee_participants if expense.green_fee_participants else []
-            if hasattr(expense, 'green_fee_exempted'):
-                settlement_data["green_fee_exempted"] = expense.green_fee_exempted if expense.green_fee_exempted else []
-            if hasattr(expense, 'cart_fee_participants'):
-                settlement_data["cart_fee_participants"] = expense.cart_fee_participants if expense.cart_fee_participants else []
-            if hasattr(expense, 'cart_fee_exempted'):
-                settlement_data["cart_fee_exempted"] = expense.cart_fee_exempted if expense.cart_fee_exempted else []
-            if hasattr(expense, 'caddy_fee_participants'):
-                settlement_data["caddy_fee_participants"] = expense.caddy_fee_participants if expense.caddy_fee_participants else []
-            if hasattr(expense, 'caddy_fee_exempted'):
-                settlement_data["caddy_fee_exempted"] = expense.caddy_fee_exempted if expense.caddy_fee_exempted else []
-            if hasattr(expense, 'other_expense_items'):
-                settlement_data["other_expense_items"] = expense.other_expense_items if expense.other_expense_items else []
-            if hasattr(expense, 'exempted_participants'):
-                settlement_data["exempted_participants"] = expense.exempted_participants if expense.exempted_participants else []
-            
-            # 회비 처리 필드 포함
-            if hasattr(expense, 'all_covered_by_fee'):
-                settlement_data["all_covered_by_fee"] = expense.all_covered_by_fee if expense.all_covered_by_fee is not None else False
-            else:
-                settlement_data["all_covered_by_fee"] = False
-            if hasattr(expense, 'green_fee_covered_by_fee'):
-                settlement_data["green_fee_covered_by_fee"] = expense.green_fee_covered_by_fee if expense.green_fee_covered_by_fee is not None else False
-            else:
-                settlement_data["green_fee_covered_by_fee"] = False
-            if hasattr(expense, 'caddy_fee_covered_by_fee'):
-                settlement_data["caddy_fee_covered_by_fee"] = expense.caddy_fee_covered_by_fee if expense.caddy_fee_covered_by_fee is not None else False
-            else:
-                settlement_data["caddy_fee_covered_by_fee"] = False
-            if hasattr(expense, 'cart_fee_covered_by_fee'):
-                settlement_data["cart_fee_covered_by_fee"] = expense.cart_fee_covered_by_fee if expense.cart_fee_covered_by_fee is not None else False
-            else:
-                settlement_data["cart_fee_covered_by_fee"] = False
-        
-        return {
-            "settlement": settlement_data
-        }
+        return _build_settlement_response(meeting_id, db)
         
     except HTTPException:
         raise
@@ -863,151 +760,49 @@ async def get_my_settlement(
                 detail="정산 정보를 찾을 수 없습니다."
             )
         
-        # 현재 사용자의 ExpenseParticipant 조회
-        expense_participant = db.query(ExpenseParticipant).filter(
-            ExpenseParticipant.expense_id == expense.id,
-            ExpenseParticipant.user_id == current_user.id
-        ).first()
-        
-        amount_paid = float(expense_participant.amount_paid) if expense_participant and expense_participant.amount_paid else 0
-        is_paid = expense_participant.is_paid if expense_participant else False
-        
+        user_id = current_user.id
         items = []
         total_amount_due_decimal = Decimal('0')
-        
-        if meeting.meeting_type == MeetingType.ROUND:
-            # 라운딩 정산: 필드별로 사용자가 포함된 항목만 계산
-            user_id = current_user.id
-            
-            # 그린피
-            green_fee_participants = expense.green_fee_participants if expense.green_fee_participants else []
-            green_fee_exempted = expense.green_fee_exempted if expense.green_fee_exempted else []
-            if user_id in green_fee_participants and user_id not in green_fee_exempted:
-                green_fee = Decimal(str(expense.green_fee)) if expense.green_fee else Decimal('0')
-                participants_count = len([p for p in green_fee_participants if p not in green_fee_exempted])
-                if participants_count > 0:
-                    my_green_fee = green_fee / participants_count
-                    total_amount_due_decimal += my_green_fee
-                    items.append({
-                        "type": "green_fee",
-                        "name": "그린피",
-                        "amount": float(green_fee),
-                        "participants_count": participants_count,
-                        "my_amount": float(my_green_fee)
-                    })
-            
-            # 카트비
-            cart_fee_participants = expense.cart_fee_participants if expense.cart_fee_participants else []
-            cart_fee_exempted = expense.cart_fee_exempted if expense.cart_fee_exempted else []
-            if user_id in cart_fee_participants and user_id not in cart_fee_exempted:
-                cart_fee = Decimal(str(expense.cart_fee)) if expense.cart_fee else Decimal('0')
-                participants_count = len([p for p in cart_fee_participants if p not in cart_fee_exempted])
-                if participants_count > 0:
-                    my_cart_fee = cart_fee / participants_count
-                    total_amount_due_decimal += my_cart_fee
-                    items.append({
-                        "type": "cart_fee",
-                        "name": "카트비",
-                        "amount": float(cart_fee),
-                        "participants_count": participants_count,
-                        "my_amount": float(my_cart_fee)
-                    })
-            
-            # 캐디피
-            caddy_fee_participants = expense.caddy_fee_participants if expense.caddy_fee_participants else []
-            caddy_fee_exempted = expense.caddy_fee_exempted if expense.caddy_fee_exempted else []
-            if user_id in caddy_fee_participants and user_id not in caddy_fee_exempted:
-                caddy_fee = Decimal(str(expense.caddy_fee)) if expense.caddy_fee else Decimal('0')
-                participants_count = len([p for p in caddy_fee_participants if p not in caddy_fee_exempted])
-                if participants_count > 0:
-                    my_caddy_fee = caddy_fee / participants_count
-                    total_amount_due_decimal += my_caddy_fee
-                    items.append({
-                        "type": "caddy_fee",
-                        "name": "캐디피",
-                        "amount": float(caddy_fee),
-                        "participants_count": participants_count,
-                        "my_amount": float(my_caddy_fee)
-                    })
-            
-            # 기타 비용
-            other_expense_items = expense.other_expense_items if expense.other_expense_items else []
-            for item in other_expense_items:
-                item_participants = item.get('participants', [])
-                if user_id in item_participants:
-                    item_amount = Decimal(str(item.get('amount', 0)))
-                    participants_count = len(item_participants)
-                    if participants_count > 0:
-                        my_item_amount = item_amount / participants_count
-                        total_amount_due_decimal += my_item_amount
-                        items.append({
-                            "type": "other_expense",
-                            "name": item.get('title', '기타 비용'),
-                            "amount": float(item_amount),
-                            "participants_count": participants_count,
-                            "my_amount": float(my_item_amount)
-                        })
-        else:
-            # 소셜 정산: expense_items에서 사용자가 포함된 항목만 계산
-            expense_items = expense.expense_items if expense.expense_items else []
-            user_id = current_user.id
-            
-            for item in expense_items:
-                item_participants = item.get('participants', [])
-                if user_id in item_participants:
-                    item_amount = Decimal(str(item.get('amount', 0)))
-                    participants_count = len(item_participants)
-                    if participants_count > 0:
-                        my_item_amount = item_amount / participants_count
-                        total_amount_due_decimal += my_item_amount
-                        items.append({
-                            "type": "expense_item",
-                            "name": item.get('title', '비용 항목'),
-                            "amount": float(item_amount),
-                            "participants_count": participants_count,
-                            "my_amount": float(my_item_amount)
-                        })
-            
-            # exclude_remaining_amount가 false이고 나머지 금액이 있으면 추가
-            if not expense.exclude_remaining_amount:
-                total_cost = Decimal(str(expense.amount))
-                expense_items_total = sum(Decimal(str(item.get('amount', 0))) for item in expense_items)
-                remaining_amount = total_cost - expense_items_total
-                if remaining_amount > 0:
-                    # 나머지 금액은 전체 정산 대상자에게 분배
-                    # ExpenseParticipant에서 정산 대상자 추출
-                    all_participants = db.query(ExpenseParticipant).filter(
-                        ExpenseParticipant.expense_id == expense.id
-                    ).all()
-                    # 게스트와 일반 사용자 모두 포함
-                    settlement_targets = []
-                    for p in all_participants:
-                        if p.guest_id:
-                            settlement_targets.append(p.guest_id)
-                        elif p.user_id:
-                            settlement_targets.append(p.user_id)
-                    
-                    if user_id in settlement_targets and len(settlement_targets) > 0:
-                        my_remaining_amount = remaining_amount / len(settlement_targets)
-                        total_amount_due_decimal += my_remaining_amount
-                        items.append({
-                            "type": "remaining_amount",
-                            "name": "나머지 금액",
-                            "amount": float(remaining_amount),
-                            "participants_count": len(settlement_targets),
-                            "my_amount": float(my_remaining_amount)
-                        })
-        
-        # total_amount_due를 각 항목의 my_amount 합으로 재계산하여 정확도 보장
-        total_amount_due = sum(Decimal(str(item['my_amount'])) for item in items)
-        total_amount_due_float = float(total_amount_due)
-        remaining_amount = total_amount_due_float - amount_paid
+        amount_paid = Decimal('0')
+
+        expense_items = db.query(ExpenseItem).filter(ExpenseItem.expense_id == expense.id).all()
+        for ei in expense_items:
+            eip = db.query(ExpenseItemParticipant).filter(
+                ExpenseItemParticipant.expense_item_id == ei.id,
+                ExpenseItemParticipant.user_id == user_id,
+                ExpenseItemParticipant.is_exempted == False
+            ).first()
+            if not eip:
+                continue
+            my_amt = float(eip.amount or 0)
+            total_amount_due_decimal += Decimal(str(my_amt))
+            amount_paid += Decimal(str(eip.amount_paid or 0))
+            cnt = db.query(ExpenseItemParticipant).filter(
+                ExpenseItemParticipant.expense_item_id == ei.id,
+                ExpenseItemParticipant.is_exempted == False
+            ).count()
+            type_map = {"GREEN_FEE": "green_fee", "CADDY_FEE": "caddy_fee", "CART_FEE": "cart_fee",
+                        "OTHER": "expense_item", "TOTAL": "remaining_amount"}
+            t = ei.type.value if hasattr(ei.type, "value") else str(ei.type)
+            name = ei.title or ({"GREEN_FEE": "그린피", "CADDY_FEE": "캐디피", "CART_FEE": "카트비",
+                                 "TOTAL": "나머지 금액"}.get(t, "비용 항목"))
+            items.append({
+                "type": type_map.get(t, "expense_item"),
+                "name": name,
+                "amount": float(ei.amount or 0),
+                "participants_count": cnt,
+                "my_amount": my_amt
+            })
+
+        total_amount_due_float = float(total_amount_due_decimal)
+        amount_paid_float = float(amount_paid)
+        remaining_amount = total_amount_due_float - amount_paid_float
         
         return {
             "total_amount_due": total_amount_due_float,
-            "amount_paid": amount_paid,
+            "amount_paid": amount_paid_float,
             "remaining_amount": remaining_amount,
-            "is_paid": is_paid,
+            "is_paid": remaining_amount <= 0,
             "items": items
         }
         

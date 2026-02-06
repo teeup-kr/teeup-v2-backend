@@ -8,6 +8,7 @@ class ExpenseCreate(BaseModel):
     description: Optional[str] = Field(None, description="비용 설명")
     amount: float = Field(..., ge=0, description="총 비용")
     total_participants: int = Field(..., ge=1, description="참가자 수")
+    participant_ids: Optional[List[int]] = Field(default_factory=list, description="참가자(MeetingParticipant) ID 목록")
     notes: Optional[str] = Field(None, description="메모")
 
 class ExpenseUpdate(BaseModel):
@@ -31,7 +32,8 @@ class ExpenseResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
-    
+    participants: Optional[List["ExpenseParticipantResponse"]] = None
+
     model_config = {"from_attributes": True}
 
 class ExpenseListResponse(BaseModel):
@@ -59,4 +61,7 @@ class ExpenseParticipantResponse(BaseModel):
 class ExpenseParticipantUpdate(BaseModel):
     amount_paid: Optional[float] = Field(None, ge=0, description="지불 금액")
     is_paid: Optional[bool] = Field(None, description="지불 여부")
+
+
+ExpenseResponse.model_rebuild()  # resolve forward ref for participants
 

@@ -34,7 +34,7 @@ def _to_faq_response(faq: FAQ) -> FAQResponse:
 
 
 def _ensure_admin(admin_data: dict):
-    if not admin_data or admin_data.get("role") != "ADMIN":
+    if not admin_data or admin_data.get("type") != "admin":
         raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
 
 
