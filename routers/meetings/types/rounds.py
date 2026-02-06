@@ -596,6 +596,8 @@ async def get_round_participants(meeting_id: int,
                     participant.id,
                     "user_id":
                     participant.user_id,
+                    "user_email":
+                    None,
                     "guest_id":
                     participant.guest_id,
                     "user_name":
@@ -649,6 +651,8 @@ async def get_round_participants(meeting_id: int,
                         participant.id,
                         "user_id":
                         participant.user_id,
+                        "user_email":
+                        user.email,
                         "guest_id":
                         None,
                         "user_name":
@@ -658,9 +662,9 @@ async def get_round_participants(meeting_id: int,
                         "name":
                         user.realname or "이름 없음",
                         "handicap":
-                        participant.handicap,
+                        user.handicap if user.handicap is not None else user.handicap_init,
                         "average_score":
-                        participant.average_score,
+                        user.average_score if user.average_score is not None else user.average_score,
                         "pace_preference":
                         participant.pace_preference,
                         "tee_preference":
@@ -800,17 +804,18 @@ async def get_round_teams(meeting_id: int,
                         else:
                             continue
 
-                    member_response = TeamMemberResponse(id=team_member.id,
-                                                         team_id=team_member.team_id,
-                                                         user_id=team_member.user_id,
-                                                         user_name=user_name,
-                                                         user_nickname=user_nickname,
-                                                         order=team_member.order,
-                                                         gender=gender,
-                                                         handicap=handicap,
-                                                         average_score=average_score,
-                                                         is_guest=(participant.guest_id is not None) if participant else None,
-                                                         created_at=team_member.created_at)
+                    member_response = TeamMemberResponse(
+                        id=team_member.id,
+                        team_id=team_member.team_id,
+                        user_id=team_member.user_id,
+                        user_name=user_name,
+                        user_nickname=user_nickname,
+                        order=team_member.order,
+                        gender=gender,
+                        handicap=handicap,
+                        average_score=average_score,
+                        is_guest=(participant.guest_id is not None) if participant else None,
+                        created_at=team_member.created_at)
                     members.append(member_response)
 
             team_response = TeamResponse(
