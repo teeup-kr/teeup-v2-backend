@@ -20,6 +20,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
+from create_default_terms import create_default_terms
 from models import (
     Club,
     ClubMembership,
@@ -36,7 +37,7 @@ from models import (
     User,
     UserStatus,
 )
-
+from utils.region import fetch_all_regions, sync_regions
 
 CLUB_NAME_POOL = [
     "Sunrise Golf Club",
@@ -58,6 +59,23 @@ FIXED_LEADER_USER_ID = 1
 FIXED_LEADER_CLUB_INDEX = 0
 
 
+def refresh_regions_once(db: Session) -> bool:
+    active_sido = db.query(Sido).filter(Sido.is_active.is_(True)).first()
+    if active_sido:
+        return False
+
+    regions = fetch_all_regions()
+    result = sync_regions(db, regions)
+    print(f"Region list synchronized: fetched={len(regions)}, synced={result}")
+    return True
+
+
+def seed_default_terms(db: Session) -> tuple[int, int]:
+    created, updated = create_default_terms(db)
+    print(f"Default terms: created={created}, existing={updated}")
+    return created, updated
+
+
 def load_names(path: Path) -> list[str]:
     if not path.exists():
         raise FileNotFoundError(f"Name file not found: {path}")
@@ -71,11 +89,12 @@ def load_names(path: Path) -> list[str]:
 def chunked_rotation(values: list[int], offset: int, size: int) -> list[int]:
     if not values:
         return []
-    rotated = values[offset % len(values) :] + values[: offset % len(values)]
+    rotated = values[offset % len(values):] + values[:offset % len(values)]
     return rotated[:size]
 
 
-def upsert_users(db: Session, names: list[str], target_count: int, rng: random.Random) -> tuple[list[User], dict[str, int]]:
+def upsert_users(db: Session, names: list[str], target_count: int,
+                 rng: random.Random) -> tuple[list[User], dict[str, int]]:
     counters = {"created": 0, "skipped": 0}
     users: list[User] = []
 
@@ -131,11 +150,8 @@ def upsert_clubs(db: Session, users: list[User], target_count: int) -> tuple[lis
         club_name = CLUB_NAME_POOL[i % len(CLUB_NAME_POOL)]
         sido_code = sido_codes[i % len(sido_codes)]
 
-        existing = (
-            db.query(Club)
-            .filter(Club.name == club_name, Club.sido_code == sido_code, Club.deleted_at.is_(None))
-            .first()
-        )
+        existing = (db.query(Club).filter(Club.name == club_name, Club.sido_code == sido_code,
+                                          Club.deleted_at.is_(None)).first())
         if existing:
             clubs.append(existing)
             counters["skipped"] += 1
@@ -188,7 +204,8 @@ def upsert_memberships(
                 selected = selected[:-1]
             selected.insert(0, fixed_leader_user_id)
 
-        leader_id = fixed_leader_user_id if idx == fixed_leader_club_index and fixed_leader_user_id in selected else selected[0]
+        leader_id = fixed_leader_user_id if idx == fixed_leader_club_index and fixed_leader_user_id in selected else selected[
+            0]
         manager_id = next((uid for uid in selected if uid != leader_id), None)
 
         for user_id in selected:
@@ -200,11 +217,8 @@ def upsert_memberships(
 
             desired_status = MembershipStatus.ACTIVE
 
-            membership = (
-                db.query(ClubMembership)
-                .filter(ClubMembership.club_id == club.id, ClubMembership.user_id == user_id)
-                .first()
-            )
+            membership = (db.query(ClubMembership).filter(ClubMembership.club_id == club.id,
+                                                          ClubMembership.user_id == user_id).first())
             if membership:
                 changed = False
                 if membership.role != role:
@@ -219,26 +233,20 @@ def upsert_memberships(
                     counters["skipped"] += 1
                 continue
 
-            db.add(
-                ClubMembership(
-                    club_id=club.id,
-                    user_id=user_id,
-                    role=role,
-                    status=desired_status,
-                )
-            )
+            db.add(ClubMembership(
+                club_id=club.id,
+                user_id=user_id,
+                role=role,
+                status=desired_status,
+            ))
             counters["created"] += 1
 
         # Keep exactly one leader role in each seeded club.
-        other_leaders = (
-            db.query(ClubMembership)
-            .filter(
-                ClubMembership.club_id == club.id,
-                ClubMembership.role == ClubRole.LEADER,
-                ClubMembership.user_id != leader_id,
-            )
-            .all()
-        )
+        other_leaders = (db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.role == ClubRole.LEADER,
+            ClubMembership.user_id != leader_id,
+        ).all())
         for other in other_leaders:
             other.role = ClubRole.MEMBER
             if other.status != MembershipStatus.ACTIVE:
@@ -246,26 +254,76 @@ def upsert_memberships(
             counters["updated"] += 1
 
         # Keep active member count around members_per_club by pushing extra members to PENDING.
-        non_selected_memberships = (
-            db.query(ClubMembership)
-            .filter(
-                ClubMembership.club_id == club.id,
-                ClubMembership.user_id.notin_(selected),
-                ClubMembership.status == MembershipStatus.ACTIVE,
-            )
-            .all()
-        )
+        non_selected_memberships = (db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id.notin_(selected),
+            ClubMembership.status == MembershipStatus.ACTIVE,
+        ).all())
         for membership in non_selected_memberships:
             membership.status = MembershipStatus.PENDING
             if membership.role in (ClubRole.LEADER, ClubRole.MANAGER):
                 membership.role = ClubRole.MEMBER
             counters["updated"] += 1
 
-        club.member_count = (
-            db.query(ClubMembership)
-            .filter(ClubMembership.club_id == club.id, ClubMembership.status == MembershipStatus.ACTIVE)
-            .count()
-        )
+        club.member_count = (db.query(ClubMembership).filter(ClubMembership.club_id == club.id,
+                                                             ClubMembership.status == MembershipStatus.ACTIVE).count())
+
+    db.commit()
+    return counters
+
+
+def ensure_user_one_memberships(db: Session, clubs: list[Club], user_id: int) -> dict[str, int]:
+    counters = {"created": 0, "updated": 0, "skipped": 0}
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return counters
+
+    role_cycle = [ClubRole.LEADER, ClubRole.MANAGER, ClubRole.MEMBER]
+
+    for idx, club in enumerate(clubs):
+        desired_role = role_cycle[idx % len(role_cycle)]
+        membership = (db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == user_id,
+        ).first())
+
+        if membership:
+            changed = False
+            if membership.role != desired_role:
+                membership.role = desired_role
+                changed = True
+            if membership.status != MembershipStatus.ACTIVE:
+                membership.status = MembershipStatus.ACTIVE
+                changed = True
+            if changed:
+                counters["updated"] += 1
+            else:
+                counters["skipped"] += 1
+        else:
+            db.add(ClubMembership(
+                club_id=club.id,
+                user_id=user_id,
+                role=desired_role,
+                status=MembershipStatus.ACTIVE,
+            ))
+            counters["created"] += 1
+
+        if desired_role == ClubRole.LEADER:
+            other_leaders = (db.query(ClubMembership).filter(
+                ClubMembership.club_id == club.id,
+                ClubMembership.role == ClubRole.LEADER,
+                ClubMembership.user_id != user_id,
+            ).all())
+            for other in other_leaders:
+                other.role = ClubRole.MEMBER
+                if other.status != MembershipStatus.ACTIVE:
+                    other.status = MembershipStatus.ACTIVE
+                counters["updated"] += 1
+
+        club.member_count = (db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.status == MembershipStatus.ACTIVE,
+        ).count())
 
     db.commit()
     return counters
@@ -286,6 +344,7 @@ def upsert_meetings_and_participants(
     rng: random.Random,
     fixed_leader_user_id: int,
     fixed_leader_club_index: int,
+    force_user_id: int | None = None,
 ) -> dict[str, int]:
     counters = {
         "meeting_created": 0,
@@ -298,12 +357,9 @@ def upsert_meetings_and_participants(
     status_cycle = ["SCHEDULED", "IN_PROGRESS", "COMPLETED", "CANCELED"]
 
     for c_idx, club in enumerate(clubs):
-        active_memberships = (
-            db.query(ClubMembership)
-            .filter(ClubMembership.club_id == club.id, ClubMembership.status == MembershipStatus.ACTIVE)
-            .order_by(ClubMembership.id)
-            .all()
-        )
+        active_memberships = (db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.status == MembershipStatus.ACTIVE).order_by(ClubMembership.id).all())
         active_user_ids = [m.user_id for m in active_memberships]
 
         if len(active_user_ids) < MEETING_MIN_PARTICIPANTS:
@@ -325,15 +381,11 @@ def upsert_meetings_and_participants(
             else:
                 meeting_name = f"{club.name} Social {m_idx + 1}"
 
-            existing = (
-                db.query(Meeting)
-                .filter(
-                    Meeting.club_id == club.id,
-                    Meeting.name == meeting_name,
-                    Meeting.meeting_time == meeting_time,
-                )
-                .first()
-            )
+            existing = (db.query(Meeting).filter(
+                Meeting.club_id == club.id,
+                Meeting.name == meeting_name,
+                Meeting.meeting_time == meeting_time,
+            ).first())
 
             participant_count = choose_participant_count(len(active_user_ids), rng)
             if participant_count < MEETING_MIN_PARTICIPANTS:
@@ -380,15 +432,17 @@ def upsert_meetings_and_participants(
             if leader_id and leader_id in active_user_ids and leader_id not in selected_ids:
                 selected_ids[-1] = leader_id
 
+            if force_user_id and force_user_id in active_user_ids and force_user_id not in selected_ids:
+                for i in range(len(selected_ids) - 1, -1, -1):
+                    if selected_ids[i] != leader_id:
+                        selected_ids[i] = force_user_id
+                        break
+
             for idx, user_id in enumerate(selected_ids):
-                participant = (
-                    db.query(MeetingParticipant)
-                    .filter(
-                        MeetingParticipant.meeting_id == meeting.id,
-                        MeetingParticipant.user_id == user_id,
-                    )
-                    .first()
-                )
+                participant = (db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting.id,
+                    MeetingParticipant.user_id == user_id,
+                ).first())
                 if participant:
                     counters["participant_skipped"] += 1
                     continue
@@ -398,11 +452,10 @@ def upsert_meetings_and_participants(
                         meeting_id=meeting.id,
                         user_id=user_id,
                         participant_type=ParticipantType.USER,
-                        handicap_index=10 + (idx % 15),
-                        recent_avg_score=80 + (idx % 10),
+                        handicap=10 + (idx % 15),
+                        average_score=80 + (idx % 10),
                         is_newbie=bool(idx % 5 == 0),
-                    )
-                )
+                    ))
                 counters["participant_created"] += 1
 
     db.commit()
@@ -428,6 +481,8 @@ def main() -> None:
     names = load_names(name_path)
 
     with SessionLocal() as db:
+        refresh_regions_once(db)
+        seed_default_terms(db)
         users, user_counts = upsert_users(db, names, args.users, rng)
         clubs, club_counts = upsert_clubs(db, users, args.clubs)
         membership_counts = upsert_memberships(
@@ -438,6 +493,10 @@ def main() -> None:
             FIXED_LEADER_USER_ID,
             FIXED_LEADER_CLUB_INDEX,
         )
+        user_one = db.query(User).filter(User.id == FIXED_LEADER_USER_ID).first()
+        user_one_membership_counts = {"created": 0, "updated": 0, "skipped": 0}
+        if user_one:
+            user_one_membership_counts = ensure_user_one_memberships(db, clubs, user_one.id)
         meeting_counts = upsert_meetings_and_participants(
             db,
             clubs,
@@ -445,27 +504,27 @@ def main() -> None:
             rng,
             FIXED_LEADER_USER_ID,
             FIXED_LEADER_CLUB_INDEX,
+            force_user_id=user_one.id if user_one else None,
         )
 
     print("Seed completed")
     print(f"users: created={user_counts['created']}, skipped={user_counts['skipped']}")
     print(f"clubs: created={club_counts['created']}, skipped={club_counts['skipped']}")
-    print(
-        "memberships: "
-        f"created={membership_counts['created']}, "
-        f"updated={membership_counts['updated']}, "
-        f"skipped={membership_counts['skipped']}"
-    )
-    print(
-        "meetings: "
-        f"created={meeting_counts['meeting_created']}, "
-        f"skipped={meeting_counts['meeting_skipped']}"
-    )
-    print(
-        "participants: "
-        f"created={meeting_counts['participant_created']}, "
-        f"skipped={meeting_counts['participant_skipped']}"
-    )
+    print("memberships: "
+          f"created={membership_counts['created']}, "
+          f"updated={membership_counts['updated']}, "
+          f"skipped={membership_counts['skipped']}")
+    if user_one:
+        print("user_id=1 memberships: "
+              f"created={user_one_membership_counts['created']}, "
+              f"updated={user_one_membership_counts['updated']}, "
+              f"skipped={user_one_membership_counts['skipped']}")
+    print("meetings: "
+          f"created={meeting_counts['meeting_created']}, "
+          f"skipped={meeting_counts['meeting_skipped']}")
+    print("participants: "
+          f"created={meeting_counts['participant_created']}, "
+          f"skipped={meeting_counts['participant_skipped']}")
 
 
 if __name__ == "__main__":

@@ -118,8 +118,8 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                         logger.info(f"참가자 조회 성공 - participant_id: {participant.id}")
                         # 게스트인 경우와 멤버인 경우 구분
                         gender = None
-                        handicap_index = None
-                        recent_avg_score = None
+                        handicap = None
+                        average_score = None
 
                         if participant.guest_id:
                             # guest_id를 통해 Guest 모델에서 정보 조회
@@ -128,12 +128,12 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                 user_name = guest.name or "게스트"
                                 user_nickname = guest.name or "게스트"
                                 gender = guest.gender.value if guest.gender else None
-                                handicap_index = int(guest.handicap) if guest.handicap else None
+                                handicap = int(guest.handicap) if guest.handicap else None
                             else:
                                 user_name = "게스트"
                                 user_nickname = "게스트"
                                 gender = None
-                                handicap_index = None
+                                handicap = None
                         else:
                             if participant.user_id:
                                 user = db.query(User).filter(User.id == participant.user_id).first()
@@ -143,29 +143,29 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                     user_nickname = user.nickname or "닉네임 없음"
                                     gender = user.gender.value if user.gender else None
 
-                                    # 핸디캡 우선순위: participant.handicap_index → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
-                                    if participant.handicap_index is not None:
-                                        handicap_index = participant.handicap_index
+                                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                                    if participant.handicap is not None:
+                                        handicap = participant.handicap
                                     elif user.handicap is not None:
-                                        handicap_index = int(user.handicap)
+                                        handicap = int(user.handicap)
                                     elif user.handicap is not None:
-                                        handicap_index = int(user.handicap)
+                                        handicap = int(user.handicap)
                                     elif user.handicap_init is not None:
-                                        handicap_index = int(user.handicap_init)
+                                        handicap = int(user.handicap_init)
                                     elif user.average_score is not None:
-                                        handicap_index = max(0, int(user.average_score - 72))
+                                        handicap = max(0, int(user.average_score - 72))
                                     else:
-                                        handicap_index = None
+                                        handicap = None
 
                                     # MeetingResult에서 실제 직전 대회 성적 조회
-                                    recent_avg_score = None
+                                    average_score = None
                                     last_result = db.query(MeetingResult).filter(
                                         MeetingResult.user_id == participant.user_id,
                                         MeetingResult.meeting_id != meeting_id  # 현재 모임 제외
                                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                                     if last_result:
-                                        recent_avg_score = last_result.gross_score
+                                        average_score = last_result.gross_score
                                 else:
                                     logger.warning(f"사용자 조회 실패 - user_id: {participant.user_id}")
                                     continue
@@ -180,8 +180,8 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                                              user_nickname=user_nickname,
                                                              order=team_member.order,
                                                              gender=gender,
-                                                             handicap_index=handicap_index,
-                                                             recent_avg_score=recent_avg_score,
+                                                             handicap=handicap,
+                                                             average_score=average_score,
                                                              created_at=team_member.created_at)
                         members.append(member_response)
                     else:
@@ -334,7 +334,7 @@ async def get_team(team_id: int, db: Session = Depends(get_db), current_user: di
             continue
 
         # 게스트인 경우와 멤버인 경우 구분
-        if participant.is_guest or participant.guest_id:
+        if participant.guest_id:
             # guest_id를 통해 Guest 모델에서 정보 조회
             if participant.guest_id:
                 guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
@@ -421,7 +421,7 @@ async def update_team(team_id: int,
             continue
 
         # 게스트인 경우와 멤버인 경우 구분
-        if participant.is_guest or participant.guest_id:
+        if participant.guest_id:
             # guest_id를 통해 Guest 모델에서 정보 조회
             if participant.guest_id:
                 guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
@@ -530,9 +530,8 @@ async def auto_form_teams(meeting_id: int,
     #     )
 
     # 참가자들 조회
-    participants = db.query(MeetingParticipant).filter(
-        MeetingParticipant.meeting_id == meeting_id
-    ).options(joinedload(MeetingParticipant.user)).all()
+    participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).options(
+        joinedload(MeetingParticipant.user)).all()
 
     if len(participants) < 2:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="팀 편성을 위해서는 최소 2명의 참가자가 필요합니다")
@@ -557,10 +556,10 @@ async def auto_form_teams(meeting_id: int,
 
             # 게스트인 경우와 멤버인 경우 구분
             gender = None
-            handicap_index = None
-            recent_avg_score = None
+            handicap = None
+            average_score = None
 
-            if participant.is_guest or participant.guest_id:
+            if participant.guest_id:
                 # guest_id를 통해 Guest 모델에서 정보 조회
                 if participant.guest_id:
                     guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
@@ -568,19 +567,19 @@ async def auto_form_teams(meeting_id: int,
                         user_name = guest.name or "게스트"
                         user_nickname = guest.name or "게스트"
                         gender = guest.gender.value if guest.gender else None
-                        handicap_index = int(guest.handicap) if guest.handicap else None
+                        handicap = int(guest.handicap) if guest.handicap else None
                     else:
                         # 하위 호환성: guest 필드 사용
                         user_name = participant.guest_name or "게스트"
                         user_nickname = participant.guest_name or "게스트"
                         gender = participant.guest_gender.value if participant.guest_gender else None
-                        handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                        handicap = int(participant.guest_handicap) if participant.guest_handicap else None
                 else:
                     # 하위 호환성: guest 필드 사용
                     user_name = participant.guest_name or "게스트"
                     user_nickname = participant.guest_name or "게스트"
                     gender = participant.guest_gender.value if participant.guest_gender else None
-                    handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                    handicap = int(participant.guest_handicap) if participant.guest_handicap else None
             else:
                 # 멤버인 경우
                 if participant.user_id:
@@ -590,7 +589,7 @@ async def auto_form_teams(meeting_id: int,
                     user_name = user.realname or user.nickname or "이름 없음"
                     user_nickname = user.nickname or "닉네임 없음"
                     gender = user.gender.value if user.gender else None
-                    handicap_index = participant.handicap_index
+                    handicap = participant.handicap
 
                     # MeetingResult에서 실제 직전 대회 성적 조회
                     last_result = db.query(MeetingResult).filter(
@@ -599,7 +598,7 @@ async def auto_form_teams(meeting_id: int,
                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                     if last_result:
-                        recent_avg_score = last_result.gross_score
+                        average_score = last_result.gross_score
                 else:
                     continue
 
@@ -610,8 +609,8 @@ async def auto_form_teams(meeting_id: int,
                                                  user_nickname=user_nickname,
                                                  order=team_member.order,
                                                  gender=gender,
-                                                 handicap_index=handicap_index,
-                                                 recent_avg_score=recent_avg_score,
+                                                 handicap=handicap,
+                                                 average_score=average_score,
                                                  created_at=team_member.created_at)
             members.append(member_response)
 

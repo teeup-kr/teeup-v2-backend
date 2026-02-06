@@ -5,6 +5,7 @@ from datetime import datetime
 from .enums import MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ParticipantType
 from .team import GuestCreate
 
+
 class RoundingMeetingCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="모임 이름")
     description: Optional[str] = Field(None, description="모임 설명")
@@ -29,7 +30,7 @@ class RoundingMeetingCreate(BaseModel):
     is_private: Optional[bool] = Field(False, description="프라이빗 라운딩 여부")
     selected_participants: Optional[List[int]] = Field(None, description="선택된 참가자 user_id 목록 (프라이빗 라운딩일 때 필수)")
     selected_guests: Optional[List[GuestCreate]] = Field(None, description="선택된 게스트 목록 (프라이빗 라운딩일 때 선택사항)")
-    
+
     @field_validator('meeting_time', 'application_deadline', mode='before')
     @classmethod
     def remove_timezone(cls, v):
@@ -43,6 +44,7 @@ class RoundingMeetingCreate(BaseModel):
                 return v.replace(tzinfo=None)
             return v
         return v
+
 
 class MeetingUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="모임 이름")
@@ -69,6 +71,7 @@ class MeetingUpdate(BaseModel):
     social_cost: Optional[float] = Field(None, ge=0, description="소셜 비용")
     social_notes: Optional[str] = Field(None, description="소셜 모임 메모")
     is_private: Optional[bool] = Field(None, description="프라이빗 라운딩 여부")
+
 
 class MeetingResponse(BaseModel):
     id: int
@@ -110,8 +113,9 @@ class MeetingResponse(BaseModel):
     is_private: bool = False
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
-    
+
     model_config = {"from_attributes": True}
+
 
 class MeetingParticipantResponse(BaseModel):
     id: int
@@ -120,16 +124,17 @@ class MeetingParticipantResponse(BaseModel):
     participant_type: ParticipantType
     user_name: str
     user_nickname: str
-    handicap_index: Optional[int]
-    recent_avg_score: Optional[int]
+    handicap: Optional[int]
+    average_score: Optional[int]
     pace_preference: Optional[str]
     tee_preference: Optional[str]
     is_newbie: bool
     prefer_with: Optional[List[str]]
     avoid_with: Optional[List[str]]
     created_at: Optional[datetime]
-    
+
     model_config = {"from_attributes": True}
+
 
 # 소셜 모임 관련 스키마
 class SocialMeetingCreate(BaseModel):
@@ -143,7 +148,7 @@ class SocialMeetingCreate(BaseModel):
     club_id: int = Field(..., description="클럽 ID")
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
     social_notes: Optional[str] = Field(None, description="추가 메모")
-    
+
     @field_validator('meeting_time', 'application_deadline', mode='before')
     @classmethod
     def remove_timezone(cls, v):

@@ -309,7 +309,8 @@
 
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
-| POST | `/{meeting_id}/apply` | 모임 참가 | `{guest_info?}` | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
+| POST | `/{meeting_id}/apply` | 모임 참가 | - | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
+| POST | `/{meeting_id}/guests` | 라운딩 게스트 추가 (생성 후) | [GuestCreate](#guestcreate) | `{message: string, participant_id: int, guest_id: int}` | ✅ |
 | POST | `/{meeting_id}/close-application` | 신청 마감 | - | [MessageResponse](#messageresponse) | ✅ |
 | GET | `/{meeting_id}/application-status` | 참가 현황 조회 | - | `{participant_count: int, ...}` | ✅ |
 | POST | `/{meeting_id}/start-team-formation` | 팀 편성 시작 | - | [MessageResponse](#messageresponse) | ✅ |
@@ -406,7 +407,7 @@
 | GET | `/{meeting_id}` | 라운딩 모임 상세 조회 | - | [MeetingResponse](#meetingresponse) | ✅ |
 | PUT | `/{meeting_id}` | 라운딩 모임 수정 | [MeetingUpdate](#meetingupdate) | [MeetingResponse](#meetingresponse) | ✅ |
 | DELETE | `/{meeting_id}` | 라운딩 모임 삭제 | - | [MessageResponse](#messageresponse) | ✅ |
-| POST | `/{meeting_id}/join` | 라운딩 모임 참가 | `{guest_info?: object}` | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
+| POST | `/{meeting_id}/join` | 라운딩 모임 참가 | - | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
 | DELETE | `/{meeting_id}/leave` | 라운딩 모임 탈퇴 | - | [MessageResponse](#messageresponse) | ✅ |
 | GET | `/{meeting_id}/participants` | 참가자 목록 조회 | - | `List`[[MeetingParticipantResponse](#meetingparticipantresponse)] | ✅ |
 | GET | `/{meeting_id}/teams` | 팀 목록 조회 | - | `List`[[TeamResponse](#teamresponse)] | ✅ |
@@ -639,6 +640,7 @@
 #### LoginRequest
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/auth/login`](#1-인증-auth) - 로그인
 
 ```json
@@ -651,6 +653,7 @@
 #### LoginResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/auth/login`](#1-인증-auth) - 로그인
 - [POST `/api/v1/auth/register`](#1-인증-auth) - 회원가입
 - [GET `/api/v1/auth/oauth/google/callback`](#11-oauth) - Google OAuth 콜백
@@ -675,6 +678,7 @@
 #### RegisterRequest
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/auth/register`](#1-인증-auth) - 회원가입
 
 ```json
@@ -693,6 +697,7 @@
 #### AdminLoginRequest
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/login`](#3-관리자-admin) - 관리자 로그인
 
 ```json
@@ -705,6 +710,7 @@
 #### AdminLoginResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/login`](#3-관리자-admin) - 관리자 로그인
 
 ```json
@@ -730,6 +736,7 @@
 **status**: `string` (optional) → enum: [UserStatus](#userstatus)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/users/`](#2-사용자-users) - 사용자 생성
 - [POST `/api/v1/admin/users`](#3-관리자-admin) - 사용자 생성
 
@@ -757,6 +764,7 @@
 #### UserUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/users/me`](#2-사용자-users) - 내 정보 수정
 - [PUT `/api/v1/users/{user_id}`](#2-사용자-users) - 사용자 정보 수정
 - [PUT `/api/v1/admin/users/{user_id}`](#3-관리자-admin) - 사용자 수정
@@ -778,6 +786,7 @@
 **provider**: `string` (optional) → enum: [Provider](#provider)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/auth/me`](#1-인증-auth) - 현재 사용자 정보 조회
 - [GET `/api/v1/users/`](#2-사용자-users) - 사용자 목록 조회
 - [POST `/api/v1/users/`](#2-사용자-users) - 사용자 생성
@@ -828,6 +837,7 @@
 **필수**: `sido_code` (1개), `gungu_codes` (1~4개)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/`](#4-클럽-clubs) - 클럽 생성
 - [POST `/api/v1/admin/clubs`](#3-관리자-admin) - 클럽 생성
 
@@ -848,6 +858,7 @@
 #### ClubUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}`](#4-클럽-clubs) - 클럽 수정
 - [PUT `/api/v1/admin/clubs/{club_id}`](#3-관리자-admin) - 클럽 수정
 
@@ -871,6 +882,7 @@
 **membership_role**: `string` (optional) → enum: [ClubRole](#clubrole)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/auth/me`](#1-인증-auth) - 현재 사용자 정보 조회
 - [GET `/api/v1/users/my-clubs`](#2-사용자-users) - 내 클럽 목록 조회
 - [GET `/api/v1/users/{user_id}/clubs`](#2-사용자-users) - 사용자 클럽 목록 조회
@@ -911,15 +923,18 @@
 #### ClubMemberSearchResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/members/search`](#4-클럽-clubs) - 내가 속한 클럽 구성원 이름 검색
 
 **요청 예시:**
+
 ```http
 GET /api/v1/clubs/members/search?name=홍&limit=50
 Authorization: Bearer {access_token}
 ```
 
 **응답 규칙:**
+
 - `data[].members[].handicap` 값은 `handicap`이 있으면 해당 값을 사용합니다.
 - `handicap`이 없으면 `handicap_init` 값을 `handicap` 필드로 내려줍니다.
 
@@ -951,6 +966,7 @@ Authorization: Bearer {access_token}
 **role**: `string` (optional, default: MEMBER) → enum: [ClubRole](#clubrole)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/clubs/{club_id}/members`](#3-관리자-admin) - 클럽 멤버 추가
 
 ```json
@@ -965,6 +981,7 @@ Authorization: Bearer {access_token}
 **role**: `string` → enum: [ClubRole](#clubrole)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/clubs/{club_id}/members/{user_id}/role`](#3-관리자-admin) - 멤버 역할 변경
 - [PUT `/api/v1/clubs/{club_id}/members/{user_id}/role`](#4-클럽-clubs) - 멤버 역할 변경
 
@@ -979,6 +996,7 @@ Authorization: Bearer {access_token}
 **regular_fee_cycle**: `string` (optional) → enum: [BillingCycle](#billingcycle)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/regular-fee`](#4-클럽-clubs) - 정기 회비 수정
 
 ```json
@@ -995,6 +1013,7 @@ Authorization: Bearer {access_token}
 **regular_fee_cycle**: `string` → enum: [BillingCycle](#billingcycle)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/regular-fee`](#4-클럽-clubs) - 정기 회비 조회
 
 ```json
@@ -1009,6 +1028,7 @@ Authorization: Bearer {access_token}
 #### ClubFeeCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/fees`](#4-클럽-clubs) - 회비 생성
 
 ```json
@@ -1023,6 +1043,7 @@ Authorization: Bearer {access_token}
 #### ClubFeeUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/fees/{fee_id}`](#4-클럽-clubs) - 회비 수정
 
 ```json
@@ -1037,6 +1058,7 @@ Authorization: Bearer {access_token}
 #### ClubFeeResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/fees`](#4-클럽-clubs) - 회비 목록 조회
 - [POST `/api/v1/clubs/{club_id}/fees`](#4-클럽-clubs) - 회비 생성
 - [PUT `/api/v1/clubs/{club_id}/fees/{fee_id}`](#4-클럽-clubs) - 회비 수정
@@ -1057,6 +1079,7 @@ Authorization: Bearer {access_token}
 #### ClubNoticeCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/notices`](#4-클럽-clubs) - 공지사항 생성
 
 ```json
@@ -1070,6 +1093,7 @@ Authorization: Bearer {access_token}
 #### ClubNoticeUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/notices/{notice_id}`](#4-클럽-clubs) - 공지사항 수정
 
 ```json
@@ -1083,6 +1107,7 @@ Authorization: Bearer {access_token}
 #### ClubNoticeResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/notices`](#4-클럽-clubs) - 공지사항 목록 조회
 - [POST `/api/v1/clubs/{club_id}/notices`](#4-클럽-clubs) - 공지사항 생성
 - [GET `/api/v1/clubs/{club_id}/notices/{notice_id}`](#4-클럽-clubs) - 공지사항 상세 조회
@@ -1104,6 +1129,7 @@ Authorization: Bearer {access_token}
 #### MemberNoteUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/members/{user_id}/note`](#4-클럽-clubs) - 멤버 노트 수정
 
 ```json
@@ -1115,6 +1141,7 @@ Authorization: Bearer {access_token}
 #### MemberNoteResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/members/{user_id}/note`](#4-클럽-clubs) - 멤버 노트 조회
 
 ```json
@@ -1136,6 +1163,7 @@ Authorization: Bearer {access_token}
 **team_formation_mode**: `string` → enum: [TeamFormationMode](#teamformationmode)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/meetings/rounding`](#3-관리자-admin) - 라운딩 모임 생성
 - [POST `/api/v1/admin/meetings`](#3-관리자-admin) - 모임 생성
 - [POST `/api/v1/meetings/`](#5-모임-meetings) - 모임 생성
@@ -1165,11 +1193,14 @@ Authorization: Bearer {access_token}
 }
 ```
 
+- `selected_guests`는 라운딩 생성 시 받지 않습니다. 게스트는 생성 후 `POST /api/v1/meetings/{meeting_id}/guests`로 추가합니다.
+
 #### SocialMeetingCreate
 
 **social_settlement_method**: `string` → enum: [SocialSettlementMethod](#socialsettlementmethod)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/meetings/event`](#3-관리자-admin) - 이벤트 모임 생성
 - [POST `/api/v1/admin/meetings`](#3-관리자-admin) - 모임 생성
 - [POST `/api/v1/meetings/`](#5-모임-meetings) - 모임 생성
@@ -1193,6 +1224,7 @@ Authorization: Bearer {access_token}
 #### MeetingUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/meetings/{meeting_id}`](#3-관리자-admin) - 모임 수정
 - [PUT `/api/v1/meetings/{meeting_id}`](#5-모임-meetings) - 모임 수정
 - [PUT `/api/v1/meetings/rounding/{meeting_id}`](#5-모임-meetings) - 라운딩 모임 수정
@@ -1217,6 +1249,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [MeetingStatus](#meetingstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/my-meetings`](#2-사용자-users) - 내 모임 목록 조회
 - [GET `/api/v1/admin/meetings/rounding`](#3-관리자-admin) - 라운딩 모임 목록 조회
 - [GET `/api/v1/admin/meetings/event`](#3-관리자-admin) - 이벤트 모임 목록 조회
@@ -1287,6 +1320,7 @@ Authorization: Bearer {access_token}
 **participant_type**: `string` → enum: [ParticipantType](#participanttype)  
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/meeting_participants`](#3-관리자-admin) - 모임 참가자 목록 조회
 - [GET `/api/v1/meetings/`](#5-모임-meetings) - 참가자 목록 조회
 - [GET `/api/v1/meetings/{participant_id}`](#5-모임-meetings) - 참가자 상세 조회
@@ -1300,8 +1334,8 @@ Authorization: Bearer {access_token}
   "participant_type": "USER",
   "user_name": string,
   "user_nickname": string,
-  "handicap_index": int,
-  "recent_avg_score": int,
+  "handicap": int,
+  "average_score": int,
   "pace_preference": string,
   "tee_preference": string,
   "is_newbie": boolean,
@@ -1316,6 +1350,7 @@ Authorization: Bearer {access_token}
 **formation_mode**: `string` → enum: [TeamFormationMode](#teamformationmode)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/teams/`](#5-모임-meetings) - 팀 생성
 
 ```json
@@ -1331,6 +1366,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [TeamStatus](#teamstatus)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/teams/{team_id}`](#5-모임-meetings) - 팀 수정
 
 ```json
@@ -1347,6 +1383,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [TeamStatus](#teamstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/teams/`](#5-모임-meetings) - 팀 목록 조회
 - [GET `/api/v1/teams/{team_id}`](#5-모임-meetings) - 팀 상세 조회
 - [POST `/api/v1/teams/`](#5-모임-meetings) - 팀 생성
@@ -1371,6 +1408,7 @@ Authorization: Bearer {access_token}
 **formation_mode**: `string` → enum: [TeamFormationMode](#teamformationmode)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/teams/auto-formation`](#5-모임-meetings) - 자동 팀 편성
 - [POST `/api/v1/teams/auto-formation`](#5-모임-meetings) - 자동 팀 편성
 
@@ -1386,6 +1424,7 @@ Authorization: Bearer {access_token}
 #### TeamFormationResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/teams/auto-formation`](#5-모임-meetings) - 자동 팀 편성
 - [POST `/api/v1/teams/auto-formation`](#5-모임-meetings) - 자동 팀 편성
 
@@ -1402,18 +1441,22 @@ Authorization: Bearer {access_token}
 #### TeamMemberResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/teams/{team_id}/members`](#5-모임-meetings) - 팀 멤버 추가
 
 ```json
 {
   "id": int,
   "team_id": int,
-  "participant_id": int,
+  "user_id": int (nullable),
   "order": int,
   "user_name": string,
   "user_nickname": string,
-  "created_at": datetime (ISO 8601),
-  "updated_at": datetime (ISO 8601)
+  "gender": string (nullable),
+  "handicap": int (nullable),
+  "average_score": int (nullable),
+  "is_guest": boolean (nullable),
+  "created_at": datetime (ISO 8601)
 }
 ```
 
@@ -1424,6 +1467,7 @@ Authorization: Bearer {access_token}
 #### FAQCategoryCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/faq/categories`](#6-faq) - FAQ 카테고리 생성
 
 ```json
@@ -1437,6 +1481,7 @@ Authorization: Bearer {access_token}
 #### FAQCategoryUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/faq/categories/{category_id}`](#6-faq) - FAQ 카테고리 수정
 
 ```json
@@ -1450,6 +1495,7 @@ Authorization: Bearer {access_token}
 #### FAQCategoryResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/faq/categories`](#6-faq) - FAQ 카테고리 목록 조회
 - [POST `/api/v1/admin/faq/categories`](#6-faq) - FAQ 카테고리 생성
 - [PUT `/api/v1/admin/faq/categories/{category_id}`](#6-faq) - FAQ 카테고리 수정
@@ -1469,6 +1515,7 @@ Authorization: Bearer {access_token}
 #### FAQCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/faq`](#6-faq) - FAQ 생성
 
 ```json
@@ -1484,6 +1531,7 @@ Authorization: Bearer {access_token}
 #### FAQUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/faq/{faq_id}`](#6-faq) - FAQ 수정
 
 ```json
@@ -1499,6 +1547,7 @@ Authorization: Bearer {access_token}
 #### FAQResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/faq`](#6-faq) - FAQ 목록 조회
 - [POST `/api/v1/admin/faq`](#6-faq) - FAQ 생성
 - [GET `/api/v1/admin/faq/{faq_id}`](#6-faq) - FAQ 상세 조회
@@ -1525,6 +1574,7 @@ Authorization: Bearer {access_token}
 #### FAQPageResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/faq`](#6-faq) - FAQ 목록 조회
 
 ```json
@@ -1546,6 +1596,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [NoticeType](#noticetype)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/notices`](#3-관리자-admin) - 공지사항 생성
 - [POST `/api/v1/notices/`](#7-공지사항-notices) - 공지사항 생성
 
@@ -1564,6 +1615,7 @@ Authorization: Bearer {access_token}
 #### NoticeUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/notices/{notice_id}`](#3-관리자-admin) - 공지사항 수정
 - [PUT `/api/v1/notices/{notice_id}`](#7-공지사항-notices) - 공지사항 수정
 
@@ -1582,6 +1634,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [NoticeType](#noticetype)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/notices`](#3-관리자-admin) - 공지사항 목록 조회
 - [POST `/api/v1/admin/notices`](#3-관리자-admin) - 공지사항 생성
 - [GET `/api/v1/admin/notices/{notice_id}`](#3-관리자-admin) - 공지사항 상세 조회
@@ -1611,6 +1664,7 @@ Authorization: Bearer {access_token}
 #### NoticeListResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/notices`](#3-관리자-admin) - 공지사항 목록 조회
 - [GET `/api/v1/notices/`](#7-공지사항-notices) - 공지사항 목록 조회
 
@@ -1633,6 +1687,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [InquiryType](#inquirytype)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/inquiries/`](#8-문의-inquiries) - 문의 생성
 
 ```json
@@ -1649,6 +1704,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [InquiryStatus](#inquirystatus)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/inquiries/{inquiry_id}`](#8-문의-inquiries) - 문의 수정
 
 ```json
@@ -1667,6 +1723,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [InquiryStatus](#inquirystatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/inquiries`](#3-관리자-admin) - 문의 목록 조회
 - [GET `/api/v1/admin/inquiries/{inquiry_id}`](#3-관리자-admin) - 문의 상세 조회
 - [GET `/api/v1/inquiries/`](#8-문의-inquiries) - 문의 목록 조회
@@ -1693,6 +1750,7 @@ Authorization: Bearer {access_token}
 #### InquiryListResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/inquiries`](#3-관리자-admin) - 문의 목록 조회
 - [GET `/api/v1/inquiries/`](#8-문의-inquiries) - 문의 목록 조회
 
@@ -1709,6 +1767,7 @@ Authorization: Bearer {access_token}
 #### InquiryResponseCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/inquiries/{inquiry_id}/responses`](#3-관리자-admin) - 문의 답변 작성
 - [POST `/api/v1/inquiries/{inquiry_id}/response`](#8-문의-inquiries) - 문의 답변
 
@@ -1723,6 +1782,7 @@ Authorization: Bearer {access_token}
 #### InquiryResponseResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/inquiries/{inquiry_id}/responses`](#3-관리자-admin) - 문의 답변 작성
 - [POST `/api/v1/inquiries/{inquiry_id}/response`](#8-문의-inquiries) - 문의 답변
 - [PUT `/api/v1/inquiries/{inquiry_id}/response/{response_id}`](#8-문의-inquiries) - 문의 답변 수정
@@ -1742,6 +1802,7 @@ Authorization: Bearer {access_token}
 #### InquiryDetailResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/inquiries/{inquiry_id}`](#3-관리자-admin) - 문의 상세 조회
 - [GET `/api/v1/inquiries/{inquiry_id}`](#8-문의-inquiries) - 문의 상세 조회
 
@@ -1762,6 +1823,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [TermsType](#termstype)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/terms`](#3-관리자-admin) - 약관 생성
 
 ```json
@@ -1778,6 +1840,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [TermsType](#termstype)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/terms/{terms_type}`](#3-관리자-admin) - 약관 수정 (타입별)
 - [PUT `/api/v1/admin/terms/id/{term_id}`](#3-관리자-admin) - 약관 수정 (ID별)
 
@@ -1795,6 +1858,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [TermsType](#termstype)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/auth/terms/{terms_type}`](#1-인증-auth) - 약관 조회
 - [GET `/api/v1/admin/terms`](#3-관리자-admin) - 약관 목록 조회
 - [POST `/api/v1/admin/terms`](#3-관리자-admin) - 약관 생성
@@ -1820,6 +1884,7 @@ Authorization: Bearer {access_token}
 #### TermsListResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/terms`](#3-관리자-admin) - 약관 목록 조회
 - [GET `/api/v1/terms/`](#9-약관-terms) - 약관 목록 조회
 
@@ -1843,6 +1908,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [NotificationStatus](#notificationstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/notifications`](#2-사용자-users) - 알림 목록 조회
 - [GET `/api/v1/admin/notifications`](#3-관리자-admin) - 알림 목록 조회
 
@@ -1862,6 +1928,7 @@ Authorization: Bearer {access_token}
 #### NotificationSettingsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/notification-settings`](#2-사용자-users) - 알림 설정 조회
 - [PUT `/api/v1/users/notification-settings`](#2-사용자-users) - 알림 설정 수정
 
@@ -1880,6 +1947,7 @@ Authorization: Bearer {access_token}
 #### NotificationSettingsUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/users/notification-settings`](#2-사용자-users) - 알림 설정 수정
 
 ```json
@@ -1900,6 +1968,7 @@ Authorization: Bearer {access_token}
 #### UserMeetingsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/users/{user_id}/meetings`](#3-관리자-admin) - 사용자 모임 목록 조회
 
 ```json
@@ -1914,6 +1983,7 @@ Authorization: Bearer {access_token}
 #### UserHandicapHistoryResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/users/{user_id}/handicap-history`](#3-관리자-admin) - 사용자 핸디캡 이력 조회
 
 ```json
@@ -1934,6 +2004,7 @@ Authorization: Bearer {access_token}
 #### HandicapResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/{user_id}/handicap`](#2-사용자-users) - 핸디캡 조회
 - [GET `/api/v1/users/handicap/calculate/{user_id}`](#2-사용자-users) - 핸디캡 계산
 
@@ -1954,6 +2025,7 @@ Authorization: Bearer {access_token}
 #### ScoreHistoryResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/{user_id}/score-history`](#2-사용자-users) - 스코어 이력 조회
 
 ```json
@@ -1972,6 +2044,7 @@ Authorization: Bearer {access_token}
 #### MeetingResultResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/{user_id}/last-meeting-result`](#2-사용자-users) - 최근 모임 결과 조회
 - [GET `/api/v1/meetings/{meeting_id}/results`](#5-모임-meetings) - 모임 결과 조회
 
@@ -1993,6 +2066,7 @@ Authorization: Bearer {access_token}
 #### UserScheduleResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/me/schedule`](#2-사용자-users) - 내 일정 조회
 
 ```json
@@ -2006,6 +2080,7 @@ Authorization: Bearer {access_token}
 #### RoundingMeetingsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/me/rounding-meetings`](#2-사용자-users) - 내 라운딩 모임 조회
 
 ```json
@@ -2021,6 +2096,7 @@ Authorization: Bearer {access_token}
 #### RoundingStatsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/me/rounding-stats`](#2-사용자-users) - 라운딩 통계 조회
 
 ```json
@@ -2038,6 +2114,7 @@ Authorization: Bearer {access_token}
 #### UserStatsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/stats`](#2-사용자-users) - 사용자 통계 조회
 
 ```json
@@ -2064,6 +2141,7 @@ Authorization: Bearer {access_token}
 #### MessageResponse
 
 **사용되는 엔드포인트:**
+
 - 대부분의 POST, PUT, DELETE 엔드포인트에서 사용 (성공/실패 메시지 응답)
 
 ```json
@@ -2076,6 +2154,7 @@ Authorization: Bearer {access_token}
 #### PaginatedResponse
 
 **사용되는 엔드포인트:**
+
 - 페이지네이션이 필요한 목록 조회 엔드포인트에서 사용 (예: [GET `/api/v1/users/`](#2-사용자-users), [GET `/api/v1/clubs/`](#4-클럽-clubs), [GET `/api/v1/meetings/`](#5-모임-meetings) 등)
 
 ```json
@@ -2095,6 +2174,7 @@ Authorization: Bearer {access_token}
 #### RegulationCategoryCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/regulations/categories`](#4-클럽-clubs) - 규정 카테고리 생성
 
 ```json
@@ -2108,6 +2188,7 @@ Authorization: Bearer {access_token}
 #### RegulationCategoryUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/regulations/categories/{category_id}`](#4-클럽-clubs) - 규정 카테고리 수정
 
 ```json
@@ -2121,6 +2202,7 @@ Authorization: Bearer {access_token}
 #### RegulationCategoryResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/regulations/categories`](#4-클럽-clubs) - 규정 카테고리 생성
 - [GET `/api/v1/clubs/{club_id}/regulations/categories`](#4-클럽-clubs) - 규정 카테고리 목록 조회
 - [PUT `/api/v1/clubs/{club_id}/regulations/categories/{category_id}`](#4-클럽-clubs) - 규정 카테고리 수정
@@ -2142,6 +2224,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [RegulationStatus](#regulationstatus)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/regulations/categories/{category_id}/articles`](#4-클럽-clubs) - 규정 조항 생성
 
 ```json
@@ -2158,6 +2241,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [RegulationStatus](#regulationstatus)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/clubs/{club_id}/regulations/categories/{category_id}/articles/{article_id}`](#4-클럽-clubs) - 규정 조항 수정
 
 ```json
@@ -2174,6 +2258,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [RegulationStatus](#regulationstatus)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/clubs/{club_id}/regulations/categories/{category_id}/articles`](#4-클럽-clubs) - 규정 조항 생성
 - [GET `/api/v1/clubs/{club_id}/regulations/categories/{category_id}/articles`](#4-클럽-clubs) - 규정 조항 목록 조회
 - [PUT `/api/v1/clubs/{club_id}/regulations/categories/{category_id}/articles/{article_id}`](#4-클럽-clubs) - 규정 조항 수정
@@ -2198,6 +2283,7 @@ Authorization: Bearer {access_token}
 #### ClubRegulationsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/regulations`](#4-클럽-clubs) - 전체 규정 조회
 
 ```json
@@ -2214,6 +2300,7 @@ Authorization: Bearer {access_token}
 #### MeetingStatsResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/meetings/stats`](#5-모임-meetings) - 모임 통계 조회
 
 ```json
@@ -2237,6 +2324,7 @@ Authorization: Bearer {access_token}
 **notification_type**: `string` → enum: [NotificationType](#notificationtype)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/notify`](#5-모임-meetings) - 모임 알림 전송
 
 ```json
@@ -2253,6 +2341,7 @@ Authorization: Bearer {access_token}
 #### ParticipantResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/meetings/{meeting_id}/settlement/available-participants`](#5-모임-meetings) - 정산 가능 참가자 조회
 
 ```json
@@ -2274,6 +2363,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [RegulationStatus](#regulationstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/clubs/{club_id}/regulations/versions`](#4-클럽-clubs) - 규정 버전 목록 조회
 
 ```json
@@ -2300,6 +2390,7 @@ Authorization: Bearer {access_token}
 #### ActivityResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/dashboard/activities`](#3-관리자-admin) - 대시보드 활동 조회
 
 ```json
@@ -2316,6 +2407,7 @@ Authorization: Bearer {access_token}
 **payment_method**: `string` → enum: [PaymentMethod](#paymentmethod)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/refunds`](#3-관리자-admin) - 환불 목록 조회
 
 ```json
@@ -2342,6 +2434,7 @@ Authorization: Bearer {access_token}
 #### ScoreCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/scores/`](#5-모임-meetings) - 스코어 등록
 
 ```json
@@ -2357,6 +2450,7 @@ Authorization: Bearer {access_token}
 #### ScoreUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 수정
 
 ```json
@@ -2371,6 +2465,7 @@ Authorization: Bearer {access_token}
 #### ScoreResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/scores/`](#5-모임-meetings) - 스코어 등록
 - [GET `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 상세 조회
 - [PUT `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 수정
@@ -2396,6 +2491,7 @@ Authorization: Bearer {access_token}
 #### ScoreListResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/scores`](#3-관리자-admin) - 스코어 목록 조회
 - [GET `/api/v1/scores/`](#5-모임-meetings) - 스코어 목록 조회
 - [GET `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 스코어 조회
@@ -2413,6 +2509,7 @@ Authorization: Bearer {access_token}
 #### SimpleScoreCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
 - [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
 
@@ -2434,6 +2531,7 @@ Authorization: Bearer {access_token}
 #### SimpleScoreResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
 - [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
 
@@ -2448,6 +2546,7 @@ Authorization: Bearer {access_token}
 #### ScoreStats
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/scores/stats/{participant_id}`](#5-모임-meetings) - 참가자 스코어 통계 조회
 - [GET `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores/stats`](#5-모임-meetings) - 참가자 스코어 통계 조회
 
@@ -2477,6 +2576,7 @@ Authorization: Bearer {access_token}
 #### SettlementResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/settlement/rounding`](#5-모임-meetings) - 라운딩 정산
 - [POST `/api/v1/meetings/{meeting_id}/settlement/social`](#5-모임-meetings) - 소셜 모임 정산
 - [GET `/api/v1/meetings/{meeting_id}/settlement`](#5-모임-meetings) - 정산 정보 조회
@@ -2490,6 +2590,7 @@ Authorization: Bearer {access_token}
 #### MySettlementResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/meetings/{meeting_id}/settlement/my`](#5-모임-meetings) - 내 정산 정보 조회
 
 ```json
@@ -2509,6 +2610,7 @@ Authorization: Bearer {access_token}
 #### ExpenseCreate
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/expenses`](#5-모임-meetings) - 비용 생성
 
 ```json
@@ -2523,6 +2625,7 @@ Authorization: Bearer {access_token}
 #### ExpenseUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/meetings/{meeting_id}/expenses/{expense_id}`](#5-모임-meetings) - 비용 수정
 
 ```json
@@ -2537,6 +2640,7 @@ Authorization: Bearer {access_token}
 #### ExpenseResponse
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/meetings/{meeting_id}/expenses`](#5-모임-meetings) - 비용 생성
 - [GET `/api/v1/meetings/{meeting_id}/expenses/{expense_id}`](#5-모임-meetings) - 비용 상세 조회
 - [PUT `/api/v1/meetings/{meeting_id}/expenses/{expense_id}`](#5-모임-meetings) - 비용 수정
@@ -2557,6 +2661,7 @@ Authorization: Bearer {access_token}
 #### ExpenseListResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/meetings/{meeting_id}/expenses`](#5-모임-meetings) - 비용 목록 조회
 
 ```json
@@ -2572,6 +2677,7 @@ Authorization: Bearer {access_token}
 #### ExpenseParticipantResponse
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/meetings/{meeting_id}/expenses/{expense_id}/participants`](#5-모임-meetings) - 비용 참가자 목록 조회
 - [PUT `/api/v1/meetings/{meeting_id}/expenses/{expense_id}/participants/{participant_id}`](#5-모임-meetings) - 비용 참가자 수정
 
@@ -2589,6 +2695,7 @@ Authorization: Bearer {access_token}
 ```
 
 #### ExpenseParticipantUpdate
+
 ```json
 {
   "amount_paid": int
@@ -2604,6 +2711,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [PlanType](#plantype)
 
 **사용되는 엔드포인트:**
+
 - [POST `/api/v1/admin/plans`](#3-관리자-admin) - 요금제 생성
 
 ```json
@@ -2625,6 +2733,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [PlanType](#plantype)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/admin/plans/{plan_id}`](#3-관리자-admin) - 요금제 수정
 
 ```json
@@ -2643,6 +2752,7 @@ Authorization: Bearer {access_token}
 **type**: `string` → enum: [PlanType](#plantype)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/admin/plans`](#3-관리자-admin) - 요금제 목록 조회
 - [POST `/api/v1/admin/plans`](#3-관리자-admin) - 요금제 생성
 - [PUT `/api/v1/admin/plans/{plan_id}`](#3-관리자-admin) - 요금제 수정
@@ -2672,6 +2782,7 @@ Authorization: Bearer {access_token}
 ### 결제 수단 (Payment Methods)
 
 #### PaymentMethodCreate
+
 ```json
 {
   "method_type": string,
@@ -2684,6 +2795,7 @@ Authorization: Bearer {access_token}
 #### PaymentMethodUpdate
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/payment-methods/{method_id}`](#14-결제-수단-payment-methods) - 결제 수단 수정
 
 ```json
@@ -2700,6 +2812,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [PaymentMethodStatus](#paymentmethodstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/payment-methods`](#2-사용자-users) - 결제 수단 목록 조회
 - [GET `/api/v1/payment-methods/`](#14-결제-수단-payment-methods) - 결제 수단 목록 조회
 - [POST `/api/v1/payment-methods/`](#14-결제-수단-payment-methods) - 결제 수단 등록
@@ -2724,6 +2837,7 @@ Authorization: Bearer {access_token}
 ### 구독 (Subscriptions)
 
 #### SubscriptionCreate
+
 ```json
 {
   "plan_id": int,
@@ -2736,6 +2850,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [SubscriptionStatus](#subscriptionstatus)
 
 **사용되는 엔드포인트:**
+
 - [PUT `/api/v1/subscriptions/{subscription_id}`](#15-구독-subscriptions) - 구독 수정
 
 ```json
@@ -2751,6 +2866,7 @@ Authorization: Bearer {access_token}
 **status**: `string` → enum: [SubscriptionStatus](#subscriptionstatus)
 
 **사용되는 엔드포인트:**
+
 - [GET `/api/v1/users/subscriptions`](#2-사용자-users) - 구독 내역 조회
 - [GET `/api/v1/admin/subscriptions`](#3-관리자-admin) - 구독 목록 조회
 - [GET `/api/v1/subscriptions/`](#15-구독-subscriptions) - 구독 목록 조회
@@ -2779,6 +2895,7 @@ Authorization: Bearer {access_token}
 ### 결제 (Payments)
 
 #### PaymentResponse
+
 ```json
 {
   "payment_key": string,
@@ -2795,6 +2912,7 @@ Authorization: Bearer {access_token}
 ```
 
 #### PaymentConfirmRequest
+
 ```json
 {
   "payment_key": string,
@@ -2803,6 +2921,7 @@ Authorization: Bearer {access_token}
 ```
 
 #### PaymentCancelRequest
+
 ```json
 {
   "payment_key": string,
@@ -2817,18 +2936,21 @@ Authorization: Bearer {access_token}
 ---
 
 ### ClubType
+
 - `REGULAR`: 정기 클럽
 - `IRREGULAR`: 비정기 클럽
 
 **사용되는 스키마:** [ClubCreate](#clubcreate), [ClubResponse](#clubresponse)
 
 ### ClubStatus
+
 - `ACTIVE`: 활성
 - `INACTIVE`: 비활성
 
 **사용되는 스키마:** [ClubResponse](#clubresponse)
 
 ### ClubRole
+
 - `MEMBER`: 일반 멤버
 - `MANAGER`: 매니저
 - `LEADER`: 리더
@@ -2836,6 +2958,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [ClubMemberAddRequest](#clubmemberaddrequest), [ClubMemberRoleUpdateRequest](#clubmemberroleupdaterequest), [ClubResponse](#clubresponse)
 
 ### BillingCycle
+
 - `MONTHLY`: 월간
 - `QUARTERLY`: 분기
 - `YEARLY`: 연간
@@ -2843,6 +2966,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [RegularFeeUpdate](#regularfeeupdate), [RegularFeeResponse](#regularfeeresponse)
 
 ### MembershipStatus
+
 - `ACTIVE`: 활성
 - `PENDING`: 대기 중
 - `INACTIVE`: 비활성
@@ -2852,6 +2976,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [ClubResponse](#clubresponse)
 
 ### RegulationStatus
+
 - `ACTIVE`: 활성
 - `INACTIVE`: 비활성
 - `DRAFT`: 초안
@@ -2861,12 +2986,14 @@ Authorization: Bearer {access_token}
 ---
 
 ### MeetingType
+
 - `ROUND`: 라운딩 모임
 - `SOCIAL`: 소셜 모임
 
 **사용되는 스키마:** [RoundingMeetingCreate](#roundingmeetingcreate), [MeetingResponse](#meetingresponse)
 
 ### MeetingSubtype
+
 - `REGULAR`: 정기 모임
 - `IRREGULAR`: 비정기 모임
 - `ONE_TIME`: 일회성 모임
@@ -2874,6 +3001,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [RoundingMeetingCreate](#roundingmeetingcreate), [MeetingResponse](#meetingresponse)
 
 ### MeetingStatus
+
 - `SCHEDULED`: 예정됨
 - `IN_PROGRESS`: 진행 중
 - `COMPLETED`: 완료됨
@@ -2882,6 +3010,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [MeetingResponse](#meetingresponse)
 
 ### ParticipantType
+
 - `USER`: 사용자
 - `GUEST`: 게스트
 
@@ -2890,12 +3019,14 @@ Authorization: Bearer {access_token}
 ---
 
 ### SettlementMethod
+
 - `EQUAL_SPLIT`: 균등 분할
 - `INDIVIDUAL`: 개별 결제
 
 **사용되는 스키마:** [RoundingMeetingCreate](#roundingmeetingcreate), [MeetingResponse](#meetingresponse)
 
 ### SocialSettlementMethod
+
 - `EQUAL_SPLIT`: 균등 분할
 - `TREASURER_PREPAID`: 회계 선불
 - `CLUB_FUND`: 클럽 자금
@@ -2903,6 +3034,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [SocialMeetingCreate](#socialmeetingcreate)
 
 ### TeamFormationMode
+
 - `GENDER_SEPARATED_HANDICAP`: 성별 분리 + 핸디캡 기준
 - `GENDER_SEPARATED_PREVIOUS_RECORD`: 성별 분리 + 직전대회 성적 기준
 - `GENDER_SEPARATED_RANDOM`: 성별 분리 + 랜덤
@@ -2913,6 +3045,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [RoundingMeetingCreate](#roundingmeetingcreate), [MeetingResponse](#meetingresponse), [TeamCreate](#teamcreate), [TeamResponse](#teamresponse), [TeamFormationRequest](#teamformationrequest)
 
 ### TeamStatus
+
 - `DRAFT`: 초안
 - `CONFIRMED`: 확정됨
 - `CANCELED`: 취소됨
@@ -2922,6 +3055,7 @@ Authorization: Bearer {access_token}
 ---
 
 ### UserStatus
+
 - `ACTIVE`: 활성
 - `DEACTIVATED`: 비활성화됨
 - `DELETED`: 삭제됨
@@ -2929,12 +3063,14 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [UserCreate](#usercreate), [UserResponse](#userresponse)
 
 ### UserRole
+
 - `USER`: 일반 사용자
 - `ADMIN`: 관리자
 
 **사용되는 스키마:** (현재 사용되지 않음)
 
 ### Provider
+
 - `LOCAL`: 로컬 (이메일 가입)
 - `GOOGLE`: Google
 - `KAKAO`: 카카오
@@ -2945,6 +3081,7 @@ Authorization: Bearer {access_token}
 ---
 
 ### PlanType
+
 - `BASIC`: 기본
 - `PREMIUM`: 프리미엄
 - `ENTERPRISE`: 엔터프라이즈
@@ -2952,6 +3089,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [PlanCreate](#plancreate), [PlanUpdate](#planupdate), [PlanResponse](#planresponse)
 
 ### PaymentStatus
+
 - `SUCCEEDED`: 성공
 - `PENDING`: 대기 중
 - `FAILED`: 실패
@@ -2959,6 +3097,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** (현재 사용되지 않음)
 
 ### PaymentMethod
+
 - `CARD`: 카드
 - `VIRTUAL_ACCOUNT`: 가상계좌
 - `TRANSFER`: 계좌이체
@@ -2966,6 +3105,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [RefundResponse](#refundresponse)
 
 ### PaymentMethodStatus
+
 - `ACTIVE`: 활성
 - `INACTIVE`: 비활성
 - `DELETED`: 삭제됨
@@ -2973,6 +3113,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [PaymentMethodResponse](#paymentmethodresponse)
 
 ### SubscriptionStatus
+
 - `ACTIVE`: 활성
 - `CANCELED`: 취소됨
 - `PAST_DUE`: 연체
@@ -2982,6 +3123,7 @@ Authorization: Bearer {access_token}
 ---
 
 ### NoticeType
+
 - `GENERAL`: 일반
 - `SYSTEM`: 시스템
 - `EVENT`: 이벤트
@@ -2990,6 +3132,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [NoticeCreate](#noticecreate), [NoticeResponse](#noticeresponse)
 
 ### InquiryType
+
 - `GENERAL`: 일반
 - `TECHNICAL`: 기술
 - `BILLING`: 결제
@@ -2999,6 +3142,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [InquiryCreate](#inquirycreate), [InquiryResponse](#inquiryresponse)
 
 ### InquiryStatus
+
 - `SUBMITTED`: 제출됨
 - `IN_PROGRESS`: 진행 중
 - `RESOLVED`: 해결됨
@@ -3006,6 +3150,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [InquiryUpdate](#inquiryupdate), [InquiryResponse](#inquiryresponse)
 
 ### TermsType
+
 - `SERVICE`: 서비스 이용약관
 - `PRIVACY`: 개인정보 처리방침
 - `MARKETING`: 마케팅 수신 동의
@@ -3015,6 +3160,7 @@ Authorization: Bearer {access_token}
 ---
 
 ### NotificationType
+
 - `MEETING_CANCELLATION`: 모임 취소
 - `MEETING_SETTLEMENT_COMPLETED`: 모임 정산 완료
 - `MEETING_COMPLETED`: 모임 완료
@@ -3034,6 +3180,7 @@ Authorization: Bearer {access_token}
 **사용되는 스키마:** [NotificationResponse](#notificationresponse), [MeetingNotificationResponse](#meetingnotificationresponse)
 
 ### NotificationStatus
+
 - `UNREAD`: 읽지 않음
 - `READ`: 읽음
 - `ARCHIVED`: 보관됨
