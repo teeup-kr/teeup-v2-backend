@@ -13,8 +13,8 @@ import logging
 from database import get_db
 from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, Guest,
                     ParticipantType, Gender)
-from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, MeetingParticipantStatus,
-                     MeetingParticipantRole, ClubRole, TeamFormationMode)
+from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus,
+                     ClubRole, TeamFormationMode)
 from schemas import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
                      PaginatedResponse, TeamResponse, TeamMemberResponse, TeamStatus)
 from routers.auth import get_current_active_user, get_user_role_from_token
@@ -92,8 +92,8 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
     meeting_responses = []
     for meeting in meetings:
         participant_count = db.query(MeetingParticipant).filter(
-            and_(MeetingParticipant.meeting_id == meeting.id,
-                 MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+            MeetingParticipant.meeting_id == meeting.id
+        ).count()
 
         # 디버깅: 첫 번째 모임의 참가자 수 확인
         if len(meeting_responses) == 0:
@@ -203,7 +203,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
 
     # 프라이빗 라운딩인 경우
     if is_private:
-        # 선택된 참가자들을 PENDING 상태로 추가
+        # 선택된 참가자들을 참가자로 추가
         if meeting_data.selected_participants:
             # 참가자 검증: 모두 해당 클럽의 활성 멤버인지 확인
             for user_id in meeting_data.selected_participants:
@@ -220,11 +220,11 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                     and_(MeetingParticipant.meeting_id == meeting.id, MeetingParticipant.user_id == user_id)).first()
 
                 if not existing_participant:
-                    participant = MeetingParticipant(meeting_id=meeting.id,
-                                                     user_id=user_id,
-                                                     participant_type=ParticipantType.USER,
-                                                     status=MeetingParticipantStatus.PENDING,
-                                                     role=MeetingParticipantRole.PARTICIPANT)
+                    participant = MeetingParticipant(
+                        meeting_id=meeting.id,
+                        user_id=user_id,
+                        participant_type=ParticipantType.USER
+                    )
                     db.add(participant)
                     participant_count += 1
 
@@ -245,7 +245,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                     if guest_data.handicap is not None:
                         guest_handicap_decimal = Decimal(str(guest_data.handicap))
 
-                    # 게스트 추가 (CONFIRMED 상태로)
+                    # 게스트 추가
                     guest_participant = add_guest_to_meeting(meeting_id=meeting.id,
                                                              guest_name=guest_data.name,
                                                              guest_handicap=guest_handicap_decimal,
@@ -283,12 +283,12 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                 # 알림 실패해도 계속 진행
 
     else:
-        # 일반 라운딩: 생성자를 매니저로 자동 참가
-        participant = MeetingParticipant(meeting_id=meeting.id,
-                                         user_id=current_user.id,
-                                         participant_type=ParticipantType.USER,
-                                         status=MeetingParticipantStatus.CONFIRMED,
-                                         role=MeetingParticipantRole.ORGANIZER)
+        # 일반 라운딩: 생성자를 참가자로 자동 추가
+        participant = MeetingParticipant(
+            meeting_id=meeting.id,
+            user_id=current_user.id,
+            participant_type=ParticipantType.USER
+        )
         db.add(participant)
         db.commit()
         participant_count = 1
@@ -372,8 +372,8 @@ async def get_round(meeting_id: int,
 
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting.id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+        MeetingParticipant.meeting_id == meeting.id
+    ).count()
 
     # 생성자 정보 조회
     created_by_name = None
@@ -411,7 +411,7 @@ async def update_round(meeting_id: int,
     if not meeting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 수정 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
     is_creator = meeting.created_by == current_user.id
@@ -443,8 +443,8 @@ async def update_round(meeting_id: int,
 
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting.id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+        MeetingParticipant.meeting_id == meeting.id
+    ).count()
 
     # 생성자 정보 조회
     created_by_name = None
@@ -481,7 +481,7 @@ async def delete_round(meeting_id: int,
     if not meeting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 삭제 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
     is_creator = meeting.created_by == current_user.id
@@ -529,17 +529,18 @@ async def join_round(meeting_id: int,
 
     # 최대 참가자 수 확인
     current_participants = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting_id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+        MeetingParticipant.meeting_id == meeting_id
+    ).count()
 
     if current_participants >= meeting.max_participants:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 정원이 가득 찼습니다.")
 
     # 참가자 추가
-    participant = MeetingParticipant(meeting_id=meeting_id,
-                                     user_id=current_user.id,
-                                     status=MeetingParticipantStatus.CONFIRMED,
-                                     role=MeetingParticipantRole.PARTICIPANT)
+    participant = MeetingParticipant(
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+        participant_type=ParticipantType.USER
+    )
 
     db.add(participant)
     db.commit()
@@ -560,9 +561,10 @@ async def leave_round(meeting_id: int,
     if not participant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가하지 않은 라운딩입니다.")
 
-    # 매니저는 탈퇴 불가
-    if participant.role == MeetingParticipantRole.ORGANIZER:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 매니저는 탈퇴할 수 없습니다.")
+    # 생성자는 탈퇴 불가
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting and meeting.created_by == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 생성자는 탈퇴할 수 없습니다.")
 
     db.delete(participant)
     db.commit()
@@ -643,10 +645,6 @@ async def get_round_participants(
                     guest_name,
                     "name":
                     guest_name,
-                    "status":
-                    participant.status.value if hasattr(participant.status, 'value') else str(participant.status),
-                    "role":
-                    participant.role.value if hasattr(participant.role, 'value') else str(participant.role),
                     "handicap_index":
                     int(guest_handicap) if guest_handicap else None,
                     "handicap":
@@ -700,10 +698,6 @@ async def get_round_participants(
                         user.nickname or "닉네임 없음",
                         "name":
                         user.realname or "이름 없음",
-                        "status":
-                        participant.status.value if hasattr(participant.status, 'value') else str(participant.status),
-                        "role":
-                        participant.role.value if hasattr(participant.role, 'value') else str(participant.role),
                         "handicap_index":
                         participant.handicap_index,
                         "recent_avg_score":
@@ -922,12 +916,12 @@ async def add_team_member(
         # 참가자 확인 (MeetingParticipant에 존재하는지)
         if user_id:
             participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.user_id == user_id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).first()
+                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.user_id == user_id)
+            ).first()
         elif guest_id:
             participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.guest_id == guest_id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).first()
+                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.guest_id == guest_id)
+            ).first()
         else:
             participant = None
 

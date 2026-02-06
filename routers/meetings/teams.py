@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 from database import get_db
 from models import (Team, TeamMember, MeetingParticipant, Meeting, User, MeetingResult, Guest)
-from schemas import (TeamFormationMode, TeamStatus, MeetingParticipantStatus, ClubRole)
+from schemas import (TeamFormationMode, TeamStatus, ClubRole)
 from schemas import (TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, TeamFormationRequest,
                      TeamFormationResponse, MessageResponse)
 from utils.team_formation import TeamFormationEngine
@@ -529,14 +529,13 @@ async def auto_form_teams(meeting_id: int,
     #         detail="팀 관리는 리더/매니저만 가능합니다"
     #     )
 
-    # 확정된 참가자들 조회
+    # 참가자들 조회
     participants = db.query(MeetingParticipant).filter(
-        MeetingParticipant.meeting_id == meeting_id,
-        MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED).options(joinedload(
-            MeetingParticipant.user)).all()
+        MeetingParticipant.meeting_id == meeting_id
+    ).options(joinedload(MeetingParticipant.user)).all()
 
     if len(participants) < 2:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="팀 편성을 위해서는 최소 2명의 확정된 참가자가 필요합니다")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="팀 편성을 위해서는 최소 2명의 참가자가 필요합니다")
 
     # 팀 편성 실행
     formation_engine = TeamFormationEngine(db)

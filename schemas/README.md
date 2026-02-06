@@ -83,7 +83,7 @@ from schemas import MeetingType, MeetingStatus
 모든 Enum 클래스 정의:
 - `ClubType`, `ClubStatus`, `ClubRole`, `BillingCycle`
 - `MeetingType`, `MeetingSubtype`, `SettlementMethod`, `SocialSettlementMethod`
-- `MeetingStatus`, `MeetingParticipantStatus`, `MeetingParticipantRole`
+- `MeetingStatus`
 - `RegulationStatus`, `MembershipStatus`
 - `TeamFormationMode`, `TeamStatus`
 - `NotificationType`, `NotificationStatus`
@@ -293,4 +293,3 @@ from schemas.payment import PaymentResponse, SubscriptionResponse
 
 **작성일**: 2025-01-13  
 **버전**: 1.0.0
-

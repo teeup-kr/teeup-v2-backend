@@ -372,9 +372,10 @@ def process_meeting_completion(db: Session, meeting_id: int, score_count: int = 
     if not meeting:
         return {"error": "모임을 찾을 수 없습니다."}
 
-    # 참가자 조회 (CONFIRMED 상태만)
-    participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id,
-                                                       MeetingParticipant.status == "CONFIRMED").all()
+    # 참가자 조회
+    participants = db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting_id
+    ).all()
 
     if not participants:
         return {"processed": 0, "updated": 0}
@@ -441,9 +442,10 @@ def create_meeting_results(db: Session, meeting_id: int) -> int:
         logger.info(f"이미 MeetingResult가 존재합니다: {meeting_id} ({existing_results}개)")
         return existing_results
 
-    # 참가자 조회 (CONFIRMED 상태만)
-    participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id,
-                                                       MeetingParticipant.status == "CONFIRMED").all()
+    # 참가자 조회
+    participants = db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting_id
+    ).all()
 
     if not participants:
         logger.warning(f"참가자가 없습니다: {meeting_id}")

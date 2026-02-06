@@ -15,7 +15,7 @@ from database import get_db
 from models import (
     Score, MeetingParticipant, Meeting, User, ClubMembership, UserScoreHistory, MeetingResult
 )
-from schemas import ClubRole, MeetingType, MeetingParticipantRole
+from schemas import ClubRole, MeetingType
 from schemas import (
     ScoreCreate, ScoreUpdate, ScoreResponse, ScoreListResponse, ScoreStats, MessageResponse,
     SimpleScoreCreate, SimpleScoreResponse
@@ -473,11 +473,7 @@ async def get_participant_scores(
         # 권한 확인 (참가자 본인 또는 모임 매니저)
         user_id = current_user["id"]
         is_participant = (participant.user_id == user_id) if participant.user_id else False
-        is_manager = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        ).first() is not None
+        is_manager = meeting.created_by == user_id
         
         if not (is_participant or is_manager):
             raise HTTPException(
@@ -563,11 +559,7 @@ async def get_participant_score_stats(
         # 권한 확인 (참가자 본인 또는 모임 매니저)
         user_id = current_user["id"]
         is_participant = (participant.user_id == user_id) if participant.user_id else False
-        is_manager = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        ).first() is not None
+        is_manager = meeting.created_by == user_id
         
         if not (is_participant or is_manager):
             raise HTTPException(

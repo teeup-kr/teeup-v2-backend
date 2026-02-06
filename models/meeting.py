@@ -3,7 +3,7 @@ from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, Enum, F
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-from .enums import Gender, ParticipantStatus, ParticipantRole, ParticipantType
+from .enums import Gender, ParticipantType
 
 class Guest(Base):
     """게스트 정보 테이블"""
@@ -74,8 +74,6 @@ class MeetingParticipant(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, comment="일반 사용자 ID (게스트가 아닌 경우)")
     guest_id = Column(Integer, ForeignKey("guests.id", ondelete="CASCADE"), nullable=True, comment="게스트 ID (게스트인 경우)")
     participant_type = Column(Enum(ParticipantType), nullable=False, comment="참가자 타입: USER 또는 GUEST (user_id가 있으면 USER, guest_id가 있으면 GUEST)")
-    status = Column(Enum(ParticipantStatus), default=ParticipantStatus.CONFIRMED, nullable=False)
-    role = Column(Enum(ParticipantRole), default=ParticipantRole.PARTICIPANT, nullable=False)
     handicap_index = Column(Integer)
     recent_avg_score = Column(Integer)
     pace_preference = Column(String(50))
@@ -248,4 +246,3 @@ class MeetingResult(Base):
     # 관계 설정
     meeting = relationship("Meeting", backref="results")
     user = relationship("User", backref="meeting_results")
-

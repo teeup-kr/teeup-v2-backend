@@ -2,7 +2,7 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
-from .enums import MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, ParticipantType
+from .enums import MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ParticipantType
 from .team import GuestCreate
 
 class RoundingMeetingCreate(BaseModel):
@@ -120,8 +120,6 @@ class MeetingParticipantResponse(BaseModel):
     participant_type: ParticipantType
     user_name: str
     user_nickname: str
-    status: MeetingParticipantStatus
-    role: MeetingParticipantRole
     handicap_index: Optional[int]
     recent_avg_score: Optional[int]
     pace_preference: Optional[str]

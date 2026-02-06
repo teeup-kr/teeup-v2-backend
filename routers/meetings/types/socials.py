@@ -12,10 +12,10 @@ import logging
 
 from database import get_db
 from models import (
-    User, Club, ClubMembership, Meeting, MeetingParticipant
+    User, Club, ClubMembership, Meeting, MeetingParticipant, ParticipantType
 )
 from schemas import (
-    MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole
+    MeetingType, MeetingStatus
 )
 from schemas import (
     SocialMeetingCreate, MeetingUpdate, MeetingResponse,
@@ -93,10 +93,7 @@ async def get_socials(
     meeting_responses = []
     for meeting in meetings:
         participant_count = db.query(MeetingParticipant).filter(
-            and_(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-            )
+            MeetingParticipant.meeting_id == meeting.id
         ).count()
         
         meeting_dict = {**meeting.__dict__}
@@ -165,19 +162,18 @@ async def create_social(
         club_id=meeting_data.club_id,
         status=MeetingStatus.SCHEDULED,
         tee_times=[],
+        created_by=current_user.id
     )
     
     db.add(meeting)
     db.commit()
     db.refresh(meeting)
     
-    # 생성자를 매니저로 자동 참가
+    # 생성자를 참가자로 자동 추가
     participant = MeetingParticipant(
         meeting_id=meeting.id,
         user_id=current_user.id,
-        participant_type=ParticipantType.USER,
-        status=MeetingParticipantStatus.CONFIRMED,
-        role=MeetingParticipantRole.ORGANIZER
+        participant_type=ParticipantType.USER
     )
     db.add(participant)
     db.commit()
@@ -270,10 +266,7 @@ async def get_social(
     
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(
-        and_(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-        )
+        MeetingParticipant.meeting_id == meeting.id
     ).count()
     
     meeting_dict = {**meeting.__dict__}
@@ -322,7 +315,7 @@ async def update_social(
             detail="소셜 모임을 찾을 수 없습니다."
         )
     
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     from utils.permissions import is_meeting_organizer_or_manager
     if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
         raise HTTPException(
@@ -345,10 +338,7 @@ async def update_social(
     
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(
-        and_(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-        )
+        MeetingParticipant.meeting_id == meeting.id
     ).count()
     
     return MeetingResponse(
@@ -383,7 +373,7 @@ async def delete_social(
             detail="소셜 모임을 찾을 수 없습니다."
         )
     
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     from utils.permissions import is_meeting_organizer_or_manager
     if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
         raise HTTPException(
@@ -454,10 +444,7 @@ async def join_social(
     # 최대 참가자 수 확인 (max_participants가 null이면 제한 없음)
     if meeting.max_participants is not None:
         current_participants = db.query(MeetingParticipant).filter(
-            and_(
-                MeetingParticipant.meeting_id == meeting_id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-            )
+            MeetingParticipant.meeting_id == meeting_id
         ).count()
         
         if current_participants >= meeting.max_participants:
@@ -467,10 +454,10 @@ async def join_social(
             )
     
     # 참가자 추가
-    participant = MeetingParticipant(        meeting_id=meeting_id,
+    participant = MeetingParticipant(
+        meeting_id=meeting_id,
         user_id=current_user.id,
-        status=MeetingParticipantStatus.CONFIRMED,
-        role=MeetingParticipantRole.PARTICIPANT
+        participant_type=ParticipantType.USER
     )
     
     db.add(participant)
@@ -500,11 +487,12 @@ async def leave_social(
             detail="참가하지 않은 소셜 모임입니다."
         )
     
-    # 매니저는 탈퇴 불가
-    if participant.role == MeetingParticipantRole.ORGANIZER:
+    # 생성자는 탈퇴 불가
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting and meeting.created_by == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="소셜 모임 매니저는 탈퇴할 수 없습니다."
+            detail="소셜 모임 생성자는 탈퇴할 수 없습니다."
         )
     
     db.delete(participant)
@@ -539,16 +527,8 @@ async def cancel_social(
             detail="소셜 모임을 찾을 수 없습니다."
         )
     
-    # 매니저 권한 확인
-    participant = db.query(MeetingParticipant).filter(
-        and_(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        )
-    ).first()
-    
-    if not participant:
+    # 매니저 권한 확인 (모임 생성자 기준)
+    if meeting.created_by != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="소셜 모임 매니저만 취소할 수 있습니다."

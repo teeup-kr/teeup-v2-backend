@@ -10,7 +10,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Meeting, MeetingParticipant, User, Gender
-from schemas import MeetingParticipantStatus
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -114,8 +113,7 @@ def verify_meetings():
             # 참가자 조회
             participants = db.query(MeetingParticipant).filter(
                 MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
-                MeetingParticipant.is_guest == False
+                MeetingParticipant.user_id.isnot(None)
             ).all()
             
             # 성별별 집계
@@ -197,4 +195,3 @@ def verify_meetings():
 
 if __name__ == "__main__":
     verify_meetings()
-

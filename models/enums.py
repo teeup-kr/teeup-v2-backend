@@ -45,17 +45,6 @@ class MeetingStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
     CANCELED = "CANCELED"
 
-class ParticipantStatus(str, enum.Enum):
-    PENDING = "PENDING"
-    CONFIRMED = "CONFIRMED"
-    CANCELED = "CANCELED"
-    WAITING_LIST = "WAITING_LIST"
-
-class ParticipantRole(str, enum.Enum):
-    PARTICIPANT = "PARTICIPANT"
-    ORGANIZER = "ORGANIZER"
-    CO_ORGANIZER = "CO_ORGANIZER"
-
 class ParticipantType(str, enum.Enum):
     USER = "USER"
     GUEST = "GUEST"

@@ -14,10 +14,10 @@ from database import get_db
 from models import (
     User, Club, ClubMembership, ClubRole, Meeting, MeetingParticipant, 
     Expense, ExpenseParticipant, Score,
-    UserScoreHistory, MeetingResult, Guest, ParticipantType, ParticipantStatus, ParticipantRole
+    UserScoreHistory, MeetingResult, Guest, ParticipantType
 )
 from schemas import (
-    MembershipStatus, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole
+    MembershipStatus, MeetingType, MeetingStatus
 )
 from schemas import (
     RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, MeetingResponse,
@@ -103,7 +103,8 @@ async def create_meeting(
             )
         
         # 모임 생성
-        meeting = Meeting(            name=meeting_data.name,
+        meeting = Meeting(
+            name=meeting_data.name,
             description=meeting_data.description,
             location=meeting_data.location,
             meeting_time=meeting_data.meeting_time,
@@ -119,7 +120,8 @@ async def create_meeting(
             course_name=meeting_data.course_name,
             hole_count=meeting_data.hole_count,
             reservation_name=meeting_data.reservation_name,
-            club_id=club_id
+            club_id=club_id,
+            created_by=current_user.id
         )
         
         db.add(meeting)
@@ -137,30 +139,11 @@ async def create_meeting(
         print(f"  - settlement_method: {meeting.settlement_method}")
         print(f"  - reservation_name: {meeting.reservation_name}")
         
-        # 모임 생성자를 참가자로 추가 (클럽 역할에 따라)
-        # 클럽에서의 역할을 조회하여 모임 참가자 역할 결정
-        club_membership = db.query(ClubMembership).filter(
-            ClubMembership.club_id == meeting.club_id,
-            ClubMembership.user_id == current_user.id
-        ).first()
-        
-        # 클럽 역할에 따라 모임 참가자 역할 매핑
-        # 리더/매니저는 PARTICIPANT 역할로 설정 (권한은 별도 체크)
-        if club_membership:
-            if club_membership.role == ClubRole.LEADER:
-                participant_role = MeetingParticipantRole.PARTICIPANT
-            elif club_membership.role == ClubRole.MANAGER:
-                participant_role = MeetingParticipantRole.PARTICIPANT
-            else:
-                participant_role = MeetingParticipantRole.PARTICIPANT
-        else:
-            participant_role = MeetingParticipantRole.PARTICIPANT
-        
+        # 모임 생성자를 참가자로 추가 (승인/역할 없이 즉시 참가)
         participant = MeetingParticipant(
             meeting_id=meeting.id,
             user_id=current_user.id,
-            participant_type=ParticipantType.USER,
-            role=participant_role
+            participant_type=ParticipantType.USER
         )
         
         db.add(participant)
@@ -193,8 +176,7 @@ async def create_meeting(
         db.refresh(meeting)
         
         participant_count = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting.id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.meeting_id == meeting.id
         ).count()
         
         return MeetingResponse(
@@ -306,8 +288,7 @@ async def get_rounding_meetings(
             
             # 참가자 수 조회
             participant_count = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             # tee_times에서 첫 번째 시간을 tee_time으로 설정
@@ -434,10 +415,6 @@ async def get_rounding_meetings(
 #             club_name = club.name if club else "Unknown Club"
 #             
 #             # 참가자 수 조회
-#             participant_count = db.query(MeetingParticipant).filter(
-#                 MeetingParticipant.meeting_id == meeting.id,
-#                 MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-#             ).count()
 #             
 #             meeting_responses.append(MeetingResponse(
 #                 id=meeting.id,
@@ -566,8 +543,7 @@ async def get_meetings(
             Club, Meeting.club_id == Club.id
         ).outerjoin(
             MeetingParticipant, 
-            (MeetingParticipant.meeting_id == Meeting.id) & 
-            (MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)
+            MeetingParticipant.meeting_id == Meeting.id
         ).filter(
             # 프라이빗 라운딩 필터링 재적용
             or_(
@@ -642,8 +618,7 @@ async def get_my_meetings(
         # 내가 참가한 모임 조회 (참가자이거나 생성자인 경우)
         # 참가한 모임
         participant_meetings = db.query(MeetingParticipant.meeting_id).filter(
-            MeetingParticipant.user_id == current_user.id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.user_id == current_user.id
         ).subquery()
         
         # 생성한 모임 (프라이빗 라운딩 포함)
@@ -678,8 +653,7 @@ async def get_my_meetings(
             
             # 참가자 수 조회
             participant_count = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             # 내 참가 정보 조회
@@ -703,8 +677,8 @@ async def get_my_meetings(
                 "club_name": club.name if club else "알 수 없는 클럽",
                 "participant_count": participant_count,
                 "my_participation": {
-                    "status": my_participation.status if my_participation else None,
-                    "role": my_participation.role if my_participation else None
+                    "id": my_participation.id,
+                    "participant_type": my_participation.participant_type
                 } if my_participation else None,
                 "created_at": meeting.created_at,
                 "updated_at": meeting.updated_at
@@ -809,8 +783,6 @@ async def get_meeting(
                 "id": participant.id,                "user_id": participant.user_id,
                 "user_name": user_realname if user_realname else "이름 없음",
                 "user_nickname": user_nickname if user_nickname else "닉네임 없음",
-                "status": participant.status,
-                "role": participant.role,
                 "handicap_index": participant.handicap_index if participant.handicap_index is not None else 0.0,
                 "recent_avg_score": participant.recent_avg_score if participant.recent_avg_score is not None else 0,
                 "pace_preference": participant.pace_preference if participant.pace_preference is not None else "",
@@ -821,7 +793,7 @@ async def get_meeting(
                 "created_at": participant.created_at
             })
         
-        participant_count = len([p for p in participants_with_users if p[0].status == MeetingParticipantStatus.CONFIRMED])
+        participant_count = len(participants_with_users)
         
         # 생성자 정보 조회
         created_by_name = None
@@ -901,7 +873,7 @@ async def update_meeting(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 모임 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+        # 모임 매니저 권한 확인 (개설자 또는 리더/매니저)
         from utils.permissions import is_meeting_organizer_or_manager
         if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(
@@ -938,8 +910,7 @@ async def update_meeting(
         
         # 참가자 수 조회
         participant_count = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.meeting_id == meeting_id
         ).count()
         
         return MeetingResponse(
@@ -998,7 +969,7 @@ async def delete_meeting(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 모임 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+        # 모임 매니저 권한 확인 (개설자 또는 리더/매니저)
         from utils.permissions import is_meeting_organizer_or_manager
         if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(
@@ -1069,14 +1040,8 @@ async def cancel_meeting(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 모임 매니저 권한 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        ).first()
-        
-        if not participant:
+        # 모임 매니저 권한 확인 (모임 생성자 기준)
+        if meeting.created_by != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="모임 매니저만 모임을 취소할 수 있습니다."
@@ -1198,8 +1163,7 @@ async def get_club_meetings(
             func.count(MeetingParticipant.id).label('participant_count')
         ).outerjoin(
             MeetingParticipant, 
-            (MeetingParticipant.meeting_id == Meeting.id) & 
-            (MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)
+            MeetingParticipant.meeting_id == Meeting.id
         ).filter(Meeting.club_id == club.id).group_by(
             Meeting.id
         ).order_by(
@@ -1284,14 +1248,8 @@ async def send_meeting_notification(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 모임 매니저 권한 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        ).first()
-        
-        if not participant:
+        # 모임 매니저 권한 확인 (모임 생성자 기준)
+        if meeting.created_by != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="모임 매니저만 알림을 전송할 수 있습니다."
@@ -1301,7 +1259,7 @@ async def send_meeting_notification(
         if notification_data.send_to_all_participants:
             participants = db.query(MeetingParticipant).filter(
                 MeetingParticipant.meeting_id == meeting_id,
-                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+                MeetingParticipant.user_id.isnot(None)
             ).all()
             target_user_ids = [p.user_id for p in participants]
         else:
@@ -1378,14 +1336,8 @@ async def send_meeting_reminder(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 모임 매니저 권한 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == current_user.id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER
-        ).first()
-        
-        if not participant:
+        # 모임 매니저 권한 확인 (모임 생성자 기준)
+        if meeting.created_by != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="모임 매니저만 리마인더를 전송할 수 있습니다."
@@ -1394,7 +1346,7 @@ async def send_meeting_reminder(
         # 참가자들 조회
         participants = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.user_id.isnot(None)
         ).all()
         
         # 리마인더 알림 생성

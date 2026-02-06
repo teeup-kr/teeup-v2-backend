@@ -174,7 +174,6 @@
 | PUT | `/notifications/read-all` | 모든 알림 읽음 처리 | - | [MessageResponse](#messageresponse) | ✅ |
 | GET | `/scores` | 스코어 목록 조회 | Query: `page?, limit?` | [ScoreListResponse](#scorelistresponse) | ✅ |
 | GET | `/meeting_participants` | 모임 참가자 목록 조회 | Query: `meeting_id?` | `List`[[MeetingParticipantResponse](#meetingparticipantresponse)] | ✅ |
-| PUT | `/meeting_participants/{participant_id}/status` | 참가자 상태 변경 | `{status: str}` | [MessageResponse](#messageresponse) | ✅ |
 | POST | `/upload` | 파일 업로드 | FormData: `file` | `{url: str, file_id: int}` | ✅ |
 
 ---
@@ -310,11 +309,9 @@
 
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
-| POST | `/{meeting_id}/apply` | 모임 신청 | `{guest_info?}` | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
-| POST | `/{meeting_id}/participants/{participant_id}/approve` | 참가자 승인 | - | [MessageResponse](#messageresponse) | ✅ |
-| POST | `/{meeting_id}/participants/{participant_id}/reject` | 참가자 거부 | `{reason?: str}` | [MessageResponse](#messageresponse) | ✅ |
+| POST | `/{meeting_id}/apply` | 모임 참가 | `{guest_info?}` | [MeetingParticipantResponse](#meetingparticipantresponse) | ✅ |
 | POST | `/{meeting_id}/close-application` | 신청 마감 | - | [MessageResponse](#messageresponse) | ✅ |
-| GET | `/{meeting_id}/application-status` | 신청 상태 조회 | - | `{status: str, can_apply: bool, ...}` | ✅ |
+| GET | `/{meeting_id}/application-status` | 참가 현황 조회 | - | `{participant_count: int, ...}` | ✅ |
 | POST | `/{meeting_id}/start-team-formation` | 팀 편성 시작 | - | [MessageResponse](#messageresponse) | ✅ |
 | POST | `/{meeting_id}/teams/auto-formation` | 자동 팀 편성 | [TeamFormationRequest](#teamformationrequest) | [TeamFormationResponse](#teamformationresponse) | ✅ |
 | POST | `/{meeting_id}/teams/confirm` | 팀 편성 확정 | - | [MessageResponse](#messageresponse) | ✅ |
@@ -1288,8 +1285,6 @@ Authorization: Bearer {access_token}
 #### MeetingParticipantResponse
 
 **participant_type**: `string` → enum: [ParticipantType](#participanttype)  
-**status**: `string` → enum: [MeetingParticipantStatus](#meetingparticipantstatus)  
-**role**: `string` → enum: [MeetingParticipantRole](#meetingparticipantrole)
 
 **사용되는 엔드포인트:**
 - [GET `/api/v1/admin/meeting_participants`](#3-관리자-admin) - 모임 참가자 목록 조회
@@ -1305,8 +1300,6 @@ Authorization: Bearer {access_token}
   "participant_type": "USER",
   "user_name": string,
   "user_nickname": string,
-  "status": "CONFIRMED",
-  "role": "PARTICIPANT",
   "handicap_index": int,
   "recent_avg_score": int,
   "pace_preference": string,
@@ -2259,8 +2252,6 @@ Authorization: Bearer {access_token}
 
 #### ParticipantResponse
 
-**role**: `string` → enum: [MeetingParticipantRole](#meetingparticipantrole)
-
 **사용되는 엔드포인트:**
 - [GET `/api/v1/meetings/{meeting_id}/settlement/available-participants`](#5-모임-meetings) - 정산 가능 참가자 조회
 
@@ -2269,7 +2260,6 @@ Authorization: Bearer {access_token}
   "id": int,
   "name": string,
   "email": string,
-  "role": "PARTICIPANT",
   "joined_at": datetime (ISO 8601),
   "is_guest": boolean
 }
@@ -2890,21 +2880,6 @@ Authorization: Bearer {access_token}
 - `CANCELED`: 취소됨
 
 **사용되는 스키마:** [MeetingResponse](#meetingresponse)
-
-### MeetingParticipantStatus
-- `PENDING`: 대기 중
-- `CONFIRMED`: 확정됨
-- `CANCELED`: 취소됨
-- `WAITING_LIST`: 대기 명단
-
-**사용되는 스키마:** [MeetingParticipantResponse](#meetingparticipantresponse)
-
-### MeetingParticipantRole
-- `PARTICIPANT`: 참가자
-- `ORGANIZER`: 주최자
-- `CO_ORGANIZER`: 공동 주최자
-
-**사용되는 스키마:** [MeetingParticipantResponse](#meetingparticipantresponse), [ParticipantResponse](#participantresponse)
 
 ### ParticipantType
 - `USER`: 사용자

@@ -43,17 +43,6 @@ class MeetingStatus(str, Enum):
     COMPLETED = "COMPLETED"
     CANCELED = "CANCELED"
 
-class MeetingParticipantStatus(str, Enum):
-    PENDING = "PENDING"
-    CONFIRMED = "CONFIRMED"
-    CANCELED = "CANCELED"
-    WAITING_LIST = "WAITING_LIST"
-
-class MeetingParticipantRole(str, Enum):
-    PARTICIPANT = "PARTICIPANT"
-    ORGANIZER = "ORGANIZER"
-    CO_ORGANIZER = "CO_ORGANIZER"
-
 class ParticipantType(str, Enum):
     USER = "USER"
     GUEST = "GUEST"
@@ -171,4 +160,3 @@ class Provider(str, Enum):
     GOOGLE = "GOOGLE"
     KAKAO = "KAKAO"
     NAVER = "NAVER"
-

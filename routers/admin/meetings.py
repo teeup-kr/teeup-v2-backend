@@ -25,8 +25,8 @@ async def admin_get_rounding_meetings(page: int = Query(1, ge=1, description="�
                                       db: Session = Depends(get_db)):
     """관리자용 라운딩 모임 목록 조회 (모든 클럽 조회 가능)"""
     try:
-        from models import Meeting, Club, MeetingParticipant
-        from schemas import MeetingType, MeetingParticipantStatus, MeetingParticipantRole
+        from models import Meeting, Club, MeetingParticipant, User
+        from schemas import MeetingType
         from sqlalchemy import desc, and_, or_
 
         query = db.query(Meeting).join(Club).filter(Meeting.meeting_type == MeetingType.ROUND)
@@ -56,22 +56,20 @@ async def admin_get_rounding_meetings(page: int = Query(1, ge=1, description="�
         for meeting in meetings:
             # 참가자 수 조회
             participant_count = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting.id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+                MeetingParticipant.meeting_id == meeting.id
+            ).count()
 
-            # 개설자(ORGANIZER) 조회
-            organizer_participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting.id,
-                     MeetingParticipant.role == MeetingParticipantRole.ORGANIZER)).first()
-
+            # 개설자(생성자) 조회
             creator_info = None
-            if organizer_participant and organizer_participant.user:
-                creator_info = {
-                    "id": organizer_participant.user.id,
-                    "realname": organizer_participant.user.realname,
-                    "nickname": organizer_participant.user.nickname,
-                    "email": organizer_participant.user.email
-                }
+            if meeting.created_by:
+                creator = db.query(User).filter(User.id == meeting.created_by).first()
+                if creator:
+                    creator_info = {
+                        "id": creator.id,
+                        "realname": creator.realname,
+                        "nickname": creator.nickname,
+                        "email": creator.email
+                    }
 
             # meeting_type과 status는 데이터베이스에서 문자열로 저장되므로 .value 접근 불필요
             meeting_type_str = meeting.meeting_type
@@ -143,8 +141,8 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
                                    db: Session = Depends(get_db)):
     """관리자용 이벤트 모임 목록 조회 (모든 클럽 조회 가능)"""
     try:
-        from models import Meeting, Club, MeetingParticipant
-        from schemas import MeetingType, MeetingParticipantStatus, MeetingParticipantRole
+        from models import Meeting, Club, MeetingParticipant, User
+        from schemas import MeetingType
         from sqlalchemy import desc, and_, or_
 
         query = db.query(Meeting).join(Club).filter(Meeting.meeting_type == MeetingType.SOCIAL)
@@ -174,22 +172,20 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
         for meeting in meetings:
             # 참가자 수 조회
             participant_count = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting.id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+                MeetingParticipant.meeting_id == meeting.id
+            ).count()
 
-            # 개설자(ORGANIZER) 조회
-            organizer_participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting.id,
-                     MeetingParticipant.role == MeetingParticipantRole.ORGANIZER)).first()
-
+            # 개설자(생성자) 조회
             creator_info = None
-            if organizer_participant and organizer_participant.user:
-                creator_info = {
-                    "id": organizer_participant.user.id,
-                    "realname": organizer_participant.user.realname,
-                    "nickname": organizer_participant.user.nickname,
-                    "email": organizer_participant.user.email
-                }
+            if meeting.created_by:
+                creator = db.query(User).filter(User.id == meeting.created_by).first()
+                if creator:
+                    creator_info = {
+                        "id": creator.id,
+                        "realname": creator.realname,
+                        "nickname": creator.nickname,
+                        "email": creator.email
+                    }
 
             meeting_data.append({
                 "id":
@@ -244,7 +240,6 @@ async def get_admin_meeting(meeting_id: int,
     """관리자용 모임 상세 조회"""
     try:
         from models import Meeting, Club, MeetingParticipant
-        from schemas import MeetingParticipantStatus
         from sqlalchemy import and_
 
         # 모임 조회
@@ -256,8 +251,8 @@ async def get_admin_meeting(meeting_id: int,
 
         # 참가자 수 조회
         participant_count = db.query(MeetingParticipant).filter(
-            and_(MeetingParticipant.meeting_id == meeting.id,
-                 MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+            MeetingParticipant.meeting_id == meeting.id
+        ).count()
 
         return {
             "id":
@@ -311,7 +306,7 @@ async def create_admin_rounding_meeting(meeting_data: dict,
                                         current_user: dict = Depends(get_admin_user)):
     """관리자용 라운딩 모임 생성"""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole
+        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
         from utils import generate_id
         from datetime import datetime
 
@@ -340,17 +335,19 @@ async def create_admin_rounding_meeting(meeting_data: dict,
                           hole_count=meeting_data.get('hole_count'),
                           reservation_name=meeting_data.get('reservation_name'),
                           club_id=meeting_data.get('club_id'),
-                          status=MeetingStatus.SCHEDULED)
+                          status=MeetingStatus.SCHEDULED,
+                          created_by=current_user['id'])
 
         db.add(meeting)
         db.commit()
         db.refresh(meeting)
 
-        # 관리자를 매니저로 자동 참가
-        participant = MeetingParticipant(meeting_id=meeting.id,
-                                         user_id=current_user['id'],
-                                         status=MeetingParticipantStatus.CONFIRMED,
-                                         role=MeetingParticipantRole.ORGANIZER)
+        # 관리자를 참가자로 자동 추가
+        participant = MeetingParticipant(
+            meeting_id=meeting.id,
+            user_id=current_user['id'],
+            participant_type=ParticipantType.USER
+        )
         db.add(participant)
         db.commit()
 
@@ -401,7 +398,7 @@ async def create_admin_event_meeting(meeting_data: dict,
                                      current_user: dict = Depends(get_admin_user)):
     """관리자용 이벤트 모임 생성"""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole
+        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
         from utils import generate_id
         from datetime import datetime
 
@@ -421,17 +418,19 @@ async def create_admin_event_meeting(meeting_data: dict,
                           social_cost=meeting_data.get('social_cost'),
                           social_settlement_method=meeting_data.get('social_settlement_method'),
                           club_id=meeting_data.get('club_id'),
-                          status=MeetingStatus.SCHEDULED)
+                          status=MeetingStatus.SCHEDULED,
+                          created_by=current_user['id'])
 
         db.add(meeting)
         db.commit()
         db.refresh(meeting)
 
-        # 관리자를 매니저로 자동 참가
-        participant = MeetingParticipant(meeting_id=meeting.id,
-                                         user_id=current_user['id'],
-                                         status=MeetingParticipantStatus.CONFIRMED,
-                                         role=MeetingParticipantRole.ORGANIZER)
+        # 관리자를 참가자로 자동 추가
+        participant = MeetingParticipant(
+            meeting_id=meeting.id,
+            user_id=current_user['id'],
+            participant_type=ParticipantType.USER
+        )
         db.add(participant)
         db.commit()
 
@@ -486,7 +485,7 @@ async def update_admin_meeting(meeting_id: int,
                                current_user: dict = Depends(get_admin_user)):
     """관리자용 모임 수정"""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingParticipantStatus
+        from models import Meeting, Club, MeetingParticipant
         from sqlalchemy import and_
 
         # 모임 조회
@@ -510,8 +509,8 @@ async def update_admin_meeting(meeting_id: int,
 
         # 참가자 수 조회
         participant_count = db.query(MeetingParticipant).filter(
-            and_(MeetingParticipant.meeting_id == meeting.id,
-                 MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+            MeetingParticipant.meeting_id == meeting.id
+        ).count()
 
         return {
             "id":

@@ -13,8 +13,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Meeting, User, MeetingParticipant, ClubMembership, Gender
-from schemas import MeetingParticipantStatus, MeetingParticipantRole, UserRole, TeamFormationMode
+from models import Meeting, User, MeetingParticipant, ClubMembership, Gender, ParticipantType
+from schemas import UserRole, TeamFormationMode
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from datetime import datetime
 import logging
@@ -228,8 +228,7 @@ def apply_users_to_meetings_accurate():
             
             # 현재 참가 신청된 인원 수 확인
             current_participants = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             # 필요한 인원수 계산: max_participants만큼 정확히 신청 (현재 참가자 수와 무관하게)
@@ -298,8 +297,7 @@ def apply_users_to_meetings_accurate():
                     participant = MeetingParticipant(
                         meeting_id=meeting.id,
                         user_id=user.id,
-                        status=MeetingParticipantStatus.CONFIRMED,
-                        role=MeetingParticipantRole.PARTICIPANT
+                        participant_type=ParticipantType.USER
                     )
                     
                     db.add(participant)
@@ -324,15 +322,13 @@ def apply_users_to_meetings_accurate():
             
             # 최종 참가자 수 확인
             final_count = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             # 성별별 참가자 수 확인
             final_participants = db.query(MeetingParticipant).filter(
                 MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING]),
-                MeetingParticipant.is_guest == False
+                MeetingParticipant.user_id.isnot(None)
             ).all()
             
             male_participants = 0
@@ -384,4 +380,3 @@ def apply_users_to_meetings_accurate():
 
 if __name__ == "__main__":
     apply_users_to_meetings_accurate()
-

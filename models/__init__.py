@@ -3,7 +3,7 @@
 
 # Enum 클래스들
 from .enums import (UserStatus, Provider, Gender, ClubType, ClubStatus, ClubRole, MembershipStatus, MeetingStatus,
-                    ParticipantStatus, ParticipantRole, ParticipantType, PaymentStatus, SubscriptionStatus,
+                    ParticipantType, PaymentStatus, SubscriptionStatus,
                     BillingCycle, TermsType, InquiryStatus, FeeType, ExpenseStatus, NoticeType, TokenRevokeReason,
                     HandicapUpdateMethod, NotificationType, NotificationStatus)
 
@@ -47,8 +47,6 @@ __all__ = [
     "ClubRole",
     "MembershipStatus",
     "MeetingStatus",
-    "ParticipantStatus",
-    "ParticipantRole",
     "ParticipantType",
     "PaymentStatus",
     "SubscriptionStatus",

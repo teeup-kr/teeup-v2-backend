@@ -30,8 +30,6 @@ from models import (
     Meeting,
     MeetingParticipant,
     MembershipStatus,
-    ParticipantRole,
-    ParticipantStatus,
     ParticipantType,
     Provider,
     Sido,
@@ -395,23 +393,11 @@ def upsert_meetings_and_participants(
                     counters["participant_skipped"] += 1
                     continue
 
-                role = ParticipantRole.PARTICIPANT
-                if user_id == leader_id:
-                    role = ParticipantRole.ORGANIZER
-                elif idx == 1:
-                    role = ParticipantRole.CO_ORGANIZER
-
-                status = ParticipantStatus.CONFIRMED
-                if meeting.status == "SCHEDULED" and idx % 7 == 0 and role == ParticipantRole.PARTICIPANT:
-                    status = ParticipantStatus.PENDING
-
                 db.add(
                     MeetingParticipant(
                         meeting_id=meeting.id,
                         user_id=user_id,
                         participant_type=ParticipantType.USER,
-                        status=status,
-                        role=role,
                         handicap_index=10 + (idx % 15),
                         recent_avg_score=80 + (idx % 10),
                         is_newbie=bool(idx % 5 == 0),
