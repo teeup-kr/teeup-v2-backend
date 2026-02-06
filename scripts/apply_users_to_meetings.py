@@ -19,8 +19,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Meeting, User, MeetingParticipant, ClubMembership
-from schemas import MeetingParticipantStatus, MeetingParticipantRole, UserRole
+from models import Meeting, User, MeetingParticipant, ClubMembership, ParticipantType
+from schemas import UserRole
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from datetime import datetime
 import logging
@@ -139,8 +139,7 @@ def apply_users_to_meetings():
             
             # 현재 참가 신청된 인원 수 확인
             current_participants = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             # 이미 필요한 인원수만큼 참가신청이 되어 있으면 건너뜀
@@ -182,8 +181,7 @@ def apply_users_to_meetings():
                     # 참가자 수 확인 (max_participants 체크)
                     if meeting.max_participants is not None:
                         current_count = db.query(MeetingParticipant).filter(
-                            MeetingParticipant.meeting_id == meeting.id,
-                            MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+                            MeetingParticipant.meeting_id == meeting.id
                         ).count()
                         
                         if current_count >= meeting.max_participants:
@@ -194,8 +192,7 @@ def apply_users_to_meetings():
                     participant = MeetingParticipant(
                         meeting_id=meeting.id,
                         user_id=user.id,
-                        status=MeetingParticipantStatus.PENDING,
-                        role=MeetingParticipantRole.PARTICIPANT
+                        participant_type=ParticipantType.USER
                     )
                     
                     db.add(participant)
@@ -221,8 +218,7 @@ def apply_users_to_meetings():
             
             # 최종 참가자 수 확인
             final_count = db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status.in_([MeetingParticipantStatus.CONFIRMED, MeetingParticipantStatus.PENDING])
+                MeetingParticipant.meeting_id == meeting.id
             ).count()
             
             remainder = final_count % 4
@@ -261,4 +257,3 @@ def apply_users_to_meetings():
 
 if __name__ == "__main__":
     apply_users_to_meetings()
-

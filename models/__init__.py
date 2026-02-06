@@ -3,8 +3,8 @@
 
 # Enum 클래스들
 from .enums import (UserStatus, Provider, Gender, ClubType, ClubStatus, ClubRole, MembershipStatus, MeetingStatus,
-                    ParticipantStatus, ParticipantRole, ParticipantType, PaymentStatus, SubscriptionStatus,
-                    BillingCycle, TermsType, InquiryType, InquiryStatus, FeeType, ExpenseStatus, ExpenseItemType, NoticeType, TokenRevokeReason,
+                    ParticipantType, PaymentStatus, SubscriptionStatus,
+                    BillingCycle, TermsType, InquiryStatus, FeeType, ExpenseStatus, NoticeType, TokenRevokeReason,
                     HandicapUpdateMethod, NotificationType, NotificationStatus)
 
 # User 관련 모델
@@ -47,8 +47,6 @@ __all__ = [
     "ClubRole",
     "MembershipStatus",
     "MeetingStatus",
-    "ParticipantStatus",
-    "ParticipantRole",
     "ParticipantType",
     "PaymentStatus",
     "SubscriptionStatus",

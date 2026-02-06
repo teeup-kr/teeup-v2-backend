@@ -654,8 +654,7 @@ async def get_my_meetings(
         for participant, meeting, club in results:
             # 참가자 수 조회
             participant_count = (db.query(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting.id,
-                MeetingParticipant.status == "CONFIRMED",
+                MeetingParticipant.meeting_id == meeting.id
             ).count())
 
             # 팀 정보 조회
@@ -675,8 +674,6 @@ async def get_my_meetings(
                 "status": str(meeting.status) if meeting.status else None,
                 "club_id": club.id,
                 "club_name": club.name,
-                "my_status": str(participant.status) if participant.status else None,
-                "my_role": str(participant.role) if participant.role else None,
                 "created_at": meeting.created_at,
                 # getStatusBadge 함수에 필요한 필드들
                 "participant_count": participant_count,
@@ -1703,8 +1700,6 @@ class ScheduleMeetingItem(BaseModel):
     status: str
     club_id: int
     club_name: str
-    participant_status: str
-    participant_role: Optional[str] = None
 
 
 class DateScheduleItem(BaseModel):
@@ -1729,18 +1724,17 @@ async def get_my_schedule(
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_active_user),
 ):
-    """내 일정표 조회 (참가 확정된 모임만, 날짜별로 그룹화)"""
+    """내 일정표 조회 (참가한 모임만, 날짜별로 그룹화)"""
     try:
-        from models import MeetingParticipant, Meeting, Club, MeetingParticipantStatus
+        from models import MeetingParticipant, Meeting, Club
         from datetime import datetime, timedelta
         from collections import defaultdict
 
-        # 사용자가 참가 확정된 모임 조회
+        # 사용자가 참가한 모임 조회
         query = (
             db.query(MeetingParticipant, Meeting, Club).join(Meeting, MeetingParticipant.meeting_id == Meeting.id).join(
                 Club, Meeting.club_id == Club.id).filter(
                     MeetingParticipant.user_id == current_user.id,
-                    MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
                     Meeting.meeting_time.isnot(None),  # 일정 시간이 있는 모임만
                 ))
 
@@ -1797,8 +1791,6 @@ async def get_my_schedule(
                         status=str(meeting.status) if meeting.status else None,
                         club_id=club.id,
                         club_name=club.name,
-                        participant_status=(str(participant.status) if participant.status else None),
-                        participant_role=(str(participant.role) if participant.role else None),
                     ))
 
         # 날짜별로 정렬된 리스트 생성

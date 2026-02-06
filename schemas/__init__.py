@@ -5,7 +5,7 @@
 from .enums import (
     ClubType, ClubStatus, ClubRole, BillingCycle,
     MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod,
-    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, ParticipantType,
+    MeetingStatus, ParticipantType,
     RegulationStatus, MembershipStatus,
     TeamFormationMode, TeamStatus,
     NotificationType, NotificationStatus,
@@ -113,7 +113,7 @@ __all__ = [
     # Enums
     "ClubType", "ClubStatus", "ClubRole", "BillingCycle",
     "MeetingType", "MeetingSubtype", "SettlementMethod", "SocialSettlementMethod",
-    "MeetingStatus", "MeetingParticipantStatus", "MeetingParticipantRole",
+    "MeetingStatus",
     "RegulationStatus", "MembershipStatus",
     "TeamFormationMode", "TeamStatus",
     "NotificationType", "NotificationStatus",

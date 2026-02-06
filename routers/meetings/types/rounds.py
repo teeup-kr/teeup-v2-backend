@@ -13,8 +13,7 @@ import logging
 from database import get_db
 from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, Guest,
                     ParticipantType, Gender)
-from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, MeetingParticipantStatus,
-                     MeetingParticipantRole, ClubRole, TeamFormationMode)
+from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ClubRole, TeamFormationMode)
 from schemas import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
                      PaginatedResponse, TeamResponse, TeamMemberResponse, TeamStatus)
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both, get_user_role_from_token
@@ -91,9 +90,7 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
     # 응답 데이터 구성
     meeting_responses = []
     for meeting in meetings:
-        participant_count = db.query(MeetingParticipant).filter(
-            and_(MeetingParticipant.meeting_id == meeting.id,
-                 MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+        participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
 
         # 디버깅: 첫 번째 모임의 참가자 수 확인
         if len(meeting_responses) == 0:
@@ -170,6 +167,10 @@ async def create_round(meeting_data: RoundingMeetingCreate,
         if not meeting_data.selected_participants or len(meeting_data.selected_participants) == 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="프라이빗 라운딩은 최소 1명 이상의 참가자를 선택해야 합니다.")
 
+    if meeting_data.selected_guests:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="게스트는 라운딩 생성 후 /api/v1/meetings/{meeting_id}/guests로 추가해주세요.")
+
     # 모임 생성
     meeting = Meeting(name=meeting_data.name,
                       description=meeting_data.description,
@@ -203,7 +204,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
 
     # 프라이빗 라운딩인 경우
     if is_private:
-        # 선택된 참가자들을 PENDING 상태로 추가
+        # 선택된 참가자들을 참가자로 추가
         if meeting_data.selected_participants:
             # 참가자 검증: 모두 해당 클럽의 활성 멤버인지 확인
             for user_id in meeting_data.selected_participants:
@@ -222,40 +223,9 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                 if not existing_participant:
                     participant = MeetingParticipant(meeting_id=meeting.id,
                                                      user_id=user_id,
-                                                     participant_type=ParticipantType.USER,
-                                                     status=MeetingParticipantStatus.PENDING,
-                                                     role=MeetingParticipantRole.PARTICIPANT)
+                                                     participant_type=ParticipantType.USER)
                     db.add(participant)
                     participant_count += 1
-
-        # 게스트 추가
-        if meeting_data.selected_guests:
-            from utils.team_formation import add_guest_to_meeting
-            from decimal import Decimal
-
-            for guest_data in meeting_data.selected_guests:
-                try:
-                    # Gender enum 변환
-                    guest_gender_enum = None
-                    if guest_data.gender:
-                        guest_gender_enum = Gender(guest_data.gender)
-
-                    # 핸디캡 변환
-                    guest_handicap_decimal = None
-                    if guest_data.handicap is not None:
-                        guest_handicap_decimal = Decimal(str(guest_data.handicap))
-
-                    # 게스트 추가 (CONFIRMED 상태로)
-                    guest_participant = add_guest_to_meeting(meeting_id=meeting.id,
-                                                             guest_name=guest_data.name,
-                                                             guest_handicap=guest_handicap_decimal,
-                                                             average_score=guest_data.average_score,
-                                                             guest_birthdate=guest_data.birthdate,
-                                                             guest_gender=guest_gender_enum,
-                                                             db=db)
-                    participant_count += 1
-                except ValueError as e:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"게스트 정보 오류: {str(e)}")
 
         db.commit()
 
@@ -283,12 +253,10 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                 # 알림 실패해도 계속 진행
 
     else:
-        # 일반 라운딩: 생성자를 매니저로 자동 참가
+        # 일반 라운딩: 생성자를 참가자로 자동 추가
         participant = MeetingParticipant(meeting_id=meeting.id,
                                          user_id=current_user.id,
-                                         participant_type=ParticipantType.USER,
-                                         status=MeetingParticipantStatus.CONFIRMED,
-                                         role=MeetingParticipantRole.ORGANIZER)
+                                         participant_type=ParticipantType.USER)
         db.add(participant)
         db.commit()
         participant_count = 1
@@ -371,9 +339,7 @@ async def get_round(meeting_id: int,
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="해당 클럽의 멤버가 아닙니다.")
 
     # 참가자 수 조회
-    participant_count = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting.id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+    participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
 
     # 생성자 정보 조회
     created_by_name = None
@@ -411,7 +377,7 @@ async def update_round(meeting_id: int,
     if not meeting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 수정 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
     is_creator = meeting.created_by == current_user.id
@@ -442,9 +408,7 @@ async def update_round(meeting_id: int,
     club = db.query(Club).filter(Club.id == meeting.club_id).first()
 
     # 참가자 수 조회
-    participant_count = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting.id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+    participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
 
     # 생성자 정보 조회
     created_by_name = None
@@ -481,7 +445,7 @@ async def delete_round(meeting_id: int,
     if not meeting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
-    # 매니저 권한 확인 (개설자, ORGANIZER, 또는 리더/매니저 참가자)
+    # 매니저 권한 확인 (개설자 또는 리더/매니저)
     # 프라이빗 라운딩 생성자가 참가하지 않은 경우에도 삭제 권한 확인
     from utils.permissions import is_meeting_organizer_or_manager
     is_creator = meeting.created_by == current_user.id
@@ -528,9 +492,7 @@ async def join_round(meeting_id: int,
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 참가한 라운딩입니다.")
 
     # 최대 참가자 수 확인
-    current_participants = db.query(MeetingParticipant).filter(
-        and_(MeetingParticipant.meeting_id == meeting_id,
-             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).count()
+    current_participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).count()
 
     if current_participants >= meeting.max_participants:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 정원이 가득 찼습니다.")
@@ -538,8 +500,7 @@ async def join_round(meeting_id: int,
     # 참가자 추가
     participant = MeetingParticipant(meeting_id=meeting_id,
                                      user_id=current_user.id,
-                                     status=MeetingParticipantStatus.CONFIRMED,
-                                     role=MeetingParticipantRole.PARTICIPANT)
+                                     participant_type=ParticipantType.USER)
 
     db.add(participant)
     db.commit()
@@ -560,9 +521,10 @@ async def leave_round(meeting_id: int,
     if not participant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가하지 않은 라운딩입니다.")
 
-    # 매니저는 탈퇴 불가
-    if participant.role == MeetingParticipantRole.ORGANIZER:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 매니저는 탈퇴할 수 없습니다.")
+    # 생성자는 탈퇴 불가
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting and meeting.created_by == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 생성자는 탈퇴할 수 없습니다.")
 
     db.delete(participant)
     db.commit()
@@ -576,11 +538,10 @@ async def leave_round(meeting_id: int,
 
 
 @router.get("/{meeting_id}/participants")
-async def get_round_participants(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user_allow_both),
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)):
+async def get_round_participants(meeting_id: int,
+                                 current_user: User = Depends(get_current_active_user),
+                                 credentials: HTTPAuthorizationCredentials = Depends(security),
+                                 db: Session = Depends(get_db)):
     """라운딩 참가자 목록 조회"""
     try:
         # 모임 존재 확인
@@ -643,15 +604,11 @@ async def get_round_participants(
                     guest_name,
                     "name":
                     guest_name,
-                    "status":
-                    participant.status.value if hasattr(participant.status, 'value') else str(participant.status),
-                    "role":
-                    participant.role.value if hasattr(participant.role, 'value') else str(participant.role),
-                    "handicap_index":
+                    "handicap":
                     int(guest_handicap) if guest_handicap else None,
                     "handicap":
                     float(guest_handicap) if guest_handicap else None,
-                    "recent_avg_score":
+                    "average_score":
                     None,  # 게스트는 직전 대회 성적 없음
                     "pace_preference":
                     participant.pace_preference,
@@ -700,14 +657,10 @@ async def get_round_participants(
                         user.nickname or "닉네임 없음",
                         "name":
                         user.realname or "이름 없음",
-                        "status":
-                        participant.status.value if hasattr(participant.status, 'value') else str(participant.status),
-                        "role":
-                        participant.role.value if hasattr(participant.role, 'value') else str(participant.role),
-                        "handicap_index":
-                        participant.handicap_index,
-                        "recent_avg_score":
-                        participant.recent_avg_score,
+                        "handicap":
+                        participant.handicap,
+                        "average_score":
+                        participant.average_score,
                         "pace_preference":
                         participant.pace_preference,
                         "tee_preference":
@@ -783,10 +736,10 @@ async def get_round_teams(meeting_id: int,
                 if participant:
                     # 게스트인 경우와 멤버인 경우 구분
                     gender = None
-                    handicap_index = None
-                    recent_avg_score = None
+                    handicap = None
+                    average_score = None
 
-                    if participant.is_guest or participant.guest_id:
+                    if participant.guest_id:
                         # guest_id를 통해 Guest 모델에서 정보 조회
                         if participant.guest_id:
                             guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
@@ -794,19 +747,19 @@ async def get_round_teams(meeting_id: int,
                                 user_name = guest.name or "게스트"
                                 user_nickname = guest.name or "게스트"
                                 gender = guest.gender.value if guest.gender else None
-                                handicap_index = int(guest.handicap) if guest.handicap else None
+                                handicap = int(guest.handicap) if guest.handicap else None
                             else:
                                 # 하위 호환성: guest 필드 사용
                                 user_name = participant.guest_name or "게스트"
                                 user_nickname = participant.guest_name or "게스트"
                                 gender = participant.guest_gender.value if participant.guest_gender else None
-                                handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                                handicap = int(participant.guest_handicap) if participant.guest_handicap else None
                         else:
                             # 하위 호환성: guest 필드 사용
                             user_name = participant.guest_name or "게스트"
                             user_nickname = participant.guest_name or "게스트"
                             gender = participant.guest_gender.value if participant.guest_gender else None
-                            handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                            handicap = int(participant.guest_handicap) if participant.guest_handicap else None
                     else:
                         if participant.user_id:
                             user = db.query(User).filter(User.id == participant.user_id).first()
@@ -815,33 +768,33 @@ async def get_round_teams(meeting_id: int,
                                 user_nickname = user.nickname or "닉네임 없음"
                                 gender = user.gender.value if user.gender else None
 
-                                # 핸디캡 우선순위: participant.handicap_index → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
-                                if participant.handicap_index is not None:
-                                    handicap_index = participant.handicap_index
+                                # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                                if participant.handicap is not None:
+                                    handicap = participant.handicap
                                 elif user.handicap is not None:
-                                    handicap_index = int(user.handicap)
+                                    handicap = int(user.handicap)
                                 elif user.handicap is not None:
-                                    handicap_index = int(user.handicap)
+                                    handicap = int(user.handicap)
                                 elif user.handicap_init is not None:
-                                    handicap_index = int(user.handicap_init)
+                                    handicap = int(user.handicap_init)
                                 elif user.average_score is not None:
-                                    handicap_index = max(0, int(user.average_score - 72))
+                                    handicap = max(0, int(user.average_score - 72))
                                 else:
-                                    handicap_index = None
+                                    handicap = None
 
                                 # MeetingResult에서 실제 직전 대회 성적 조회
-                                recent_avg_score = None
+                                average_score = None
                                 last_result = db.query(MeetingResult).filter(
                                     MeetingResult.user_id == participant.user_id,
                                     MeetingResult.meeting_id != meeting.id  # 현재 모임 제외
                                 ).order_by(MeetingResult.completed_at.desc()).first()
 
                                 if last_result:
-                                    recent_avg_score = last_result.gross_score
+                                    average_score = last_result.gross_score
 
                                 # 디버깅: 핸디캡과 직전대회성적 확인
                                 logger.debug(f"팀 멤버 정보 - user_id: {participant.user_id}, name: {user_name}, "
-                                             f"handicap_index: {handicap_index}, recent_avg_score: {recent_avg_score}")
+                                             f"handicap: {handicap}, average_score: {average_score}")
                             else:
                                 continue
                         else:
@@ -854,9 +807,9 @@ async def get_round_teams(meeting_id: int,
                                                          user_nickname=user_nickname,
                                                          order=team_member.order,
                                                          gender=gender,
-                                                         handicap_index=handicap_index,
-                                                         recent_avg_score=recent_avg_score,
-                                                         is_guest=participant.is_guest if participant else None,
+                                                         handicap=handicap,
+                                                         average_score=average_score,
+                                                         is_guest=(participant.guest_id is not None) if participant else None,
                                                          created_at=team_member.created_at)
                     members.append(member_response)
 
@@ -922,12 +875,10 @@ async def add_team_member(
         # 참가자 확인 (MeetingParticipant에 존재하는지)
         if user_id:
             participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.user_id == user_id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).first()
+                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.user_id == user_id)).first()
         elif guest_id:
             participant = db.query(MeetingParticipant).filter(
-                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.guest_id == guest_id,
-                     MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED)).first()
+                and_(MeetingParticipant.meeting_id == meeting_id, MeetingParticipant.guest_id == guest_id)).first()
         else:
             participant = None
 
@@ -961,10 +912,10 @@ async def add_team_member(
         user_name = None
         user_nickname = None
         gender = None
-        handicap_index = None
-        recent_avg_score = None
+        handicap = None
+        average_score = None
 
-        if participant.is_guest or participant.guest_id:
+        if participant.guest_id:
             # guest_id를 통해 Guest 모델에서 정보 조회
             if participant.guest_id:
                 guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
@@ -972,19 +923,19 @@ async def add_team_member(
                     user_name = guest.name or "게스트"
                     user_nickname = guest.name or "게스트"
                     gender = guest.gender.value if guest.gender else None
-                    handicap_index = int(guest.handicap) if guest.handicap else None
+                    handicap = int(guest.handicap) if guest.handicap else None
                 else:
                     # 하위 호환성: guest 필드 사용
                     user_name = participant.guest_name or "게스트"
                     user_nickname = participant.guest_name or "게스트"
                     gender = participant.guest_gender.value if participant.guest_gender else None
-                    handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                    handicap = int(participant.guest_handicap) if participant.guest_handicap else None
             else:
                 # 하위 호환성: guest 필드 사용
                 user_name = participant.guest_name or "게스트"
                 user_nickname = participant.guest_name or "게스트"
                 gender = participant.guest_gender.value if participant.guest_gender else None
-                handicap_index = int(participant.guest_handicap) if participant.guest_handicap else None
+                handicap = int(participant.guest_handicap) if participant.guest_handicap else None
         else:
             if participant.user_id:
                 user = db.query(User).filter(User.id == participant.user_id).first()
@@ -993,17 +944,17 @@ async def add_team_member(
                     user_nickname = user.nickname or "닉네임 없음"
                     gender = user.gender.value if user.gender else None
 
-                    # 핸디캡 우선순위: participant.handicap_index → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
-                    if participant.handicap_index is not None:
-                        handicap_index = participant.handicap_index
+                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                    if participant.handicap is not None:
+                        handicap = participant.handicap
                     elif user.handicap is not None:
-                        handicap_index = int(user.handicap)
+                        handicap = int(user.handicap)
                     elif user.handicap is not None:
-                        handicap_index = int(user.handicap)
+                        handicap = int(user.handicap)
                     elif user.handicap_init is not None:
-                        handicap_index = int(user.handicap_init)
+                        handicap = int(user.handicap_init)
                     elif user.average_score is not None:
-                        handicap_index = max(0, int(user.average_score - 72))
+                        handicap = max(0, int(user.average_score - 72))
 
                     # MeetingResult에서 실제 직전 대회 성적 조회
                     last_result = db.query(MeetingResult).filter(
@@ -1012,7 +963,7 @@ async def add_team_member(
                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                     if last_result:
-                        recent_avg_score = last_result.gross_score
+                        average_score = last_result.gross_score
                 else:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자 정보를 찾을 수 없습니다.")
             else:
@@ -1025,8 +976,8 @@ async def add_team_member(
                                   user_nickname=user_nickname or "닉네임 없음",
                                   order=team_member.order,
                                   gender=gender,
-                                  handicap_index=handicap_index,
-                                  recent_avg_score=recent_avg_score,
+                                  handicap=handicap,
+                                  average_score=average_score,
                                   created_at=team_member.created_at)
 
     except HTTPException:
@@ -1038,12 +989,11 @@ async def add_team_member(
 
 
 @router.delete("/{meeting_id}/teams/{team_id}/members/{member_id}")
-async def remove_team_member(
-    meeting_id: int,
-    team_id: int,
-    member_id: int,
-    current_user: User = Depends(get_current_user_allow_both),
-    db: Session = Depends(get_db)):
+async def remove_team_member(meeting_id: int,
+                             team_id: int,
+                             member_id: int,
+                             current_user: User = Depends(get_current_active_user),
+                             db: Session = Depends(get_db)):
     """팀 멤버 제거"""
     try:
         # 모임 존재 확인

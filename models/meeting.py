@@ -3,12 +3,13 @@ from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, Enum, F
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-from .enums import Gender, ParticipantStatus, ParticipantRole, ParticipantType, ExpenseItemType
+from .enums import Gender, ParticipantType
+
 
 class Guest(Base):
     """게스트 정보 테이블"""
     __tablename__ = "guests"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     name = Column(String(255), nullable=False, comment="게스트 이름")
     handicap = Column(DECIMAL(4, 1), nullable=True, comment="게스트 핸디캡 (평균 타수 - 72)")
@@ -16,13 +17,16 @@ class Guest(Base):
     gender = Column(Enum(Gender), nullable=True, comment="게스트 성별")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # 관계 설정
-    meeting_participations = relationship("MeetingParticipant", backref="guest", foreign_keys="MeetingParticipant.guest_id")
+    meeting_participations = relationship("MeetingParticipant",
+                                          backref="guest",
+                                          foreign_keys="MeetingParticipant.guest_id")
+
 
 class Meeting(Base):
     __tablename__ = "meetings"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     name = Column(String(255), nullable=False)
     description = Column(Text)
@@ -60,24 +64,28 @@ class Meeting(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="라운딩 생성자 ID")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # 관계 설정
     club = relationship("Club", backref="meetings")
     creator = relationship("User", foreign_keys=[created_by], backref="created_meetings")
 
+
 class MeetingParticipant(Base):
     __tablename__ = "meeting_participants"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
     # user_id와 guest_id 중 하나만 있어야 함 (일반 사용자 또는 게스트)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, comment="일반 사용자 ID (게스트가 아닌 경우)")
+    user_id = Column(Integer,
+                     ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=True,
+                     comment="일반 사용자 ID (게스트가 아닌 경우)")
     guest_id = Column(Integer, ForeignKey("guests.id", ondelete="CASCADE"), nullable=True, comment="게스트 ID (게스트인 경우)")
-    participant_type = Column(Enum(ParticipantType), nullable=False, comment="참가자 타입: USER 또는 GUEST (user_id가 있으면 USER, guest_id가 있으면 GUEST)")
-    status = Column(Enum(ParticipantStatus), default=ParticipantStatus.CONFIRMED, nullable=False)
-    role = Column(Enum(ParticipantRole), default=ParticipantRole.PARTICIPANT, nullable=False)
-    handicap_index = Column(Integer)
-    recent_avg_score = Column(Integer)
+    participant_type = Column(Enum(ParticipantType),
+                              nullable=False,
+                              comment="참가자 타입: USER 또는 GUEST (user_id가 있으면 USER, guest_id가 있으면 GUEST)")
+    handicap = Column(Integer)
+    average_score = Column(Integer)
     pace_preference = Column(String(50))
     tee_preference = Column(String(50))
     is_newbie = Column(Boolean, default=False)
@@ -85,19 +93,20 @@ class MeetingParticipant(Base):
     avoid_with = Column(JSON)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # 제약조건: user_id와 guest_id 중 하나만 있어야 함
-    __table_args__ = (
-        CheckConstraint('(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)', name='check_user_or_guest'),
-    )
-    
+    __table_args__ = (CheckConstraint(
+        '(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)',
+        name='check_user_or_guest'), )
+
     # 관계 설정
     meeting = relationship("Meeting", backref="participants", passive_deletes=True)
     user = relationship("User", backref="meeting_participations", foreign_keys=[user_id])
 
+
 class Team(Base):
     __tablename__ = "teams"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     name = Column(String(255), nullable=False)
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
@@ -108,30 +117,35 @@ class Team(Base):
     tee_off_order = Column(Integer, comment="티오프 순서")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # 관계 설정
     meeting = relationship("Meeting", backref="teams")
 
+
 class TeamMember(Base):
     __tablename__ = "team_members"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     # user_id와 guest_id 중 하나만 있어야 함 (일반 사용자 또는 게스트)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, comment="일반 사용자 ID (게스트가 아닌 경우)")
+    user_id = Column(Integer,
+                     ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=True,
+                     comment="일반 사용자 ID (게스트가 아닌 경우)")
     guest_id = Column(Integer, ForeignKey("guests.id", ondelete="CASCADE"), nullable=True, comment="게스트 ID (게스트인 경우)")
     order = Column(Integer)
     created_at = Column(DateTime, default=func.now())
-    
+
     # 제약조건: user_id와 guest_id 중 하나만 있어야 함
-    __table_args__ = (
-        CheckConstraint('(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)', name='check_team_member_user_or_guest'),
-    )
-    
+    __table_args__ = (CheckConstraint(
+        '(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)',
+        name='check_team_member_user_or_guest'), )
+
     # 관계 설정
     team = relationship("Team", backref="members")
     user = relationship("User", backref="team_memberships", foreign_keys=[user_id])
     guest = relationship("Guest", backref="team_memberships", foreign_keys=[guest_id])
+
 
 class Expense(Base):
     """정산 묶음 (Expense → ExpenseItem → ExpenseItemParticipant)"""
@@ -205,9 +219,10 @@ class ExpenseItemParticipant(Base):
     guest = relationship("Guest", backref="expense_item_participations", foreign_keys=[guest_id])
 
 
+
 class Score(Base):
     __tablename__ = "scores"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     participant_id = Column(Integer, ForeignKey("meeting_participants.id", ondelete="CASCADE"), nullable=False)
     hole_number = Column(Integer, nullable=False)
@@ -216,14 +231,15 @@ class Score(Base):
     score_to_par = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # 관계 설정
     participant = relationship("MeetingParticipant", backref="scores")
+
 
 class UserScoreHistory(Base):
     """사용자의 최근 경기 스코어 히스토리"""
     __tablename__ = "user_score_history"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
@@ -232,23 +248,23 @@ class UserScoreHistory(Base):
     handicap_used = Column(DECIMAL(4, 1), nullable=False, comment="해당 경기에서 사용된 핸디캡")
     played_at = Column(DateTime, nullable=False, comment="경기 날짜")
     created_at = Column(DateTime, default=func.now())
-    
+
     # 관계 설정
     user = relationship("User", backref="score_history")
     meeting = relationship("Meeting", backref="score_history")
 
+
 class MeetingResult(Base):
     """직전 대회 성적 저장 (순위만 저장, 스코어 정보는 UserScoreHistory 참조)"""
     __tablename__ = "meeting_results"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, comment="순번 ID (AUTO_INCREMENT)")
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rank = Column(Integer, comment="순위")
     completed_at = Column(DateTime, nullable=False, comment="경기 완료 시간")
     created_at = Column(DateTime, default=func.now())
-    
+
     # 관계 설정
     meeting = relationship("Meeting", backref="results")
     user = relationship("User", backref="meeting_results")
-

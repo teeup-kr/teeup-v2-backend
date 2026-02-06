@@ -7,10 +7,10 @@ from typing import Optional
 import logging
 
 from database import get_db
-from models import User, Admin, UserStatus, Meeting, MeetingParticipant, ClubMembership
+from models import User, Admin, UserStatus, Meeting, ClubMembership
 from utils.jwt_auth import jwt_auth
 from routers.auth import get_current_user
-from schemas import MembershipStatus, MeetingParticipantRole, MeetingParticipantStatus, ClubRole
+from schemas import MembershipStatus, ClubRole
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ def is_meeting_organizer_or_manager(
     db: Session
 ) -> bool:
     """
-    모임 ORGANIZER 권한 체크 (ORGANIZER 역할, 또는 리더/매니저 참가자)
+    모임 생성자/리더 권한 체크 (모임 생성자 또는 리더/매니저)
     
     Args:
         meeting_id: 모임 ID
@@ -132,7 +132,7 @@ def is_meeting_organizer_or_manager(
         db: 데이터베이스 세션
     
     Returns:
-        bool: ORGANIZER 권한이 있으면 True
+        bool: 권한이 있으면 True
     """
     try:
         # 모임 조회
@@ -140,33 +140,22 @@ def is_meeting_organizer_or_manager(
         if not meeting:
             return False
         
-        # 참가자 조회 (CONFIRMED 상태만 확인 - 취소된 참가자는 권한 없음)
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-        ).first()
-        
-        if not participant:
-            return False
-        
-        # ORGANIZER 역할인지 확인
-        if participant.role == MeetingParticipantRole.ORGANIZER:
+        # 모임 생성자 권한
+        if meeting.created_by == user_id:
             return True
         
-        # PARTICIPANT 역할이면서 리더/매니저인지 확인
-        if participant.role == MeetingParticipantRole.PARTICIPANT:
-            club_membership = db.query(ClubMembership).filter(
-                ClubMembership.club_id == meeting.club_id,
-                ClubMembership.user_id == user_id,
-                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
-            ).first()
-            
-            if club_membership and club_membership.role in [ClubRole.LEADER, ClubRole.MANAGER]:
-                return True
+        # 클럽 리더/매니저 권한
+        club_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.user_id == user_id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+        ).first()
+        
+        if club_membership and club_membership.role in [ClubRole.LEADER, ClubRole.MANAGER]:
+            return True
         
         return False
         
     except Exception as e:
-        logger.error(f"모임 ORGANIZER 권한 체크 중 오류: {str(e)}")
+        logger.error(f"모임 생성자/리더 권한 체크 중 오류: {str(e)}")
         return False

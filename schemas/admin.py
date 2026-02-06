@@ -48,8 +48,6 @@ class UserMeetingItem(BaseModel):
     club_name: str
     meeting_time: Optional[datetime] = None
     status: str
-    participant_status: str
-    participant_role: str
     joined_at: datetime
     rounding_completed_at: Optional[datetime] = None
     has_score: bool = False

@@ -280,21 +280,21 @@ class TestMeetings:
     
     def test_leave_meeting(self):
         """미팅 나가기"""
-        # 먼저 미팅 생성 (이미 ORGANIZER로 참가됨)
+        # 먼저 미팅 생성 (생성자는 자동 참가됨)
         meeting_id = self.create_test_meeting()
 
         token = self.get_auth_token()
 
-        # ORGANIZER는 탈퇴할 수 없으므로 400 에러가 정상
+        # 생성자는 탈퇴할 수 없으므로 400 에러가 정상
         response = requests.delete(f"{BASE_URL}/meetings/{meeting_id}/leave", headers={
             "Authorization": f"Bearer {token}"
         })
 
-        # ORGANIZER는 탈퇴할 수 없으므로 400 에러가 예상됨
+        # 생성자는 탈퇴할 수 없으므로 400 에러가 예상됨
         assert response.status_code == 400
         data = response.json()
         assert "detail" in data
-        assert "매니저는 탈퇴할 수 없습니다" in data["detail"]
+        assert "생성자" in data["detail"]
     
     def test_get_meeting_participants(self):
         """미팅 참가자 목록 조회"""
@@ -311,41 +311,9 @@ class TestMeetings:
         data = response.json()
         assert isinstance(data, list)
     
-    def test_update_participant_status(self):
-        """참가자 상태 변경"""
-        # 먼저 미팅 생성 (이미 ORGANIZER로 참가됨)
-        meeting_id = self.create_test_meeting()
-
-        token = self.get_auth_token()
-
-        # 이미 참가되어 있으므로 바로 상태 변경 테스트
-        
-        # 참가자 목록 조회하여 participant_id 획득
-        participants_response = requests.get(f"{BASE_URL}/meetings/{meeting_id}/participants", headers={
-            "Authorization": f"Bearer {token}"
-        })
-        assert participants_response.status_code == 200
-        participants = participants_response.json()
-        
-        if participants:
-            participant_id = participants[0]["id"]
-            
-            # 참가자 상태 변경
-            status_data = {
-                "status": "CONFIRMED"
-            }
-            
-            response = requests.put(f"{BASE_URL}/meetings/{meeting_id}/participants/{participant_id}/status", 
-                                 json=status_data, headers={
-                "Authorization": f"Bearer {token}"
-            })
-            
-            # 성공 또는 권한 없음 모두 허용
-            assert response.status_code in [200, 403, 400]
-    
     def test_remove_participant(self):
         """참가자 제거"""
-        # 먼저 미팅 생성 (이미 ORGANIZER로 참가됨)
+        # 먼저 미팅 생성 (생성자는 자동 참가됨)
         meeting_id = self.create_test_meeting()
 
         token = self.get_auth_token()
@@ -385,7 +353,7 @@ class TestMeetings:
         })
         assert response.status_code == 200
         
-        # 4. 미팅 참가 (이미 ORGANIZER로 참가되어 있음)
+        # 4. 미팅 참가 (생성자는 이미 참가되어 있음)
         response = requests.post(f"{BASE_URL}/meetings/{meeting_id}/join", headers={
             "Authorization": f"Bearer {token}"
         })

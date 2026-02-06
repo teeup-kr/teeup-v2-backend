@@ -21,7 +21,7 @@ from models import (
 from models.enums import ExpenseItemType
 from schemas import (
     MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod,
-    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole,
+    MeetingStatus,
     ClubRole
 )
 from schemas import (
@@ -54,10 +54,10 @@ def send_settlement_created_notification(meeting_id: int, db: Session, is_edit: 
         club = db.query(Club).filter(Club.id == meeting.club_id).first()
         club_name = club.name if club else "알 수 없는 클럽"
         
-        # 참가자들 조회 (CONFIRMED 상태)
+        # 참가자들 조회
         participants = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.user_id.isnot(None)
         ).all()
         
         if not participants:
@@ -111,7 +111,7 @@ def can_manage_settlement(meeting_id: int, user_id: int, db: Session) -> bool:
     정산 관리 권한 체크
     
     권한이 있는 경우:
-    1. 주최자: 참가자 목록에서 ORGANIZER 역할을 가진 사용자 (참가 여부와 무관)
+    1. 주최자: meeting.created_by 사용자
     2. 참가자이면서 클럽 리더/매니저: isParticipant && club_role ∈ {LEADER, MANAGER}
     
     Args:
@@ -128,27 +128,14 @@ def can_manage_settlement(meeting_id: int, user_id: int, db: Session) -> bool:
         if not meeting:
             return False
         
-        # 프라이빗 라운딩 생성자인 경우 권한 부여
-        if meeting.is_private and meeting.created_by == user_id:
-            return True
-        
-        # 1. 주최자 확인: 참가자 목록에서 ORGANIZER 역할 확인
-        organizer = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id,
-            MeetingParticipant.role == MeetingParticipantRole.ORGANIZER,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
-        ).first()
-        
-        is_organizer = organizer is not None
-        if is_organizer:
+        # 모임 생성자인 경우 권한 부여
+        if meeting.created_by == user_id:
             return True
         
         # 2. 참가자 여부 확인
         participant = db.query(MeetingParticipant).filter(
             MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.user_id == user_id
         ).first()
         
         is_participant = participant is not None
@@ -855,13 +842,12 @@ async def get_available_participants(
                 detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산 대상자를 조회할 수 있습니다."
             )
         
-        # 확정된 참가자 조회 (게스트 포함)
+        # 참가자 조회 (게스트 포함)
         participants = db.query(MeetingParticipant).options(
             joinedload(MeetingParticipant.user),
             joinedload(MeetingParticipant.guest)
         ).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+            MeetingParticipant.meeting_id == meeting_id
         ).all()
         
         participant_list = []
@@ -874,7 +860,6 @@ async def get_available_participants(
                         "id": None,  # 게스트는 id가 없음
                         "name": guest.name or "게스트",
                         "email": None,
-                        "role": meeting_participant.role,
                         "joined_at": meeting_participant.created_at,
                         "is_guest": True
                     })
@@ -886,7 +871,6 @@ async def get_available_participants(
                         "id": user.id,
                         "name": user.nickname or user.realname,
                         "email": user.email,
-                        "role": meeting_participant.role,
                         "joined_at": meeting_participant.created_at,
                         "is_guest": False
                     })
@@ -901,13 +885,6 @@ async def get_available_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
-
-
-
-
-
-
-
 
 
 
