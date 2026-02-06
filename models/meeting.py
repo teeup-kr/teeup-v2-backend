@@ -3,7 +3,7 @@ from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, Enum, F
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-from .enums import Gender, ParticipantType
+from .enums import ExpenseItemType, Gender, ParticipantType
 
 
 class Guest(Base):
@@ -207,17 +207,14 @@ class ExpenseItemParticipant(Base):
     is_paid = Column(Boolean, default=False)
     paid_at = Column(DateTime, nullable=True)
 
-    __table_args__ = (
-        CheckConstraint(
-            "(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)",
-            name="chk_expense_item_user_or_guest",
-        ),
-    )
+    __table_args__ = (CheckConstraint(
+        "(user_id IS NOT NULL AND guest_id IS NULL) OR (user_id IS NULL AND guest_id IS NOT NULL)",
+        name="chk_expense_item_user_or_guest",
+    ), )
 
     # 관계 설정
     user = relationship("User", backref="expense_item_participations")
     guest = relationship("Guest", backref="expense_item_participations", foreign_keys=[guest_id])
-
 
 
 class Score(Base):

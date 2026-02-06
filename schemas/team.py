@@ -109,6 +109,13 @@ class GuestResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TeamMemberAddRequest(BaseModel):
+    """팀 멤버 추가 요청 (user_id, guest_id, participant_id 중 하나 필수)"""
+    user_id: Optional[int] = Field(None, description="사용자 ID")
+    guest_id: Optional[int] = Field(None, description="게스트 ID")
+    participant_id: Optional[int] = Field(None, description="참가자 ID (MeetingParticipant.id)")
+
+
 class TeamFormationRequest(BaseModel):
     formation_mode: TeamFormationMode = Field(..., description="편성 모드")
     team_size: int = Field(..., ge=2, le=4, description="팀 크기")

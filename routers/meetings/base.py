@@ -11,8 +11,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 from database import get_db
-from models import (User, Club, ClubMembership, ClubRole, Meeting, MeetingParticipant, Expense, ExpenseParticipant,
-                    Score, UserScoreHistory, MeetingResult, Guest, ParticipantType)
+from models import (User, Club, ClubMembership, ClubRole, Meeting, MeetingParticipant, Expense, Score, UserScoreHistory,
+                    MeetingResult, Guest, ParticipantType)
 from schemas import (MembershipStatus, MeetingType, MeetingStatus)
 from schemas import (RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, MeetingResponse,
                      MeetingParticipantResponse, PaginatedResponse, MessageResponse, ExpenseCreate, ExpenseUpdate,
