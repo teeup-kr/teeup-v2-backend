@@ -11,14 +11,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 from database import get_db
-from models import (User, Club, ClubMembership, ClubRole, Meeting, MeetingParticipant, Expense, Score, UserScoreHistory,
-                    MeetingResult, Guest, ParticipantType)
-from schemas import (MembershipStatus, MeetingType, MeetingStatus)
-from schemas import (RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, MeetingResponse,
-                     MeetingParticipantResponse, PaginatedResponse, MessageResponse, ExpenseCreate, ExpenseUpdate,
-                     ExpenseResponse, ExpenseListResponse, ExpenseParticipantResponse, ExpenseParticipantUpdate,
-                     GuestCreate, GuestUpdate, GuestResponse, ScoreCreate, ScoreUpdate, ScoreResponse,
-                     ScoreListResponse, ScoreStats, SimpleScoreCreate, SimpleScoreResponse)
+from models import (
+    User, Club, ClubMembership, ClubRole, Meeting, MeetingParticipant, 
+    Expense, Score,
+    UserScoreHistory, MeetingResult, Guest, ParticipantType, ParticipantStatus, ParticipantRole,
+    SettlementMethod as ModelSettlementMethod, MeetingType as ModelMeetingType, MeetingSubtype as ModelMeetingSubtype
+)
+from schemas import (
+    MembershipStatus, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole
+)
+from schemas import (
+    RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, MeetingResponse,
+    MeetingParticipantResponse, PaginatedResponse, MessageResponse,
+    ExpenseCreate, ExpenseUpdate, ExpenseResponse, ExpenseListResponse,
+    ExpenseParticipantResponse, ExpenseParticipantUpdate,
+    GuestCreate, GuestUpdate, GuestResponse,
+    ScoreCreate, ScoreUpdate, ScoreResponse, ScoreListResponse, ScoreStats,
+    SimpleScoreCreate, SimpleScoreResponse
+)
 from routers.auth import get_current_user, get_current_active_user
 # admin_auth는 JWT 기반으로 변경됨
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
@@ -73,25 +83,26 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="라운딩 모임은 클럽 리더/매니저만 생성할 수 있습니다.")
 
         # 모임 생성
-        meeting = Meeting(name=meeting_data.name,
-                          description=meeting_data.description,
-                          location=meeting_data.location,
-                          meeting_time=meeting_data.meeting_time,
-                          tee_times=meeting_data.tee_times,
-                          max_participants=meeting_data.max_participants,
-                          meeting_type=meeting_data.meeting_type,
-                          meeting_subtype=meeting_data.meeting_subtype,
-                          total_cost=meeting_data.total_cost,
-                          green_fee=meeting_data.green_fee,
-                          caddy_fee=meeting_data.caddy_fee,
-                          cart_fee=meeting_data.cart_fee,
-                          settlement_method=meeting_data.settlement_method,
-                          course_name=meeting_data.course_name,
-                          hole_count=meeting_data.hole_count,
-                          reservation_name=meeting_data.reservation_name,
-                          club_id=club_id,
-                          created_by=current_user.id)
-
+        meeting = Meeting(            name=meeting_data.name,
+            description=meeting_data.description,
+            location=meeting_data.location,
+            meeting_time=meeting_data.meeting_time,
+            tee_times=meeting_data.tee_times,
+            max_participants=meeting_data.max_participants,
+            meeting_type=ModelMeetingType(meeting_data.meeting_type.value),
+            meeting_subtype=ModelMeetingSubtype(meeting_data.meeting_subtype.value) if meeting_data.meeting_subtype else None,
+            total_cost=meeting_data.total_cost,
+            green_fee=meeting_data.green_fee,
+            caddy_fee=meeting_data.caddy_fee,
+            cart_fee=meeting_data.cart_fee,
+            settlement_method=ModelSettlementMethod(meeting_data.settlement_method.value),
+            course_name=meeting_data.course_name,
+            hole_count=meeting_data.hole_count,
+            reservation_name=meeting_data.reservation_name,
+            club_id=club_id,
+            created_by=current_user.id
+        )
+        
         db.add(meeting)
         db.commit()
         db.refresh(meeting)
@@ -138,38 +149,42 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
         # 응답 데이터 구성
         # Meeting 객체를 다시 refresh하여 최신 상태로 업데이트
         db.refresh(meeting)
-
-        participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
-
-        return MeetingResponse(id=meeting.id,
-                               name=meeting.name,
-                               description=meeting.description,
-                               location=meeting.location,
-                               meeting_time=meeting.meeting_time,
-                               tee_times=meeting.tee_times,
-                               max_participants=meeting.max_participants,
-                               meeting_type=meeting.meeting_type,
-                               meeting_subtype=meeting.meeting_subtype,
-                               total_cost=meeting.total_cost,
-                               green_fee=meeting.green_fee,
-                               caddy_fee=meeting.caddy_fee,
-                               cart_fee=meeting.cart_fee,
-                               settlement_method=meeting.settlement_method,
-                               course_name=meeting.course_name,
-                               hole_count=meeting.hole_count,
-                               reservation_name=meeting.reservation_name,
-                               status=meeting.status,
-                               cancel_reason=meeting.cancel_reason,
-                               club_id=meeting.club_id,
-                               club_name=club.name,
-                               participant_count=participant_count,
-                               team_formation_confirmed_at=meeting.team_formation_confirmed_at,
-                               rounding_started_at=meeting.rounding_started_at,
-                               rounding_completed_at=meeting.rounding_completed_at,
-                               settlement_confirmed=meeting.settlement_confirmed,
-                               created_at=meeting.created_at,
-                               updated_at=meeting.updated_at)
-
+        
+        participant_count = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting.id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).count()
+        
+        return MeetingResponse(
+            id=meeting.id,            name=meeting.name,
+            description=meeting.description,
+            location=meeting.location,
+            meeting_time=meeting.meeting_time,
+            tee_times=meeting.tee_times,
+            max_participants=meeting.max_participants,
+            meeting_type=meeting.meeting_type,
+            meeting_subtype=meeting.meeting_subtype,
+            total_cost=meeting.total_cost,
+            green_fee=meeting.green_fee,
+            caddy_fee=meeting.caddy_fee,
+            cart_fee=meeting.cart_fee,
+            settlement_method=meeting.settlement_method.value if meeting.settlement_method else None,
+            course_name=meeting.course_name,
+            hole_count=meeting.hole_count,
+            reservation_name=meeting.reservation_name,
+            status=meeting.status,
+            cancel_reason=meeting.cancel_reason,
+            club_id=meeting.club_id,
+            club_name=club.name,
+            participant_count=participant_count,
+            team_formation_confirmed_at=meeting.team_formation_confirmed_at,
+            rounding_started_at=meeting.rounding_started_at,
+            rounding_completed_at=meeting.rounding_completed_at,
+            settlement_confirmed=meeting.settlement_confirmed,
+            created_at=meeting.created_at,
+            updated_at=meeting.updated_at
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -246,54 +261,55 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
             meeting_dict = {**meeting.__dict__}
             meeting_dict.pop("_sa_instance_state", None)
             meeting_dict["tee_times"] = meeting.tee_times or []
-
-            meeting_responses.append(
-                MeetingResponse(**meeting_dict,
-                                id=meeting.id,
-                                name=meeting.name,
-                                description=meeting.description,
-                                location=meeting.location,
-                                venue_name=meeting.venue_name,
-                                meeting_time=meeting.meeting_time,
-                                application_deadline=meeting.application_deadline,
-                                application_closed_early=False,
-                                team_formation_mode=meeting.team_formation_mode,
-                                team_size=meeting.team_size,
-                                is_completed=meeting.is_completed,
-                                settlement_confirmed=meeting.settlement_confirmed,
-                                tee_time=tee_time,
-                                max_participants=meeting.max_participants,
-                                social_cost=meeting.social_cost,
-                                social_settlement_method=meeting.social_settlement_method,
-                                total_cost=meeting.total_cost,
-                                green_fee=meeting.green_fee,
-                                caddy_fee=meeting.caddy_fee,
-                                cart_fee=meeting.cart_fee,
-                                settlement_method=meeting.settlement_method,
-                                reservation_name=meeting.reservation_name,
-                                meeting_type=meeting.meeting_type,
-                                meeting_subtype=meeting.meeting_subtype,
-                                course_name=meeting.course_name,
-                                hole_count=meeting.hole_count,
-                                status=meeting.status,
-                                cancel_reason=meeting.cancel_reason,
-                                club_id=meeting.club_id,
-                                club_name=club_name,
-                                participant_count=participant_count,
-                                created_by=meeting.created_by,
-                                created_by_name=created_by_name,
-                                team_formation_confirmed_at=meeting.team_formation_confirmed_at,
-                                rounding_started_at=meeting.rounding_started_at,
-                                rounding_completed_at=meeting.rounding_completed_at,
-                                created_at=meeting.created_at,
-                                updated_at=meeting.updated_at))
-
-        return PaginatedResponse(data=meeting_responses,
-                                 total=total,
-                                 page=page,
-                                 limit=limit,
-                                 total_pages=(total + limit - 1) // limit)
-
+            
+            meeting_responses.append(MeetingResponse(
+                **meeting_dict,
+                id=meeting.id,                name=meeting.name,
+                description=meeting.description,
+                location=meeting.location,
+                venue_name=meeting.venue_name,
+                meeting_time=meeting.meeting_time,
+                application_deadline=meeting.application_deadline,
+                application_closed_early=False,
+                team_formation_mode=meeting.team_formation_mode,
+                team_size=meeting.team_size,
+                is_completed=meeting.is_completed,
+                settlement_confirmed=meeting.settlement_confirmed,
+                tee_time=tee_time,
+                max_participants=meeting.max_participants,
+                social_cost=meeting.social_cost,
+                total_cost=meeting.total_cost,
+                green_fee=meeting.green_fee,
+                caddy_fee=meeting.caddy_fee,
+                cart_fee=meeting.cart_fee,
+                settlement_method=meeting.settlement_method.value if meeting.settlement_method else None,
+                reservation_name=meeting.reservation_name,
+            meeting_type=meeting.meeting_type.value if meeting.meeting_type else None,
+            meeting_subtype=meeting.meeting_subtype.value if meeting.meeting_subtype else None,
+            course_name=meeting.course_name,
+                hole_count=meeting.hole_count,
+                status=meeting.status,
+                cancel_reason=meeting.cancel_reason,
+                club_id=meeting.club_id,
+                club_name=club_name,
+                participant_count=participant_count,
+                created_by=meeting.created_by,
+                created_by_name=created_by_name,
+                team_formation_confirmed_at=meeting.team_formation_confirmed_at,
+                rounding_started_at=meeting.rounding_started_at,
+                rounding_completed_at=meeting.rounding_completed_at,
+                created_at=meeting.created_at,
+                updated_at=meeting.updated_at
+            ))
+        
+        return PaginatedResponse(
+            data=meeting_responses,
+            total=total,
+            page=page,
+            limit=limit,
+            total_pages=(total + limit - 1) // limit
+        )
+        
     except Exception as e:
         logger.error(f"라운딩 모임 조회 실패: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="라운딩 모임 조회에 실패했습니다.")
@@ -363,7 +379,6 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
 #                 tee_time=None,  # 이벤트 모임은 tee_time이 없음
 #                 max_participants=meeting.max_participants,
 #                 social_cost=meeting.social_cost,
-#                 social_settlement_method=meeting.social_settlement_method,
 #                 total_cost=meeting.total_cost,
 #                 green_fee=meeting.green_fee,
 #                 caddy_fee=meeting.caddy_fee,
@@ -478,7 +493,7 @@ async def get_meetings(club_id: Optional[int] = None,
                 "location": meeting.location,
                 "meeting_time": meeting.meeting_time,
                 "max_participants": meeting.max_participants,
-                "meeting_type": meeting.meeting_type,
+                "meeting_type": meeting.meeting_type.value if meeting.meeting_type else None,
                 "course_name": meeting.course_name,
                 "hole_count": meeting.hole_count,
                 "status": meeting.status,
@@ -555,7 +570,7 @@ async def get_my_meetings(page: int = 1,
                 "location": meeting.location,
                 "meeting_time": meeting.meeting_time,
                 "max_participants": meeting.max_participants,
-                "meeting_type": meeting.meeting_type,
+                "meeting_type": meeting.meeting_type.value if meeting.meeting_type else None,
                 "course_name": meeting.course_name,
                 "hole_count": meeting.hole_count,
                 "status": meeting.status,
@@ -669,45 +684,46 @@ async def get_meeting(meeting_id: int,
         meeting_dict = {**meeting.__dict__}
         meeting_dict.pop("_sa_instance_state", None)
         meeting_dict["tee_times"] = meeting.tee_times or []
-
-        return MeetingResponse(**meeting_dict,
-                               name=meeting.name,
-                               description=meeting.description,
-                               location=meeting.location,
-                               meeting_time=meeting.meeting_time,
-                               application_deadline=meeting.application_deadline,
-                               tee_times=meeting.tee_times or [],
-                               max_participants=meeting.max_participants,
-                               meeting_type=meeting.meeting_type,
-                               meeting_subtype=meeting.meeting_subtype,
-                               team_formation_mode=meeting.team_formation_mode,
-                               team_size=meeting.team_size,
-                               total_cost=meeting.total_cost,
-                               green_fee=meeting.green_fee,
-                               caddy_fee=meeting.caddy_fee,
-                               cart_fee=meeting.cart_fee,
-                               settlement_method=meeting.settlement_method,
-                               social_settlement_method=meeting.social_settlement_method,
-                               course_name=meeting.course_name,
-                               hole_count=meeting.hole_count,
-                               reservation_name=meeting.reservation_name,
-                               venue_name=meeting.venue_name,
-                               status=meeting.status,
-                               cancel_reason=meeting.cancel_reason,
-                               club_id=meeting.club_id,
-                               club_name=club.name if club else None,
-                               participant_count=participant_count,
-                               created_by=meeting.created_by,
-                               created_by_name=created_by_name,
-                               social_cost=meeting.social_cost,
-                               social_notes=meeting.social_notes,
-                               team_formation_confirmed_at=meeting.team_formation_confirmed_at,
-                               rounding_started_at=meeting.rounding_started_at,
-                               rounding_completed_at=meeting.rounding_completed_at,
-                               settlement_confirmed=meeting.settlement_confirmed,
-                               created_at=meeting.created_at,
-                               updated_at=meeting.updated_at)
-
+        
+        return MeetingResponse(
+            **meeting_dict,
+            name=meeting.name,
+            description=meeting.description,
+            location=meeting.location,
+            meeting_time=meeting.meeting_time,
+            application_deadline=meeting.application_deadline,
+            tee_times=meeting.tee_times or [],
+            max_participants=meeting.max_participants,
+            meeting_type=meeting.meeting_type,
+            meeting_subtype=meeting.meeting_subtype,
+            team_formation_mode=meeting.team_formation_mode,
+            team_size=meeting.team_size,
+            total_cost=meeting.total_cost,
+            green_fee=meeting.green_fee,
+            caddy_fee=meeting.caddy_fee,
+            cart_fee=meeting.cart_fee,
+            settlement_method=meeting.settlement_method.value if meeting.settlement_method else None,
+            course_name=meeting.course_name,
+            hole_count=meeting.hole_count,
+            reservation_name=meeting.reservation_name,
+            venue_name=meeting.venue_name,
+            status=meeting.status,
+            cancel_reason=meeting.cancel_reason,
+            club_id=meeting.club_id,
+            club_name=club.name if club else None,
+            participant_count=participant_count,
+            created_by=meeting.created_by,
+            created_by_name=created_by_name,
+            social_cost=meeting.social_cost,
+            social_notes=meeting.social_notes,
+            team_formation_confirmed_at=meeting.team_formation_confirmed_at,
+            rounding_started_at=meeting.rounding_started_at,
+            rounding_completed_at=meeting.rounding_completed_at,
+            settlement_confirmed=meeting.settlement_confirmed,
+            created_at=meeting.created_at,
+            updated_at=meeting.updated_at
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -753,7 +769,11 @@ async def update_meeting(meeting_id: int,
             meeting.status = meeting_data.status
         if meeting_data.cancel_reason is not None:
             meeting.cancel_reason = meeting_data.cancel_reason
-
+        if meeting_data.settlement_method is not None:
+            meeting.settlement_method = ModelSettlementMethod(meeting_data.settlement_method.value)
+        if meeting_data.meeting_subtype is not None:
+            meeting.meeting_subtype = ModelMeetingSubtype(meeting_data.meeting_subtype.value)
+        
         db.commit()
         db.refresh(meeting)
 
@@ -761,37 +781,41 @@ async def update_meeting(meeting_id: int,
         club = db.query(Club).filter(Club.id == meeting.club_id).first()
 
         # 참가자 수 조회
-        participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).count()
-
-        return MeetingResponse(id=meeting.id,
-                               name=meeting.name,
-                               description=meeting.description,
-                               location=meeting.location,
-                               meeting_time=meeting.meeting_time,
-                               tee_times=meeting.tee_times,
-                               max_participants=meeting.max_participants,
-                               meeting_type=meeting.meeting_type,
-                               meeting_subtype=meeting.meeting_subtype,
-                               total_cost=meeting.total_cost,
-                               green_fee=meeting.green_fee,
-                               caddy_fee=meeting.caddy_fee,
-                               cart_fee=meeting.cart_fee,
-                               settlement_method=meeting.settlement_method,
-                               course_name=meeting.course_name,
-                               hole_count=meeting.hole_count,
-                               reservation_name=meeting.reservation_name,
-                               status=meeting.status,
-                               cancel_reason=meeting.cancel_reason,
-                               club_id=meeting.club_id,
-                               club_name=club.name if club else None,
-                               participant_count=participant_count,
-                               team_formation_confirmed_at=meeting.team_formation_confirmed_at,
-                               rounding_started_at=meeting.rounding_started_at,
-                               rounding_completed_at=meeting.rounding_completed_at,
-                               settlement_confirmed=meeting.settlement_confirmed,
-                               created_at=meeting.created_at,
-                               updated_at=meeting.updated_at)
-
+        participant_count = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED
+        ).count()
+        
+        return MeetingResponse(
+            id=meeting.id,            name=meeting.name,
+            description=meeting.description,
+            location=meeting.location,
+            meeting_time=meeting.meeting_time,
+            tee_times=meeting.tee_times,
+            max_participants=meeting.max_participants,
+            meeting_type=meeting.meeting_type,
+            meeting_subtype=meeting.meeting_subtype,
+            total_cost=meeting.total_cost,
+            green_fee=meeting.green_fee,
+            caddy_fee=meeting.caddy_fee,
+            cart_fee=meeting.cart_fee,
+            settlement_method=meeting.settlement_method.value if meeting.settlement_method else None,
+            course_name=meeting.course_name,
+            hole_count=meeting.hole_count,
+            reservation_name=meeting.reservation_name,
+            status=meeting.status,
+            cancel_reason=meeting.cancel_reason,
+            club_id=meeting.club_id,
+            club_name=club.name if club else None,
+            participant_count=participant_count,
+            team_formation_confirmed_at=meeting.team_formation_confirmed_at,
+            rounding_started_at=meeting.rounding_started_at,
+            rounding_completed_at=meeting.rounding_completed_at,
+            settlement_confirmed=meeting.settlement_confirmed,
+            created_at=meeting.created_at,
+            updated_at=meeting.updated_at
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -975,7 +999,7 @@ async def get_club_meetings(club_id: str,
                 "location": meeting.location,
                 "meeting_time": meeting.meeting_time,
                 "max_participants": meeting.max_participants,
-                "meeting_type": meeting.meeting_type,
+                "meeting_type": meeting.meeting_type.value if meeting.meeting_type else None,
                 "course_name": meeting.course_name,
                 "hole_count": meeting.hole_count,
                 "status": meeting.status,

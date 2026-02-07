@@ -1787,7 +1787,7 @@ async def get_my_schedule(
                         description=meeting.description,
                         location=meeting.location,
                         meeting_time=meeting.meeting_time,
-                        meeting_type=meeting.meeting_type,
+                        meeting_type=meeting.meeting_type.value if meeting.meeting_type else None,
                         status=str(meeting.status) if meeting.status else None,
                         club_id=club.id,
                         club_name=club.name,

@@ -390,9 +390,28 @@ async def update_round(meeting_id: int,
     if meeting_data.is_private is not None and meeting_data.is_private != meeting.is_private:
         is_private_changing = True
 
-    # 수정 가능한 필드들만 업데이트
+    # 수정 가능한 필드들만 업데이트 (Enum 컬럼에는 모델 Enum 인스턴스로 저장)
     update_data = meeting_data.dict(exclude_unset=True)
     for field, value in update_data.items():
+        if value is None:
+            setattr(meeting, field, None)
+            continue
+        if field == "settlement_method":
+            val_str = value.value if hasattr(value, "value") else value
+            try:
+                setattr(meeting, field, ModelSettlementMethod(val_str))
+            except (ValueError, TypeError):
+                setattr(meeting, field, value)
+            continue
+        if field == "meeting_subtype":
+            val_str = value.value if hasattr(value, "value") else value
+            try:
+                setattr(meeting, field, ModelMeetingSubtype(val_str))
+            except (ValueError, TypeError):
+                setattr(meeting, field, value)
+            continue
+        if hasattr(value, "value"):
+            value = value.value
         setattr(meeting, field, value)
 
     meeting.updated_at = get_kst_now()
@@ -581,6 +600,17 @@ async def get_round_participants(meeting_id: int,
 
         participant_responses = []
         for participant in participants:
+            # 클라이언트 권한 판단용: role, club_role, status
+            role = "ORGANIZER" if participant.user_id and participant.user_id == meeting.created_by else "PARTICIPANT"
+            club_role = None
+            if participant.user_id:
+                membership = db.query(ClubMembership).filter(
+                    and_(ClubMembership.user_id == participant.user_id,
+                         ClubMembership.club_id == meeting.club_id,
+                         ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES))).first()
+                if membership and membership.role:
+                    club_role = membership.role.value if hasattr(membership.role, 'value') else str(membership.role)
+            status = "CONFIRMED"  # 라운딩 참가자는 기본 확정
             # 게스트인 경우와 일반 참가자인 경우 구분
             if participant.guest_id:
                 # 게스트인 경우 - guest_id를 통해 Guest 모델에서 정보 조회
@@ -592,52 +622,31 @@ async def get_round_participants(meeting_id: int,
                 guest_birthdate = guest.birthdate if guest else None
 
                 participant_responses.append({
-                    "id":
-                    participant.id,
-                    "user_id":
-                    participant.user_id,
-                    "user_email":
-                    None,
-                    "guest_id":
-                    participant.guest_id,
-                    "user_name":
-                    guest_name,
-                    "user_nickname":
-                    guest_name,
-                    "name":
-                    guest_name,
-                    "handicap":
-                    int(guest_handicap) if guest_handicap else None,
-                    "handicap":
-                    float(guest_handicap) if guest_handicap else None,
-                    "average_score":
-                    None,  # 게스트는 직전 대회 성적 없음
-                    "pace_preference":
-                    participant.pace_preference,
-                    "tee_preference":
-                    participant.tee_preference,
-                    "is_newbie":
-                    participant.is_newbie,
-                    "prefer_with":
-                    participant.prefer_with or [],
-                    "avoid_with":
-                    participant.avoid_with or [],
-                    "is_guest":
-                    True,
-                    "guest_name":
-                    guest_name,
-                    "guest_gender":
-                    guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else
-                    (str(guest_gender) if guest_gender else None),
-                    "guest_handicap":
-                    float(guest_handicap) if guest_handicap else None,
-                    "guest_birthdate":
-                    guest_birthdate.isoformat() if guest_birthdate else None,
-                    "gender":
-                    guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else
-                    (str(guest_gender) if guest_gender else None),
-                    "created_at":
-                    participant.created_at.isoformat() if participant.created_at else None
+                    "id": participant.id,
+                    "user_id": participant.user_id,
+                    "user_email": None,
+                    "guest_id": participant.guest_id,
+                    "user_name": guest_name,
+                    "user_nickname": guest_name,
+                    "name": guest_name,
+                    "handicap": float(guest_handicap) if guest_handicap else None,
+                    "average_score": None,
+                    "pace_preference": participant.pace_preference,
+                    "tee_preference": participant.tee_preference,
+                    "is_newbie": participant.is_newbie,
+                    "prefer_with": participant.prefer_with or [],
+                    "avoid_with": participant.avoid_with or [],
+                    "is_guest": True,
+                    "guest_name": guest_name,
+                    "guest_gender": guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else (str(guest_gender) if guest_gender else None),
+                    "guest_handicap": float(guest_handicap) if guest_handicap else None,
+                    "guest_birthdate": guest_birthdate.isoformat() if guest_birthdate else None,
+                    "gender": guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else (str(guest_gender) if guest_gender else None),
+                    "created_at": participant.created_at.isoformat() if participant.created_at else None,
+                    "role": "PARTICIPANT",
+                    "club_role": None,
+                    "membership_role": None,
+                    "status": "CONFIRMED",
                 })
             else:
                 # 일반 참가자인 경우 - user_id를 통해 User 모델에서 정보 조회
@@ -647,41 +656,27 @@ async def get_round_participants(meeting_id: int,
                         continue
 
                     participant_responses.append({
-                        "id":
-                        participant.id,
-                        "user_id":
-                        participant.user_id,
-                        "user_email":
-                        user.email,
-                        "guest_id":
-                        None,
-                        "user_name":
-                        user.realname or "이름 없음",
-                        "user_nickname":
-                        user.nickname or "닉네임 없음",
-                        "name":
-                        user.realname or "이름 없음",
-                        "handicap":
-                        user.handicap if user.handicap is not None else user.handicap_init,
-                        "average_score":
-                        user.average_score if user.average_score is not None else user.average_score,
-                        "pace_preference":
-                        participant.pace_preference,
-                        "tee_preference":
-                        participant.tee_preference,
-                        "is_newbie":
-                        participant.is_newbie,
-                        "prefer_with":
-                        participant.prefer_with or [],
-                        "avoid_with":
-                        participant.avoid_with or [],
-                        "is_guest":
-                        False,
-                        "gender":
-                        user.gender.value if user.gender and hasattr(user.gender, 'value') else
-                        (str(user.gender) if user.gender else None),
-                        "created_at":
-                        participant.created_at.isoformat() if participant.created_at else None
+                        "id": participant.id,
+                        "user_id": participant.user_id,
+                        "user_email": user.email,
+                        "guest_id": None,
+                        "user_name": user.realname or "이름 없음",
+                        "user_nickname": user.nickname or "닉네임 없음",
+                        "name": user.realname or "이름 없음",
+                        "handicap": user.handicap if user.handicap is not None else user.handicap_init,
+                        "average_score": user.average_score if user.average_score is not None else user.average_score,
+                        "pace_preference": participant.pace_preference,
+                        "tee_preference": participant.tee_preference,
+                        "is_newbie": participant.is_newbie,
+                        "prefer_with": participant.prefer_with or [],
+                        "avoid_with": participant.avoid_with or [],
+                        "is_guest": False,
+                        "gender": user.gender.value if user.gender and hasattr(user.gender, 'value') else (str(user.gender) if user.gender else None),
+                        "created_at": participant.created_at.isoformat() if participant.created_at else None,
+                        "role": role,
+                        "club_role": club_role,
+                        "membership_role": club_role,
+                        "status": status,
                     })
 
         return participant_responses
@@ -738,7 +733,7 @@ async def get_round_teams(meeting_id: int,
                     participant = None
 
                 if participant:
-                    # 게스트인 경우와 멤버인 경우 구분
+                    # 게스트인 경우와 멤버인 경우 구분 (MeetingParticipant에는 is_guest 없음, guest_id로 판별)
                     gender = None
                     handicap = None
                     average_score = None

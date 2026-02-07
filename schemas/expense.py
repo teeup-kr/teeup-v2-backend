@@ -9,6 +9,7 @@ class ExpenseCreate(BaseModel):
     amount: float = Field(..., ge=0, description="총 비용")
     total_participants: int = Field(..., ge=1, description="참가자 수")
     participant_ids: Optional[List[int]] = Field(default_factory=list, description="참가자(MeetingParticipant) ID 목록")
+    extra_payer_id: Optional[int] = Field(None, description="나머지 10원 부담자(participant_ids 중 하나)")
     notes: Optional[str] = Field(None, description="메모")
 
 class ExpenseUpdate(BaseModel):
@@ -16,6 +17,7 @@ class ExpenseUpdate(BaseModel):
     description: Optional[str] = Field(None, description="비용 설명")
     amount: Optional[float] = Field(None, ge=0, description="총 비용")
     total_participants: Optional[int] = Field(None, ge=1, description="참가자 수")
+    extra_payer_id: Optional[int] = Field(None, description="나머지 10원 부담자(user_id 또는 guest_id)")
     notes: Optional[str] = Field(None, description="메모")
 
 class ExpenseResponse(BaseModel):
@@ -33,6 +35,7 @@ class ExpenseResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     participants: Optional[List["ExpenseParticipantResponse"]] = None
+    settlement_type: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -53,9 +56,9 @@ class ExpenseParticipantResponse(BaseModel):
     is_guest: bool = False
     amount_paid: Optional[float] = None
     is_paid: bool
-    paid_at: Optional[datetime]
-    created_at: datetime
-    
+    paid_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
     model_config = {"from_attributes": True}
 
 class ExpenseParticipantUpdate(BaseModel):
