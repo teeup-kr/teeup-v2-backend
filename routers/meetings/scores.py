@@ -82,12 +82,12 @@ def check_score_permission(user_id: int, participant_id: int, db: Session) -> bo
 async def create_score(
     score_data: ScoreCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """스코어 등록"""
     try:
         # 권한 확인
-        if not check_score_permission(current_user["id"], score_data.participant_id, db):
+        if not check_score_permission(current_user.id, score_data.participant_id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="스코어 등록 권한이 없습니다."
@@ -152,7 +152,7 @@ async def get_scores(
     page: int = Query(1, ge=1, description="페이지 번호"),
     size: int = Query(20, ge=1, le=100, description="페이지 크기"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """스코어 목록 조회"""
     try:
@@ -173,13 +173,13 @@ async def get_scores(
         # 권한 확인 (관리자는 모든 스코어 조회 가능)
         from models import Admin
         admin = db.query(Admin).filter(
-            Admin.id == current_user["id"],
+            Admin.id == current_user.id,
             Admin.deleted_at.is_(None)
         ).first()
         
         if not admin:
             if participant_id:
-                if not check_score_permission(current_user["id"], participant_id, db):
+                if not check_score_permission(current_user.id, participant_id, db):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="스코어 조회 권한이 없습니다."
@@ -187,7 +187,7 @@ async def get_scores(
             else:
                 # participant_id가 없으면 본인의 스코어만 조회
                 user_participants = db.query(MeetingParticipant).filter(
-                    MeetingParticipant.user_id == current_user["id"]
+                    MeetingParticipant.user_id == current_user.id
                 ).all()
                 participant_ids = [p.id for p in user_participants]
                 if participant_ids:
@@ -223,7 +223,7 @@ async def get_scores(
 async def get_score(
     score_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """스코어 상세 조회"""
     try:
@@ -240,12 +240,12 @@ async def get_score(
         # 권한 확인 (관리자는 모든 스코어 조회 가능)
         from models import Admin
         admin = db.query(Admin).filter(
-            Admin.id == current_user["id"],
+            Admin.id == current_user.id,
             Admin.deleted_at.is_(None)
         ).first()
         
         if not admin:
-            if not check_score_permission(current_user["id"], score.participant_id, db):
+            if not check_score_permission(current_user.id, score.participant_id, db):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="스코어 조회 권한이 없습니다."
@@ -267,7 +267,7 @@ async def update_score(
     score_id: int,
     score_data: ScoreUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """스코어 수정"""
@@ -284,7 +284,7 @@ async def update_score(
         # JWT 토큰에서 role 확인
         user_role = get_user_role_from_token(credentials)
         if user_role != "ADMIN":
-            if not check_score_permission(current_user["id"], score.participant_id, db):
+            if not check_score_permission(current_user.id, score.participant_id, db):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="스코어 수정 권한이 없습니다."
@@ -328,7 +328,7 @@ async def update_score(
 async def delete_score(
     score_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """스코어 삭제"""
@@ -344,7 +344,7 @@ async def delete_score(
         # 권한 확인 (관리자는 모든 스코어 삭제 가능)
         user_role = get_user_role_from_token(credentials)
         if user_role != "ADMIN":
-            if not check_score_permission(current_user["id"], score.participant_id, db):
+            if not check_score_permission(current_user.id, score.participant_id, db):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="스코어 삭제 권한이 없습니다."
@@ -372,12 +372,12 @@ async def delete_score(
 async def get_score_stats(
     participant_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """스코어 통계 조회"""
     try:
         # 권한 확인
-        if not check_score_permission(current_user["id"], participant_id, db):
+        if not check_score_permission(current_user.id, participant_id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="스코어 통계 조회 권한이 없습니다."
@@ -446,7 +446,7 @@ async def get_participant_scores(
     page: int = 1,
     limit: int = 18,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """참가자 스코어 조회"""
     try:
@@ -471,7 +471,7 @@ async def get_participant_scores(
             )
         
         # 권한 확인 (참가자 본인 또는 모임 매니저)
-        user_id = current_user["id"]
+        user_id = current_user.id
         is_participant = (participant.user_id == user_id) if participant.user_id else False
         is_manager = meeting.created_by == user_id
         
@@ -532,7 +532,7 @@ async def get_participant_score_stats(
     meeting_id: int,
     participant_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """참가자 스코어 통계 조회"""
     try:
@@ -557,7 +557,7 @@ async def get_participant_score_stats(
             )
         
         # 권한 확인 (참가자 본인 또는 모임 매니저)
-        user_id = current_user["id"]
+        user_id = current_user.id
         is_participant = (participant.user_id == user_id) if participant.user_id else False
         is_manager = meeting.created_by == user_id
         
@@ -622,11 +622,11 @@ async def create_simple_score(
     participant_id: int,
     score_data: SimpleScoreCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """간단 점수 입력 (총 스코어만 입력, 라운딩 종료 후 가능)"""
     try:
-        user_id = current_user["id"]
+        user_id = current_user.id
         
         # 모임 존재 확인
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -636,8 +636,9 @@ async def create_simple_score(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 라운딩 모임 확인
-        if meeting.meeting_type != MeetingType.ROUND:
+        # 라운딩 모임 확인 (모델 Enum / 스키마 Enum 값 비교)
+        _mt = getattr(meeting.meeting_type, "value", None) or meeting.meeting_type
+        if _mt != MeetingType.ROUND.value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="라운딩 모임이 아닙니다."
@@ -741,11 +742,11 @@ async def update_simple_score(
     participant_id: int,
     score_data: SimpleScoreCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """간단 점수 수정 (총 스코어만 수정, 라운딩 종료 후 가능)"""
     try:
-        user_id = current_user["id"]
+        user_id = current_user.id
         
         # 모임 존재 확인
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -755,8 +756,9 @@ async def update_simple_score(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 라운딩 모임 확인
-        if meeting.meeting_type != MeetingType.ROUND:
+        # 라운딩 모임 확인 (모델 Enum / 스키마 Enum 값 비교)
+        _mt = getattr(meeting.meeting_type, "value", None) or meeting.meeting_type
+        if _mt != MeetingType.ROUND.value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="라운딩 모임이 아닙니다."

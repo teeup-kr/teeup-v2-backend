@@ -689,7 +689,7 @@ async def get_user_meetings(user_id: int,
     """사용자별 라운딩/소셜 참가 목록 조회"""
     try:
         from models import Meeting, MeetingParticipant, Club, UserScoreHistory
-        from schemas import MeetingType
+        from models import MeetingType
 
         # 사용자 존재 확인
         user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
@@ -914,7 +914,7 @@ async def get_admin_dashboard(db: Session = Depends(get_db), current_user: dict 
     """관리자 대시보드 데이터"""
     try:
         from models import Club, Meeting, Payment, Notice, User, UserStatus
-        from schemas import MeetingType
+        from models import MeetingType
 
         # 기본 통계
         total_users = db.query(User).filter(User.deleted_at.is_(None), ~User.nickname.like('guest_%')).count()
@@ -1045,7 +1045,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: dict 
     """대시보드 통계 조회"""
     try:
         from models import Club, Meeting, Payment, Notice, User, UserStatus
-        from schemas import MeetingType
+        from models import MeetingType
 
         # 기본 통계
         total_users = db.query(User).filter(User.deleted_at.is_(None), ~User.nickname.like('guest_%')).count()
@@ -1077,7 +1077,7 @@ async def get_dashboard_activities(db: Session = Depends(get_db),
                                    current_user: dict = Depends(get_admin_user)):
     """최근 활동 조회"""
     try:
-        from schemas import MeetingType
+        from models import MeetingType
 
         recent_activities = []
 
@@ -1098,7 +1098,8 @@ async def get_dashboard_activities(db: Session = Depends(get_db),
 
         for meeting in recent_meetings:
             activity_type = "meeting_created"
-            if meeting.meeting_type == MeetingType.SOCIAL:
+            _mt = getattr(meeting.meeting_type, "value", None) or meeting.meeting_type
+            if _mt == MeetingType.SOCIAL.value:
                 activity_type = "post_created"
 
             recent_activities.append({
@@ -1964,8 +1965,8 @@ async def admin_get_rounding_meetings(page: int = Query(1, ge=1, description="�
                                       db: Session = Depends(get_db)):
     """관리자용 라운딩 모임 목록 조회 (모든 클럽 조회 가능)"""
     try:
-        from models import Meeting, Club, MeetingParticipant, User
-        from schemas import MeetingType
+        from models import Meeting, Club, MeetingParticipant
+        from models import MeetingType, MeetingParticipantStatus, MeetingParticipantRole
         from sqlalchemy import desc, and_, or_
 
         query = db.query(Meeting).join(Club).filter(Meeting.meeting_type == MeetingType.ROUND)
@@ -2000,24 +2001,16 @@ async def admin_get_rounding_meetings(page: int = Query(1, ge=1, description="�
 
             # 개설자(생성자) 조회
             creator_info = None
-            if meeting.created_by:
-                creator = db.query(User).filter(User.id == meeting.created_by).first()
-                if creator:
-                    creator_info = {
-                        "id": creator.id,
-                        "realname": creator.realname,
-                        "nickname": creator.nickname,
-                        "email": creator.email
-                    }
+            if organizer_participant and organizer_participant.user:
+                creator_info = {
+                    "id": organizer_participant.user.id,
+                    "realname": organizer_participant.user.realname,
+                    "nickname": organizer_participant.user.nickname,
+                    "email": organizer_participant.user.email
+                }
 
-            # meeting_type과 status는 데이터베이스에서 문자열로 저장되므로 .value 접근 불필요
-            meeting_type_str = meeting.meeting_type
-            if hasattr(meeting_type_str, 'value'):
-                meeting_type_str = meeting_type_str.value
-
-            meeting_subtype_str = meeting.meeting_subtype
-            if meeting_subtype_str and hasattr(meeting_subtype_str, 'value'):
-                meeting_subtype_str = meeting_subtype_str.value
+            meeting_type_str = meeting.meeting_type.value if meeting.meeting_type else None
+            meeting_subtype_str = meeting.meeting_subtype.value if meeting.meeting_subtype else None
 
             status_str = meeting.status
             if hasattr(status_str, 'value'):
@@ -2080,8 +2073,8 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
                                    db: Session = Depends(get_db)):
     """관리자용 이벤트 모임 목록 조회 (모든 클럽 조회 가능)"""
     try:
-        from models import Meeting, Club, MeetingParticipant, User
-        from schemas import MeetingType
+        from models import Meeting, Club, MeetingParticipant, MeetingType
+        from schemas import MeetingParticipantStatus, MeetingParticipantRole
         from sqlalchemy import desc, and_, or_
 
         query = db.query(Meeting).join(Club).filter(Meeting.meeting_type == MeetingType.SOCIAL)
@@ -2134,7 +2127,7 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
                 "description":
                 meeting.description,
                 "meeting_type":
-                meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+                meeting.meeting_type.value if meeting.meeting_type else None,
                 "meeting_subtype":
                 meeting.meeting_subtype.value
                 if hasattr(meeting.meeting_subtype, 'value') else str(meeting.meeting_subtype),
@@ -2201,10 +2194,9 @@ async def get_admin_meeting(meeting_id: int,
             "description":
             meeting.description,
             "meeting_type":
-            meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+            meeting.meeting_type.value if meeting.meeting_type else None,
             "meeting_subtype":
-            meeting.meeting_subtype.value
-            if hasattr(meeting.meeting_subtype, 'value') else str(meeting.meeting_subtype),
+            meeting.meeting_subtype.value if meeting.meeting_subtype else None,
             "location":
             meeting.location,
             "course_name":
@@ -2245,7 +2237,7 @@ async def create_admin_rounding_meeting(meeting_data: dict,
                                         current_user: dict = Depends(get_admin_user)):
     """관리자용 라운딩 모임 생성"""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
+        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, SettlementMethod
         from utils import generate_id
         from datetime import datetime
 
@@ -2269,7 +2261,7 @@ async def create_admin_rounding_meeting(meeting_data: dict,
                           green_fee=meeting_data.get('green_fee'),
                           caddy_fee=meeting_data.get('caddy_fee'),
                           cart_fee=meeting_data.get('cart_fee'),
-                          settlement_method=meeting_data.get('settlement_method'),
+                          settlement_method=SettlementMethod(meeting_data.get('settlement_method')) if meeting_data.get('settlement_method') else None,
                           course_name=meeting_data.get('course_name'),
                           hole_count=meeting_data.get('hole_count'),
                           reservation_name=meeting_data.get('reservation_name'),
@@ -2298,10 +2290,9 @@ async def create_admin_rounding_meeting(meeting_data: dict,
             "description":
             meeting.description,
             "meeting_type":
-            meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+            meeting.meeting_type.value if meeting.meeting_type else None,
             "meeting_subtype":
-            meeting.meeting_subtype.value
-            if hasattr(meeting.meeting_subtype, 'value') else str(meeting.meeting_subtype),
+            meeting.meeting_subtype.value if meeting.meeting_subtype else None,
             "location":
             meeting.location,
             "course_name":
@@ -2337,7 +2328,7 @@ async def create_admin_event_meeting(meeting_data: dict,
                                      current_user: dict = Depends(get_admin_user)):
     """관리자용 이벤트 모임 생성"""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
+        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, SettlementMethod
         from utils import generate_id
         from datetime import datetime
 
@@ -2355,7 +2346,7 @@ async def create_admin_event_meeting(meeting_data: dict,
                           meeting_type=MeetingType.SOCIAL,
                           venue_name=meeting_data.get('venue_name'),
                           social_cost=meeting_data.get('social_cost'),
-                          social_settlement_method=meeting_data.get('social_settlement_method'),
+                          settlement_method=SettlementMethod(meeting_data.get('settlement_method')) if meeting_data.get('settlement_method') else None,
                           club_id=meeting_data.get('club_id'),
                           status=MeetingStatus.SCHEDULED,
                           created_by=current_user['id'])
@@ -2381,7 +2372,7 @@ async def create_admin_event_meeting(meeting_data: dict,
             "description":
             meeting.description,
             "meeting_type":
-            meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+            meeting.meeting_type.value if meeting.meeting_type else None,
             "venue_name":
             meeting.venue_name,
             "meeting_time":
@@ -2459,10 +2450,9 @@ async def update_admin_meeting(meeting_id: int,
             "description":
             meeting.description,
             "meeting_type":
-            meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+            meeting.meeting_type.value if meeting.meeting_type else None,
             "meeting_subtype":
-            meeting.meeting_subtype.value
-            if hasattr(meeting.meeting_subtype, 'value') else str(meeting.meeting_subtype),
+            meeting.meeting_subtype.value if meeting.meeting_subtype else None,
             "location":
             meeting.location,
             "course_name":

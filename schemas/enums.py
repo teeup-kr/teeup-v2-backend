@@ -28,12 +28,16 @@ class MeetingSubtype(str, Enum):
     IRREGULAR = "IRREGULAR"
     ONE_TIME = "ONE_TIME"
 
+class SocialType(str, Enum):
+    """소셜 모임 유형"""
+    CASUAL = "CASUAL"
+    DINNER = "DINNER"
+    EVENT = "EVENT"
+
 class SettlementMethod(str, Enum):
+    """정산 방법 (라운딩/소셜 공통)"""
     EQUAL_SPLIT = "EQUAL_SPLIT"
     INDIVIDUAL = "INDIVIDUAL"
-
-class SocialSettlementMethod(str, Enum):
-    EQUAL_SPLIT = "EQUAL_SPLIT"
     TREASURER_PREPAID = "TREASURER_PREPAID"
     CLUB_FUND = "CLUB_FUND"
 
@@ -46,6 +50,22 @@ class MeetingStatus(str, Enum):
 class ParticipantType(str, Enum):
     USER = "USER"
     GUEST = "GUEST"
+
+
+class MeetingParticipantStatus(str, Enum):
+    """모임 참가자 상태"""
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    CANCELED = "CANCELED"
+    WAITING_LIST = "WAITING_LIST"
+
+
+class MeetingParticipantRole(str, Enum):
+    """모임 참가자 역할"""
+    PARTICIPANT = "PARTICIPANT"
+    ORGANIZER = "ORGANIZER"
+    CO_ORGANIZER = "CO_ORGANIZER"
+
 
 class RegulationStatus(str, Enum):
     ACTIVE = "ACTIVE"

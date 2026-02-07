@@ -2,8 +2,9 @@
 백오피스 모임 API
 """
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 from typing import Optional, List
@@ -11,8 +12,23 @@ import logging
 
 from database import get_db
 from utils.datetime_utils import get_kst_now
+from utils.amount_split import split_amount_10won, allocate_by_total, allocate_items_to_exact_totals
 
 from .deps import get_admin_user
+
+
+def _resolve_extra_payer_index(effective_ids: list, extra_payer_id) -> Optional[int]:
+    """나머지 10원을 부담할 참가자의 effective_ids 내 인덱스 반환. 없으면 None."""
+    if extra_payer_id is None:
+        return None
+    try:
+        pid = int(extra_payer_id)
+        for i, eid in enumerate(effective_ids):
+            if eid is not None and int(eid) == pid:
+                return i
+    except (TypeError, ValueError):
+        pass
+    return None
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin-meetings"])
@@ -337,6 +353,246 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="이벤트 모임 목록 조회 중 오류가 발생했습니다")
 
 
+# =============================================================================
+# 관리자 팀 편성 API (라운딩 전용)
+# =============================================================================
+
+@router.get("/meetings/{meeting_id}/teams")
+async def get_admin_meeting_teams(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 라운딩 팀 목록 조회"""
+    try:
+        from models import Meeting, Team, TeamMember, MeetingParticipant, User, Guest
+        from sqlalchemy import or_
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if getattr(meeting.meeting_type, "value", str(meeting.meeting_type)) != "ROUND":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임만 팀 편성을 지원합니다.")
+
+        teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
+        result = []
+        for team in teams:
+            members = []
+            for tm in db.query(TeamMember).filter(TeamMember.team_id == team.id).all():
+                if tm.guest_id:
+                    p = db.query(MeetingParticipant).filter(
+                        MeetingParticipant.meeting_id == meeting_id,
+                        MeetingParticipant.guest_id == tm.guest_id,
+                    ).first()
+                    g = db.query(Guest).filter(Guest.id == tm.guest_id).first()
+                    members.append({"user_name": g.name if g else "게스트", "user_nickname": g.name if g else "게스트"})
+                elif tm.user_id:
+                    p = db.query(MeetingParticipant).filter(
+                        MeetingParticipant.meeting_id == meeting_id,
+                        MeetingParticipant.user_id == tm.user_id,
+                    ).first()
+                    u = db.query(User).filter(User.id == tm.user_id).first()
+                    members.append({"user_name": u.realname or u.nickname if u else "-", "user_nickname": u.nickname if u else "-"})
+            result.append({
+                "id": team.id, "name": team.name or f"팀 {team.id}",
+                "meeting_id": team.meeting_id, "members": members,
+                "formation_mode": team.formation_mode, "status": team.status,
+            })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 팀 목록 조회 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/meetings/{meeting_id}/teams")
+async def create_admin_team(
+    meeting_id: int,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 팀 생성"""
+    try:
+        from models import Meeting, Team
+        from schemas import TeamFormationMode, TeamStatus
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if getattr(meeting.meeting_type, "value", str(meeting.meeting_type)) != "ROUND":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임만 팀 편성을 지원합니다.")
+
+        name = (data.get("name") or "").strip() or f"팀"
+        formation_mode = data.get("formation_mode") or TeamFormationMode.GENDER_MIXED_HANDICAP.value
+        if isinstance(formation_mode, str) and not hasattr(TeamFormationMode, formation_mode):
+            formation_mode = TeamFormationMode.GENDER_MIXED_HANDICAP.value
+
+        team = Team(
+            name=name,
+            meeting_id=meeting_id,
+            formation_mode=formation_mode if isinstance(formation_mode, str) else getattr(formation_mode, "value", "GENDER_MIXED_HANDICAP"),
+            status="DRAFT",
+            formation_notes=data.get("formation_notes"),
+        )
+        db.add(team)
+        db.commit()
+        db.refresh(team)
+        return {"id": team.id, "name": team.name, "meeting_id": team.meeting_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 팀 생성 중 오류: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.put("/meetings/{meeting_id}/teams/{team_id}")
+async def update_admin_team(
+    meeting_id: int,
+    team_id: int,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 팀 수정"""
+    try:
+        from models import Team
+
+        team = db.query(Team).filter(Team.id == team_id, Team.meeting_id == meeting_id).first()
+        if not team:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="팀을 찾을 수 없습니다.")
+
+        if "name" in data and data["name"] is not None:
+            team.name = str(data["name"]).strip() or team.name
+        db.commit()
+        db.refresh(team)
+        return {"id": team.id, "name": team.name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 팀 수정 중 오류: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/meetings/{meeting_id}/teams/{team_id}")
+async def delete_admin_team(
+    meeting_id: int,
+    team_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 팀 삭제"""
+    try:
+        from models import Team, TeamMember
+
+        team = db.query(Team).filter(Team.id == team_id, Team.meeting_id == meeting_id).first()
+        if not team:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="팀을 찾을 수 없습니다.")
+
+        db.query(TeamMember).filter(TeamMember.team_id == team_id).delete()
+        db.delete(team)
+        db.commit()
+        return {"message": "팀이 삭제되었습니다."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 팀 삭제 중 오류: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/meetings/{meeting_id}/teams/auto-formation")
+async def admin_auto_form_teams(
+    meeting_id: int,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 자동 팀 편성 (모집마감/권한 체크 없음)"""
+    try:
+        from models import Meeting, MeetingParticipant, Team
+        from schemas import MeetingType, MeetingParticipantStatus, TeamFormationMode, TeamFormationRequest
+        from utils.team_formation import TeamFormationEngine
+        from sqlalchemy.orm import joinedload
+        from sqlalchemy import or_
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if meeting.meeting_type != MeetingType.ROUND:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임만 팀 편성을 지원합니다.")
+
+        formation_mode_str = data.get("formation_mode", "GENDER_MIXED_HANDICAP")
+        try:
+            formation_mode = TeamFormationMode(formation_mode_str)
+        except ValueError:
+            formation_mode = TeamFormationMode.GENDER_MIXED_HANDICAP
+        team_size = int(data.get("team_size", 4))
+        if team_size < 2 or team_size > 4:
+            team_size = 4
+
+        formation_request = TeamFormationRequest(
+            formation_mode=formation_mode,
+            team_size=team_size,
+            preferences=data.get("preferences"),
+        )
+
+        participants = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
+        ).options(joinedload(MeetingParticipant.user)).all()
+
+        if len(participants) < 4:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="팀 편성을 위해서는 최소 4명의 확정된 참가자가 필요합니다."
+            )
+
+        from models import TeamMember
+        existing_teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
+        for t in existing_teams:
+            db.query(TeamMember).filter(TeamMember.team_id == t.id).delete()
+            db.delete(t)
+        db.commit()
+
+        formation_engine = TeamFormationEngine(db)
+        teams = formation_engine.create_teams_from_formation(meeting_id, formation_request, participants)
+
+        from models import User, Guest
+
+        team_list = []
+        for team in teams:
+            members = []
+            for tm in team.members:
+                if tm.user_id:
+                    u = db.query(User).filter(User.id == tm.user_id).first()
+                    members.append({"user_name": u.realname or u.nickname if u else "-", "user_nickname": u.nickname if u else "-"})
+                elif tm.guest_id:
+                    g = db.query(Guest).filter(Guest.id == tm.guest_id).first()
+                    members.append({"user_name": g.name if g else "게스트", "user_nickname": g.name if g else "게스트"})
+            team_list.append({
+                "id": team.id, "name": team.name, "meeting_id": team.meeting_id,
+                "members": members, "member_count": len(members),
+            })
+        summary = formation_engine.get_formation_summary(teams) if teams else {}
+        return {
+            "teams": team_list,
+            "total_teams": len(team_list),
+            "unassigned_participants": [],
+            "total_participants": len(participants),
+            "formation_summary": summary,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 자동 팀 편성 중 오류: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.get("/meetings/{meeting_id}/participants")
 async def get_admin_meeting_participants(
     meeting_id: int,
@@ -355,14 +611,16 @@ async def get_admin_meeting_participants(
         participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).all()
         result = []
         for p in participants:
+            status_val = p.status.value if hasattr(p.status, "value") else str(p.status) if p.status else "CONFIRMED"
+            role_val = p.role.value if hasattr(p.role, "value") else str(p.role) if p.role else "PARTICIPANT"
             if p.guest_id:
                 guest = db.query(Guest).filter(Guest.id == p.guest_id).first()
                 name = guest.name if guest else "게스트"
                 result.append({
                     "id": p.id, "user_id": p.user_id, "guest_id": p.guest_id,
                     "user_name": name, "user_nickname": name, "name": name,
-                    "status": p.status.value if hasattr(p.status, "value") else str(p.status),
-                    "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                    "status": status_val,
+                    "role": role_val,
                     "is_guest": True, "created_at": p.created_at.isoformat() if p.created_at else None,
                 })
             else:
@@ -373,8 +631,8 @@ async def get_admin_meeting_participants(
                     "id": p.id, "user_id": p.user_id, "guest_id": None,
                     "user_name": user.realname or "이름 없음", "user_nickname": user.nickname or "닉네임 없음",
                     "name": user.realname or "이름 없음",
-                    "status": p.status.value if hasattr(p.status, "value") else str(p.status),
-                    "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                    "status": status_val,
+                    "role": role_val,
                     "is_guest": False, "created_at": p.created_at.isoformat() if p.created_at else None,
                 })
         return result
@@ -382,6 +640,302 @@ async def get_admin_meeting_participants(
         raise
     except Exception as e:
         logger.error(f"관리자 참가자 목록 조회 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+class MarkParticipantPaidBody(BaseModel):
+    """납부 완료 표시 요청"""
+    user_id: Optional[int] = None
+    guest_id: Optional[int] = None
+    is_paid: bool = True
+    amount_paid: Optional[float] = None
+
+
+@router.patch("/meetings/{meeting_id}/expenses/{expense_id}/participants/mark-paid")
+async def mark_participant_paid(
+    meeting_id: int,
+    expense_id: int,
+    data: MarkParticipantPaidBody = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """정산 참가자 납부 완료/미완료 표시 (user_id 또는 guest_id로 해당 참가자의 모든 ExpenseItemParticipant 일괄 업데이트)"""
+    try:
+        from models import Meeting, Expense, ExpenseItem, ExpenseItemParticipant
+        from decimal import Decimal
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        expense = db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.meeting_id == meeting_id
+        ).first()
+        if not expense:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="정산을 찾을 수 없습니다.")
+
+        user_id = data.user_id
+        guest_id = data.guest_id
+        if (user_id is None and guest_id is None) or (user_id is not None and guest_id is not None):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id 또는 guest_id 중 하나만 지정해주세요.")
+
+        items = db.query(ExpenseItem).filter(ExpenseItem.expense_id == expense_id).all()
+        item_ids = [i.id for i in items]
+        filters = [
+            ExpenseItemParticipant.expense_item_id.in_(item_ids),
+        ]
+        if user_id is not None:
+            filters.append(ExpenseItemParticipant.user_id == user_id)
+        else:
+            filters.append(ExpenseItemParticipant.guest_id == guest_id)
+
+        from sqlalchemy import and_
+        eips = db.query(ExpenseItemParticipant).filter(and_(*filters)).all()
+        if not eips:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="해당 참가자를 찾을 수 없습니다.")
+
+        total_burden = sum(Decimal(str(eip.amount or 0)) for eip in eips)
+        paid_at = get_kst_now() if data.is_paid else None
+        amount_paid_val = Decimal(str(data.amount_paid)) if data.amount_paid is not None else None
+        # 납부완료: (1) 금액 미입력=전액 납부로 간주, (2) 입력 시 부담금 이상일 때만
+        if amount_paid_val is not None:
+            effective_is_paid = data.is_paid and (amount_paid_val >= total_burden)
+        else:
+            effective_is_paid = data.is_paid  # 빈 값 = 수동 전액 납부확인
+        # amount_paid는 "총 납부액" 의미 - 여러 EIP에 동일 값 저장 시 합산 시 중복되므로 첫 EIP에만 저장
+        for idx, eip in enumerate(eips):
+            eip.is_paid = effective_is_paid
+            eip.paid_at = paid_at if effective_is_paid else None
+            if amount_paid_val is not None:
+                eip.amount_paid = amount_paid_val if idx == 0 else Decimal("0")
+            elif data.is_paid:
+                eip.amount_paid = eip.amount or Decimal("0")
+            else:
+                eip.amount_paid = Decimal("0")
+        db.commit()
+        return {"message": "납부 상태가 변경되었습니다.", "updated_count": len(eips)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"납부 완료 표시 중 오류: {e}")
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/meetings/{meeting_id}/expenses")
+async def get_admin_meeting_expenses(
+    meeting_id: int,
+    page: int = 1,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 모임 비용 목록 조회 (소셜/라운딩 공통)"""
+    try:
+        from models import Meeting, Expense, ExpenseItem, ExpenseItemParticipant
+        from schemas import ExpenseResponse, ExpenseListResponse
+        from routers.meetings.expenses import _build_expense_response
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+
+        skip = (page - 1) * limit
+        expenses = db.query(Expense).filter(Expense.meeting_id == meeting_id).order_by(Expense.created_at.desc()).offset(skip).limit(limit).all()
+        total = db.query(Expense).filter(Expense.meeting_id == meeting_id).count()
+        expense_responses = [_build_expense_response(e, db) for e in expenses]
+        total_pages = (total + limit - 1) // limit if limit > 0 else 0
+        return ExpenseListResponse(expenses=expense_responses, total=total, page=page, limit=limit, total_pages=total_pages)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 비용 목록 조회 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+class AdminExpenseBody(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    category: Optional[str] = None
+    settlement_type: Optional[str] = None  # EQUAL_SPLIT | CLUB_FUND | TREASURER_PREPAID
+
+
+@router.post("/meetings/{meeting_id}/expenses")
+async def create_admin_meeting_expense(
+    meeting_id: int,
+    data: AdminExpenseBody = Body(default=AdminExpenseBody()),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 모임 비용 등록 (description, amount, category 형식 지원)"""
+    try:
+        from models import Meeting, MeetingParticipant, Expense, ExpenseItem, ExpenseItemParticipant
+        from models.enums import ExpenseItemType
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+
+        d = data.model_dump() if hasattr(data, "model_dump") else (data or {})
+        title = d.get("title") or d.get("description") or "비용"
+        amount = float(d.get("amount") or 0)
+        if amount <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="금액을 입력해주세요.")
+
+        import json as _json
+        settlement_type = (d.get("settlement_type") or "EQUAL_SPLIT").upper()
+        if settlement_type not in ("EQUAL_SPLIT", "CLUB_FUND", "TREASURER_PREPAID"):
+            settlement_type = "EQUAL_SPLIT"
+        covered_by_fee = settlement_type == "CLUB_FUND"
+        category = d.get("category") or ""
+        notes_val = _json.dumps({"category": category, "settlement_type": settlement_type}) if (category or settlement_type != "EQUAL_SPLIT") else (category or None)
+
+        created_by = meeting.created_by or current_user.get("id")
+        if not created_by:
+            first_p = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.user_id.isnot(None)
+            ).first()
+            created_by = first_p.user_id if first_p else current_user.get("id")
+
+        expense = Expense(
+            title=title,
+            description=d.get("description") or d.get("category") or "",
+            meeting_id=meeting_id,
+            club_id=meeting.club_id,
+            created_by=created_by,
+            notes=notes_val or None,
+        )
+        db.add(expense)
+        db.flush()
+
+        ei = ExpenseItem(
+            expense_id=expense.id,
+            type=ExpenseItemType.OTHER,
+            title=title,
+            amount=amount,
+            covered_by_fee=covered_by_fee,
+            order_index=0,
+        )
+        db.add(ei)
+        db.flush()
+        db.commit()
+        db.refresh(expense)
+        from routers.meetings.expenses import _build_expense_response
+        return _build_expense_response(expense, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 비용 등록 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.put("/meetings/{meeting_id}/expenses/{expense_id}")
+async def update_admin_meeting_expense(
+    meeting_id: int,
+    expense_id: int,
+    data: AdminExpenseBody = Body(default=AdminExpenseBody()),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 모임 비용 수정"""
+    try:
+        from models import Meeting, Expense, ExpenseItem, ExpenseItemParticipant
+        from models.enums import ExpenseItemType
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+
+        expense = db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.meeting_id == meeting_id
+        ).first()
+        if not expense:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="비용을 찾을 수 없습니다.")
+
+        d = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else (data or {})
+        if "title" in d:
+            expense.title = d["title"]
+        if "description" in d:
+            expense.description = d["description"]
+
+        import json as _json
+        existing_category = expense.notes
+        existing_settlement = "EQUAL_SPLIT"
+        try:
+            parsed = _json.loads(expense.notes or "{}") if isinstance(expense.notes, str) else {}
+            if isinstance(parsed, dict):
+                existing_category = parsed.get("category", expense.notes)
+                existing_settlement = parsed.get("settlement_type", "EQUAL_SPLIT")
+        except (_json.JSONDecodeError, TypeError):
+            pass
+
+        if "category" in d or "settlement_type" in d:
+            category = d.get("category", existing_category) or ""
+            settlement_type = (d.get("settlement_type") or existing_settlement).upper()
+            if settlement_type not in ("EQUAL_SPLIT", "CLUB_FUND", "TREASURER_PREPAID"):
+                settlement_type = "EQUAL_SPLIT"
+            expense.notes = _json.dumps({"category": category, "settlement_type": settlement_type}) if (category or settlement_type != "EQUAL_SPLIT") else (category or None)
+            covered_by_fee = settlement_type == "CLUB_FUND"
+            items = db.query(ExpenseItem).filter(ExpenseItem.expense_id == expense.id).all()
+            for item in items:
+                item.covered_by_fee = covered_by_fee
+
+        expense.updated_at = datetime.now()
+
+        if "amount" in d:
+            amount = float(d["amount"] or 0)
+            items = db.query(ExpenseItem).filter(ExpenseItem.expense_id == expense.id).all()
+            for item in items:
+                if (item.type.value if hasattr(item.type, "value") else str(item.type)) == "OTHER":
+                    item.amount = amount
+                    break
+
+        db.commit()
+        db.refresh(expense)
+        from routers.meetings.expenses import _build_expense_response
+        return _build_expense_response(expense, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 비용 수정 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/meetings/{meeting_id}/expenses/{expense_id}")
+async def delete_admin_meeting_expense(
+    meeting_id: int,
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 모임 비용 삭제"""
+    try:
+        from models import Meeting, Expense
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+
+        expense = db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.meeting_id == meeting_id
+        ).first()
+        if not expense:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="비용을 찾을 수 없습니다.")
+
+        db.delete(expense)
+        db.commit()
+        return {"message": "비용이 삭제되었습니다.", "success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 비용 삭제 중 오류: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -506,18 +1060,51 @@ async def create_admin_rounding_settlement(
         cart_fee = Decimal(str(settlement_data.get('cart_fee', 0)))
         other_fee = Decimal(str(settlement_data.get('other_fee', 0)))
         notes = settlement_data.get('notes', '')
+        green_fee_participant_ids = settlement_data.get('green_fee_participant_ids', [])
         green_fee_participants = settlement_data.get('green_fee_participants', [])
         green_fee_exempted = settlement_data.get('green_fee_exempted', [])
+        green_fee_extra_payer_id = settlement_data.get('green_fee_extra_payer_id')
+        green_fee_amounts = settlement_data.get('green_fee_amounts', [])  # [{ participant_id: int, amount: number }]
+        cart_fee_participant_ids = settlement_data.get('cart_fee_participant_ids', [])
         cart_fee_participants = settlement_data.get('cart_fee_participants', [])
         cart_fee_exempted = settlement_data.get('cart_fee_exempted', [])
+        cart_fee_extra_payer_id = settlement_data.get('cart_fee_extra_payer_id')
+        cart_fee_amounts = settlement_data.get('cart_fee_amounts', [])
+        caddy_fee_participant_ids = settlement_data.get('caddy_fee_participant_ids', [])
         caddy_fee_participants = settlement_data.get('caddy_fee_participants', [])
         caddy_fee_exempted = settlement_data.get('caddy_fee_exempted', [])
+        caddy_fee_extra_payer_id = settlement_data.get('caddy_fee_extra_payer_id')
+        caddy_fee_amounts = settlement_data.get('caddy_fee_amounts', [])
         other_expense_items = settlement_data.get('other_expense_items', [])
         exclude_remaining_amount = settlement_data.get('exclude_remaining_amount', False)
         all_covered_by_fee = settlement_data.get('all_covered_by_fee', False)
         green_fee_covered_by_fee = settlement_data.get('green_fee_covered_by_fee', False)
         caddy_fee_covered_by_fee = settlement_data.get('caddy_fee_covered_by_fee', False)
         cart_fee_covered_by_fee = settlement_data.get('cart_fee_covered_by_fee', False)
+        # 정산 방법: settlement_data 우선, 없으면 meeting.settlement_method
+        # INDIVIDUAL이면 항상 개별정산, EQUAL_SPLIT 또는 미지정이면 같은 참가자일 때 n분의1
+        settlement_method_val = settlement_data.get('settlement_method')
+        if settlement_method_val is None and meeting.settlement_method is not None:
+            settlement_method_val = meeting.settlement_method.value if hasattr(meeting.settlement_method, 'value') else str(meeting.settlement_method)
+        use_equal_split = (settlement_method_val != 'INDIVIDUAL')
+
+        def _resolve_participant_ids(participant_ids, fallback_ids):
+            """participant_ids(MeetingParticipant.id) 우선, 없으면 fallback_ids(user_id/guest_id) 사용"""
+            int_ids = [x for x in (participant_ids or []) if isinstance(x, int)]
+            if int_ids:
+                mps = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    MeetingParticipant.id.in_(int_ids)
+                ).all()
+                return [mp.user_id if mp.user_id else mp.guest_id for mp in mps]
+            return fallback_ids or []
+
+        _green = _resolve_participant_ids(green_fee_participant_ids, green_fee_participants)
+        _cart = _resolve_participant_ids(cart_fee_participant_ids, cart_fee_participants)
+        _caddy = _resolve_participant_ids(caddy_fee_participant_ids, caddy_fee_participants)
+        green_fee_participants = _green
+        cart_fee_participants = _cart
+        caddy_fee_participants = _caddy
 
         all_settlement_targets = set()
         if not all_covered_by_fee and not green_fee_covered_by_fee:
@@ -549,10 +1136,28 @@ async def create_admin_rounding_settlement(
 
         amount_per_person = Decimal('0') if all_covered_by_fee else (total_cost / target_count if target_count > 0 else Decimal('0'))
 
-        def _add_item_participants(expense_item, participant_ids, exempted_ids, amount_per_person_val):
+        _cost_to_split = total_cost if not all_covered_by_fee and target_count > 0 else Decimal('0')
+        _extra_idx = _resolve_extra_payer_index(settlement_targets, settlement_data.get('extra_payer_id'))
+        _total_per_person = split_amount_10won(
+            _cost_to_split, target_count,
+            extra_recipient_indices=[_extra_idx] if _extra_idx is not None else None
+        ) if target_count > 0 else []
+
+        # 기존 정산 삭제 후 새로 생성 (수정 시 반영되도록)
+        existing = db.query(Expense).filter(Expense.meeting_id == meeting_id).all()
+        for ex in existing:
+            db.delete(ex)
+        db.flush()
+
+        def _add_item_participants(expense_item, participant_ids, exempted_ids, amount_list):
+            """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액 (비면제 참가자 순)"""
+            exempted_set = set(exempted_ids or [])
+            amount_idx = 0
             for pid in participant_ids:
-                if pid in (exempted_ids or []):
+                if pid in exempted_set:
                     continue
+                if amount_idx >= len(amount_list):
+                    break
                 mp = db.query(MeetingParticipant).filter(
                     MeetingParticipant.meeting_id == meeting_id,
                     or_(MeetingParticipant.user_id == pid, MeetingParticipant.guest_id == pid)
@@ -563,9 +1168,33 @@ async def create_admin_rounding_settlement(
                         user_id=mp.user_id,
                         guest_id=mp.guest_id,
                         is_exempted=False,
-                        amount=amount_per_person_val
+                        amount=amount_list[amount_idx]
                     )
                     db.add(eip)
+                    amount_idx += 1
+
+        def _add_item_participants_with_amounts(expense_item, participant_amounts, exempted_ids):
+            """participant_amounts: list of { participant_id: MeetingParticipant.id, amount: number }"""
+            exempted = set(exempted_ids or [])
+            for row in (participant_amounts or []):
+                mp_id = row.get('participant_id') if isinstance(row, dict) else getattr(row, 'participant_id', None)
+                if mp_id is None:
+                    continue
+                mp = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    MeetingParticipant.id == int(mp_id)
+                ).first()
+                if not mp or mp_id in exempted:
+                    continue
+                amt = Decimal(str(row.get('amount', 0) if isinstance(row, dict) else getattr(row, 'amount', 0)))
+                eip = ExpenseItemParticipant(
+                    expense_item_id=expense_item.id,
+                    user_id=mp.user_id,
+                    guest_id=mp.guest_id,
+                    is_exempted=False,
+                    amount=amt
+                )
+                db.add(eip)
 
         expense = Expense(
             title=f"{meeting.name} 라운딩 정산",
@@ -579,6 +1208,33 @@ async def create_admin_rounding_settlement(
         db.add(expense)
         db.flush()
 
+        def _eff(pids, exempted):
+            return [p for p in (pids or []) if p not in set(exempted or [])]
+        _g_eff = _eff(green_fee_participants, green_fee_exempted)
+        _c_eff = _eff(caddy_fee_participants, caddy_fee_exempted)
+        _k_eff = _eff(cart_fee_participants, cart_fee_exempted)
+        _same_targets = (
+            set(_g_eff) == set(settlement_targets) and
+            set(_c_eff) == set(settlement_targets) and
+            set(_k_eff) == set(settlement_targets)
+        )
+        _item_amounts = []
+        if not green_fee_covered_by_fee and green_fee > 0:
+            _item_amounts.append(green_fee)
+        if not caddy_fee_covered_by_fee and caddy_fee > 0:
+            _item_amounts.append(caddy_fee)
+        if not cart_fee_covered_by_fee and cart_fee > 0:
+            _item_amounts.append(cart_fee)
+        for oi in (other_expense_items or []):
+            am = Decimal(str(oi.get('amount', 0)))
+            if am > 0:
+                _item_amounts.append(am)
+        _exact_allocations = []
+        if use_equal_split and _total_per_person and _cost_to_split > 0 and _item_amounts and _same_targets:
+            if not green_fee_amounts and not caddy_fee_amounts and not cart_fee_amounts:
+                _exact_allocations = allocate_items_to_exact_totals(_total_per_person, _item_amounts, _cost_to_split)
+        _alloc_idx = 0
+
         order_idx = 0
         if green_fee > 0:
             gf_item = ExpenseItem(
@@ -591,8 +1247,25 @@ async def create_admin_rounding_settlement(
             db.add(gf_item)
             db.flush()
             if not green_fee_covered_by_fee and green_fee_participants:
-                amt = green_fee / len(green_fee_participants)
-                _add_item_participants(gf_item, green_fee_participants, green_fee_exempted, amt)
+                if green_fee_amounts:
+                    _add_item_participants_with_amounts(gf_item, green_fee_amounts, green_fee_exempted)
+                else:
+                    exempted = set(green_fee_exempted or [])
+                    effective_ids = [p for p in green_fee_participants if p not in exempted]
+                    if _exact_allocations and not green_fee_covered_by_fee and green_fee > 0:
+                        alloc_row = _exact_allocations[_alloc_idx]
+                        amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                        _alloc_idx += 1
+                    elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                        allocated = allocate_by_total(green_fee, _cost_to_split, _total_per_person)
+                        amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                    else:
+                        extra_idx = _resolve_extra_payer_index(effective_ids, green_fee_extra_payer_id)
+                        amount_list = split_amount_10won(
+                            green_fee, len(effective_ids),
+                            extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                        ) if effective_ids else []
+                    _add_item_participants(gf_item, green_fee_participants, green_fee_exempted, amount_list)
             order_idx += 1
 
         if caddy_fee > 0:
@@ -606,8 +1279,25 @@ async def create_admin_rounding_settlement(
             db.add(cf_item)
             db.flush()
             if not caddy_fee_covered_by_fee and caddy_fee_participants:
-                amt = caddy_fee / len(caddy_fee_participants)
-                _add_item_participants(cf_item, caddy_fee_participants, caddy_fee_exempted, amt)
+                if caddy_fee_amounts:
+                    _add_item_participants_with_amounts(cf_item, caddy_fee_amounts, caddy_fee_exempted)
+                else:
+                    exempted = set(caddy_fee_exempted or [])
+                    effective_ids = [p for p in caddy_fee_participants if p not in exempted]
+                    if _exact_allocations and not caddy_fee_covered_by_fee and caddy_fee > 0:
+                        alloc_row = _exact_allocations[_alloc_idx]
+                        amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                        _alloc_idx += 1
+                    elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                        allocated = allocate_by_total(caddy_fee, _cost_to_split, _total_per_person)
+                        amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                    else:
+                        extra_idx = _resolve_extra_payer_index(effective_ids, caddy_fee_extra_payer_id)
+                        amount_list = split_amount_10won(
+                            caddy_fee, len(effective_ids),
+                            extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                        ) if effective_ids else []
+                    _add_item_participants(cf_item, caddy_fee_participants, caddy_fee_exempted, amount_list)
             order_idx += 1
 
         if cart_fee > 0:
@@ -621,15 +1311,35 @@ async def create_admin_rounding_settlement(
             db.add(crf_item)
             db.flush()
             if not cart_fee_covered_by_fee and cart_fee_participants:
-                amt = cart_fee / len(cart_fee_participants)
-                _add_item_participants(crf_item, cart_fee_participants, cart_fee_exempted, amt)
+                if cart_fee_amounts:
+                    _add_item_participants_with_amounts(crf_item, cart_fee_amounts, cart_fee_exempted)
+                else:
+                    exempted = set(cart_fee_exempted or [])
+                    effective_ids = [p for p in cart_fee_participants if p not in exempted]
+                    if _exact_allocations and not cart_fee_covered_by_fee and cart_fee > 0:
+                        alloc_row = _exact_allocations[_alloc_idx]
+                        amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                        _alloc_idx += 1
+                    elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                        allocated = allocate_by_total(cart_fee, _cost_to_split, _total_per_person)
+                        amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                    else:
+                        extra_idx = _resolve_extra_payer_index(effective_ids, cart_fee_extra_payer_id)
+                        amount_list = split_amount_10won(
+                            cart_fee, len(effective_ids),
+                            extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                        ) if effective_ids else []
+                    _add_item_participants(crf_item, cart_fee_participants, cart_fee_exempted, amount_list)
             order_idx += 1
 
         for oi in (other_expense_items or []):
             amt = Decimal(str(oi.get('amount', 0)))
             if amt <= 0:
                 continue
+            participant_ids = oi.get('participant_ids') or []
+            participant_amounts = oi.get('participant_amounts') or []
             participants = oi.get('participants') or []
+            resolved = _resolve_participant_ids(participant_ids, participants) if participant_ids or participants else []
             title = oi.get('title') or oi.get('name') or '기타 비용'
             other_item = ExpenseItem(
                 expense_id=expense.id,
@@ -641,9 +1351,21 @@ async def create_admin_rounding_settlement(
             )
             db.add(other_item)
             db.flush()
-            if participants:
-                per_amt = amt / len(participants)
-                _add_item_participants(other_item, participants, [], per_amt)
+            if participant_amounts:
+                _add_item_participants_with_amounts(other_item, participant_amounts, [])
+            elif resolved:
+                if _exact_allocations and _alloc_idx < len(_exact_allocations) and set(resolved) == set(settlement_targets):
+                    alloc_row = _exact_allocations[_alloc_idx]
+                    amount_list = [alloc_row[settlement_targets.index(pid)] for pid in resolved]
+                    _alloc_idx += 1
+                else:
+                    extra_payer_id = oi.get('extra_payer_id')
+                    extra_idx = _resolve_extra_payer_index(resolved, extra_payer_id)
+                    amount_list = split_amount_10won(
+                        amt, len(resolved),
+                        extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                    )
+                _add_item_participants(other_item, resolved, [], amount_list)
             order_idx += 1
 
         db.commit()
@@ -665,6 +1387,143 @@ async def create_admin_rounding_settlement(
     except Exception as e:
         db.rollback()
         logger.error(f"관리자 라운딩 정산 생성 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/meetings/{meeting_id}/settlement/social")
+async def create_admin_social_settlement(
+    meeting_id: int,
+    settlement_data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 소셜 모임 정산 생성 (여러 SOCIAL_ITEM 합산 → n분의 1)"""
+    try:
+        from models import Meeting, MeetingParticipant, Expense, ExpenseItem, ExpenseItemParticipant
+        from models.enums import ExpenseItemType, MeetingType
+        from routers.meetings.settlement import send_settlement_created_notification
+        from decimal import Decimal
+        from sqlalchemy import or_
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if meeting.meeting_type != MeetingType.SOCIAL:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="소셜 모임이 아닙니다.")
+        if meeting.settlement_confirmed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산이 이미 확정되어 수정할 수 없습니다.")
+
+        expense_items_data = settlement_data.get("expense_items", [])
+        settlement_targets = settlement_data.get("settlement_targets", [])
+        notes = settlement_data.get("notes", "")
+        exclude_remaining_amount = settlement_data.get("exclude_remaining_amount", False)
+        default_extra_payer_id = settlement_data.get("extra_payer_id")
+
+        total_cost = Decimal(str(settlement_data.get("total_cost", 0)))
+        if total_cost <= 0:
+            total_cost = sum(Decimal(str(item.get("amount", 0))) for item in expense_items_data)
+
+        target_count = len(settlement_targets)
+        if not exclude_remaining_amount and target_count == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자를 선택해주세요.")
+
+        amount_per_person = Decimal("0") if (exclude_remaining_amount or target_count == 0) else total_cost / target_count
+
+        def _add_social_participants(expense_item, participant_ids, amount_list):
+            """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액"""
+            for idx, pid in enumerate(participant_ids):
+                if idx >= len(amount_list):
+                    break
+                pid_int = int(pid) if pid is not None else None
+                if pid_int is None:
+                    continue
+                mp = db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting_id,
+                ).filter(
+                    or_(
+                        MeetingParticipant.id == pid_int,
+                        MeetingParticipant.user_id == pid_int,
+                        MeetingParticipant.guest_id == pid_int,
+                    ),
+                ).first()
+                if mp:
+                    eip = ExpenseItemParticipant(
+                        expense_item_id=expense_item.id,
+                        user_id=mp.user_id,
+                        guest_id=mp.guest_id,
+                        is_exempted=False,
+                        amount=amount_list[idx],
+                    )
+                    db.add(eip)
+
+        existing = db.query(Expense).filter(Expense.meeting_id == meeting_id).first()
+        if existing:
+            db.delete(existing)
+            db.flush()
+
+        created_by = meeting.created_by or current_user.get("id")
+        if not created_by:
+            first_p = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.user_id.isnot(None),
+            ).first()
+            created_by = first_p.user_id if first_p else current_user.get("id")
+
+        expense = Expense(
+            title=f"{meeting.name} 소셜 모임 정산",
+            description=f"총 {len(expense_items_data)}개 항목",
+            meeting_id=meeting_id,
+            club_id=meeting.club_id,
+            created_by=created_by,
+            notes=notes,
+            exclude_remaining_amount=exclude_remaining_amount,
+        )
+        db.add(expense)
+        db.flush()
+
+        for idx, item in enumerate(expense_items_data or []):
+            amt = Decimal(str(item.get("amount", 0)))
+            if amt <= 0:
+                continue
+            title = item.get("title") or item.get("name") or item.get("description") or f"항목 {idx + 1}"
+            ei = ExpenseItem(
+                expense_id=expense.id,
+                type=ExpenseItemType.SOCIAL_ITEM,
+                title=title,
+                amount=amt,
+                covered_by_fee=False,
+                order_index=idx,
+            )
+            db.add(ei)
+            db.flush()
+            if settlement_targets and target_count > 0:
+                extra_payer_id = item.get("extra_payer_id", default_extra_payer_id)
+                extra_idx = _resolve_extra_payer_index(settlement_targets, extra_payer_id)
+                amount_list = split_amount_10won(
+                    amt, target_count,
+                    extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                )
+                _add_social_participants(ei, settlement_targets, amount_list)
+
+        db.commit()
+        logger.info(f"관리자 소셜 정산 생성 완료 - expense.id: {expense.id}")
+        try:
+            send_settlement_created_notification(meeting_id, db, is_edit=False)
+        except Exception as e:
+            logger.error(f"정산 알림 전송 실패: {str(e)}")
+
+        return {
+            "message": "소셜 모임 정산이 생성되었습니다.",
+            "settlement_id": expense.id,
+            "total_cost": float(total_cost),
+            "amount_per_person": float(amount_per_person),
+            "target_count": target_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 소셜 정산 생성 오류: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

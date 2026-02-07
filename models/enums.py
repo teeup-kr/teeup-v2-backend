@@ -39,11 +39,44 @@ class MembershipStatus(str, enum.Enum):
     SUSPENDED = "SUSPENDED"
     CANCELED = "CANCELED"
 
+class MeetingType(str, enum.Enum):
+    ROUND = "ROUND"
+    SOCIAL = "SOCIAL"
+
+class MeetingSubtype(str, enum.Enum):
+    REGULAR = "REGULAR"
+    IRREGULAR = "IRREGULAR"
+    ONE_TIME = "ONE_TIME"
+
+class SocialType(str, enum.Enum):
+    """소셜 모임 유형"""
+    CASUAL = "CASUAL"
+    DINNER = "DINNER"
+    EVENT = "EVENT"
+
 class MeetingStatus(str, enum.Enum):
     SCHEDULED = "SCHEDULED"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELED = "CANCELED"
+
+class SettlementMethod(str, enum.Enum):
+    """정산 방법 (라운딩/소셜 공통)"""
+    EQUAL_SPLIT = "EQUAL_SPLIT"
+    INDIVIDUAL = "INDIVIDUAL"
+    TREASURER_PREPAID = "TREASURER_PREPAID"
+    CLUB_FUND = "CLUB_FUND"
+
+class ParticipantStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    CANCELED = "CANCELED"
+    WAITING_LIST = "WAITING_LIST"
+
+class ParticipantRole(str, enum.Enum):
+    PARTICIPANT = "PARTICIPANT"
+    ORGANIZER = "ORGANIZER"
+    CO_ORGANIZER = "CO_ORGANIZER"
 
 class ParticipantType(str, enum.Enum):
     USER = "USER"
@@ -101,11 +134,11 @@ class ExpenseStatus(str, enum.Enum):
 
 class ExpenseItemType(str, enum.Enum):
     """비용 항목 타입 (그린피/캐디피/카트비/기타 = 행으로 관리)"""
-    TOTAL = "TOTAL"          # 총액 (나머지 금액 등)
-    GREEN_FEE = "GREEN_FEE"  # 그린피
-    CADDY_FEE = "CADDY_FEE"  # 캐디피
-    CART_FEE = "CART_FEE"    # 카트비
-    OTHER = "OTHER"          # 기타 (소셜 커스텀 항목 포함)
+    GREEN_FEE = "GREEN_FEE"    # 그린피
+    CADDY_FEE = "CADDY_FEE"    # 캐디피
+    CART_FEE = "CART_FEE"      # 카트비
+    OTHER = "OTHER"            # 기타 (라운딩 커스텀 항목 등)
+    SOCIAL_ITEM = "SOCIAL_ITEM"  # 소셜 모임 전용 비용 항목
 
 class NoticeType(str, enum.Enum):
     GENERAL = "GENERAL"

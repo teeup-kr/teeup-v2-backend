@@ -2,11 +2,17 @@
 # 모든 스키마를 한 곳에서 export하여 기존 import 경로와 호환성 유지
 
 # Enum 정의
-from .enums import (ClubType, ClubStatus, ClubRole, BillingCycle, MeetingType, MeetingSubtype, SettlementMethod,
-                    SocialSettlementMethod, MeetingStatus, ParticipantType, RegulationStatus, MembershipStatus,
-                    TeamFormationMode, TeamStatus, NotificationType, NotificationStatus, PlanType, PaymentStatus,
-                    PaymentMethod, PaymentMethodStatus, SubscriptionStatus, TermsType, UserStatus, NoticeType,
-                    InquiryType, InquiryStatus, Provider)
+from .enums import (
+    ClubType, ClubStatus, ClubRole, BillingCycle,
+    MeetingType, MeetingSubtype, SocialType, SettlementMethod,
+    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, ParticipantType,
+    RegulationStatus, MembershipStatus,
+    TeamFormationMode, TeamStatus,
+    NotificationType, NotificationStatus,
+    PlanType, PaymentStatus, PaymentMethod, PaymentMethodStatus, SubscriptionStatus,
+    TermsType, UserStatus,
+    NoticeType, InquiryType, InquiryStatus, Provider
+)
 
 # 공통 스키마
 from .common import MessageResponse, PaginatedResponse
@@ -71,32 +77,15 @@ from .admin import (UserMeetingItem, UserMeetingsResponse, HandicapHistoryItem, 
 # 기존 import 경로와의 호환성을 위해 모든 스키마를 export
 __all__ = [
     # Enums
-    "ClubType",
-    "ClubStatus",
-    "ClubRole",
-    "BillingCycle",
-    "MeetingType",
-    "MeetingSubtype",
-    "SettlementMethod",
-    "SocialSettlementMethod",
-    "MeetingStatus",
-    "RegulationStatus",
-    "MembershipStatus",
-    "TeamFormationMode",
-    "TeamStatus",
-    "NotificationType",
-    "NotificationStatus",
-    "PlanType",
-    "PaymentStatus",
-    "PaymentMethod",
-    "PaymentMethodStatus",
-    "SubscriptionStatus",
-    "TermsType",
-    "UserStatus",
-    "NoticeType",
-    "InquiryType",
-    "InquiryStatus",
-    "Provider",
+    "ClubType", "ClubStatus", "ClubRole", "BillingCycle",
+    "MeetingType", "MeetingSubtype", "SocialType", "SettlementMethod",
+    "MeetingStatus", "MeetingParticipantStatus", "MeetingParticipantRole",
+    "RegulationStatus", "MembershipStatus",
+    "TeamFormationMode", "TeamStatus",
+    "NotificationType", "NotificationStatus",
+    "PlanType", "PaymentStatus", "PaymentMethod", "PaymentMethodStatus", "SubscriptionStatus",
+    "TermsType", "UserStatus",
+    "NoticeType", "InquiryType", "InquiryStatus", "Provider",
     # Common
     "MessageResponse",
     "PaginatedResponse",

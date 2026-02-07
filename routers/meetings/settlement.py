@@ -20,8 +20,8 @@ from models import (
 )
 from models.enums import ExpenseItemType
 from schemas import (
-    MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod,
-    MeetingStatus,
+    MeetingType, MeetingSubtype, SettlementMethod,
+    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole,
     ClubRole
 )
 from schemas import (
@@ -30,12 +30,27 @@ from schemas import (
 )
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.amount_split import split_amount_10won, allocate_by_total, allocate_items_to_exact_totals
 from models import Notification
 from schemas import NotificationType, NotificationStatus
 from utils.cuid import generate_cuid
 
 router = APIRouter(prefix="/meetings", tags=["meeting-settlement"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_extra_payer_index(effective_ids: list, extra_payer_id) -> Optional[int]:
+    """나머지 10원을 부담할 참가자의 effective_ids 내 인덱스 반환. 없으면 None."""
+    if extra_payer_id is None:
+        return None
+    try:
+        pid = int(extra_payer_id)
+        for i, eid in enumerate(effective_ids):
+            if eid is not None and int(eid) == pid:
+                return i
+    except (TypeError, ValueError):
+        pass
+    return None
 
 # =============================================================================
 # 권한 체크 유틸리티 함수
@@ -204,13 +219,22 @@ async def create_rounding_settlement(
         notes = settlement_data.get('notes', '')
         green_fee_participants = settlement_data.get('green_fee_participants', [])
         green_fee_exempted = settlement_data.get('green_fee_exempted', [])
+        green_fee_extra_payer_id = settlement_data.get('green_fee_extra_payer_id')
         cart_fee_participants = settlement_data.get('cart_fee_participants', [])
         cart_fee_exempted = settlement_data.get('cart_fee_exempted', [])
+        cart_fee_extra_payer_id = settlement_data.get('cart_fee_extra_payer_id')
         caddy_fee_participants = settlement_data.get('caddy_fee_participants', [])
         caddy_fee_exempted = settlement_data.get('caddy_fee_exempted', [])
+        caddy_fee_extra_payer_id = settlement_data.get('caddy_fee_extra_payer_id')
         other_expense_items = settlement_data.get('other_expense_items', [])
         exclude_remaining_amount = settlement_data.get('exclude_remaining_amount', False)
         all_covered_by_fee = settlement_data.get('all_covered_by_fee', False)
+        # 정산 방법: settlement_data 우선, 없으면 meeting.settlement_method (n분의1 vs 개별정산)
+        # INDIVIDUAL이면 항상 개별정산, EQUAL_SPLIT 또는 미지정이면 같은 참가자일 때 n분의1
+        settlement_method_val = settlement_data.get('settlement_method')
+        if settlement_method_val is None and meeting.settlement_method is not None:
+            settlement_method_val = meeting.settlement_method.value if hasattr(meeting.settlement_method, 'value') else str(meeting.settlement_method)
+        use_equal_split = (settlement_method_val != 'INDIVIDUAL')
         green_fee_covered_by_fee = settlement_data.get('green_fee_covered_by_fee', False)
         caddy_fee_covered_by_fee = settlement_data.get('caddy_fee_covered_by_fee', False)
         cart_fee_covered_by_fee = settlement_data.get('cart_fee_covered_by_fee', False)
@@ -245,13 +269,32 @@ async def create_rounding_settlement(
 
         amount_per_person = Decimal('0') if all_covered_by_fee else (total_cost / target_count if target_count > 0 else Decimal('0'))
 
-        def _add_item_participants(expense_item, participant_ids, exempted_ids, amount_per_person_val):
+        # 총액 기준 1인당 부담금 (딱 떨어지면 전원 동일, 아니면 10원 단위 배분)
+        _cost_to_split = total_cost if not all_covered_by_fee and target_count > 0 else Decimal('0')
+        _extra_idx = _resolve_extra_payer_index(settlement_targets, settlement_data.get('extra_payer_id'))
+        _total_per_person = split_amount_10won(
+            _cost_to_split, target_count,
+            extra_recipient_indices=[_extra_idx] if _extra_idx is not None else None
+        ) if target_count > 0 else []
+
+        def _add_item_participants(expense_item, participant_ids, exempted_ids, amount_list):
+            """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액 (비면제 참가자 순)"""
+            exempted_set = set(exempted_ids or [])
+            amount_idx = 0
             for pid in participant_ids:
-                if pid in (exempted_ids or []):
+                if pid in exempted_set:
+                    continue
+                pid_int = int(pid) if pid is not None else None
+                if pid_int is None or amount_idx >= len(amount_list):
                     continue
                 mp = db.query(MeetingParticipant).filter(
-                    MeetingParticipant.meeting_id == meeting_id,
-                    or_(MeetingParticipant.user_id == pid, MeetingParticipant.guest_id == pid)
+                    MeetingParticipant.meeting_id == meeting_id
+                ).filter(
+                    or_(
+                        MeetingParticipant.id == pid_int,
+                        MeetingParticipant.user_id == pid_int,
+                        MeetingParticipant.guest_id == pid_int
+                    )
                 ).first()
                 if mp:
                     eip = ExpenseItemParticipant(
@@ -259,9 +302,10 @@ async def create_rounding_settlement(
                         user_id=mp.user_id,
                         guest_id=mp.guest_id,
                         is_exempted=False,
-                        amount=amount_per_person_val
+                        amount=amount_list[amount_idx]
                     )
                     db.add(eip)
+                    amount_idx += 1
 
         expense = Expense(
             title=f"{meeting.name} 라운딩 정산",
@@ -275,6 +319,33 @@ async def create_rounding_settlement(
         db.add(expense)
         db.flush()
 
+        # n분의1 + 같은 참가자: 항목별 배분 후 인당 합계가 total_per_person과 정확히 일치하도록
+        def _eff(pids, exempted):
+            return [p for p in (pids or []) if p not in set(exempted or [])]
+        _g_eff = _eff(green_fee_participants, green_fee_exempted)
+        _c_eff = _eff(caddy_fee_participants, caddy_fee_exempted)
+        _k_eff = _eff(cart_fee_participants, cart_fee_exempted)
+        _same_targets = (
+            set(_g_eff) == set(settlement_targets) and
+            set(_c_eff) == set(settlement_targets) and
+            set(_k_eff) == set(settlement_targets)
+        )
+        _item_amounts = []
+        if not green_fee_covered_by_fee and green_fee > 0:
+            _item_amounts.append(green_fee)
+        if not caddy_fee_covered_by_fee and caddy_fee > 0:
+            _item_amounts.append(caddy_fee)
+        if not cart_fee_covered_by_fee and cart_fee > 0:
+            _item_amounts.append(cart_fee)
+        for oi in (other_expense_items or []):
+            am = Decimal(str(oi.get('amount', 0)))
+            if am > 0:
+                _item_amounts.append(am)
+        _exact_allocations = []
+        if use_equal_split and _total_per_person and _cost_to_split > 0 and _item_amounts and _same_targets:
+            _exact_allocations = allocate_items_to_exact_totals(_total_per_person, _item_amounts, _cost_to_split)
+        _alloc_idx = 0
+
         order_idx = 0
         if green_fee > 0:
             gf_item = ExpenseItem(
@@ -287,8 +358,22 @@ async def create_rounding_settlement(
             db.add(gf_item)
             db.flush()
             if not green_fee_covered_by_fee and green_fee_participants:
-                amt = green_fee / len(green_fee_participants)
-                _add_item_participants(gf_item, green_fee_participants, green_fee_exempted, amt)
+                exempted = set(green_fee_exempted or [])
+                effective_ids = [p for p in green_fee_participants if p not in exempted]
+                if _exact_allocations and not green_fee_covered_by_fee and green_fee > 0:
+                    alloc_row = _exact_allocations[_alloc_idx]
+                    amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                    _alloc_idx += 1
+                elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                    allocated = allocate_by_total(green_fee, _cost_to_split, _total_per_person)
+                    amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                else:
+                    extra_idx = _resolve_extra_payer_index(effective_ids, green_fee_extra_payer_id)
+                    amount_list = split_amount_10won(
+                        green_fee, len(effective_ids),
+                        extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                    ) if effective_ids else []
+                _add_item_participants(gf_item, green_fee_participants, green_fee_exempted, amount_list)
             order_idx += 1
 
         if caddy_fee > 0:
@@ -302,8 +387,22 @@ async def create_rounding_settlement(
             db.add(cf_item)
             db.flush()
             if not caddy_fee_covered_by_fee and caddy_fee_participants:
-                amt = caddy_fee / len(caddy_fee_participants)
-                _add_item_participants(cf_item, caddy_fee_participants, caddy_fee_exempted, amt)
+                exempted = set(caddy_fee_exempted or [])
+                effective_ids = [p for p in caddy_fee_participants if p not in exempted]
+                if _exact_allocations and not caddy_fee_covered_by_fee and caddy_fee > 0:
+                    alloc_row = _exact_allocations[_alloc_idx]
+                    amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                    _alloc_idx += 1
+                elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                    allocated = allocate_by_total(caddy_fee, _cost_to_split, _total_per_person)
+                    amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                else:
+                    extra_idx = _resolve_extra_payer_index(effective_ids, caddy_fee_extra_payer_id)
+                    amount_list = split_amount_10won(
+                        caddy_fee, len(effective_ids),
+                        extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                    ) if effective_ids else []
+                _add_item_participants(cf_item, caddy_fee_participants, caddy_fee_exempted, amount_list)
             order_idx += 1
 
         if cart_fee > 0:
@@ -317,8 +416,22 @@ async def create_rounding_settlement(
             db.add(crf_item)
             db.flush()
             if not cart_fee_covered_by_fee and cart_fee_participants:
-                amt = cart_fee / len(cart_fee_participants)
-                _add_item_participants(crf_item, cart_fee_participants, cart_fee_exempted, amt)
+                exempted = set(cart_fee_exempted or [])
+                effective_ids = [p for p in cart_fee_participants if p not in exempted]
+                if _exact_allocations and not cart_fee_covered_by_fee and cart_fee > 0:
+                    alloc_row = _exact_allocations[_alloc_idx]
+                    amount_list = [alloc_row[settlement_targets.index(pid)] for pid in effective_ids]
+                    _alloc_idx += 1
+                elif use_equal_split and effective_ids and _total_per_person and set(effective_ids) == set(settlement_targets) and _cost_to_split > 0:
+                    allocated = allocate_by_total(cart_fee, _cost_to_split, _total_per_person)
+                    amount_list = [allocated[settlement_targets.index(pid)] for pid in effective_ids]
+                else:
+                    extra_idx = _resolve_extra_payer_index(effective_ids, cart_fee_extra_payer_id)
+                    amount_list = split_amount_10won(
+                        cart_fee, len(effective_ids),
+                        extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                    ) if effective_ids else []
+                _add_item_participants(crf_item, cart_fee_participants, cart_fee_exempted, amount_list)
             order_idx += 1
 
         for oi in (other_expense_items or []):
@@ -338,8 +451,18 @@ async def create_rounding_settlement(
             db.add(other_item)
             db.flush()
             if participants:
-                per_amt = amt / len(participants)
-                _add_item_participants(other_item, participants, [], per_amt)
+                if _exact_allocations and _alloc_idx < len(_exact_allocations) and set(participants) == set(settlement_targets):
+                    alloc_row = _exact_allocations[_alloc_idx]
+                    amount_list = [alloc_row[settlement_targets.index(pid)] for pid in participants]
+                    _alloc_idx += 1
+                else:
+                    extra_payer_id = oi.get('extra_payer_id')
+                    extra_idx = _resolve_extra_payer_index(participants, extra_payer_id)
+                    amount_list = split_amount_10won(
+                        amt, len(participants),
+                        extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                    )
+                _add_item_participants(other_item, participants, [], amount_list)
             order_idx += 1
 
         db.commit()
@@ -367,6 +490,36 @@ async def create_rounding_settlement(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
+
+
+@router.put("/{meeting_id}/settlement/rounding")
+async def update_rounding_settlement(
+    meeting_id: int,
+    settlement_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """라운딩 정산 수정 (기존 정산 삭제 후 재생성)"""
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if meeting.meeting_type != MeetingType.ROUND:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임이 아닙니다.")
+        if meeting.settlement_confirmed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산이 이미 확정되어 수정할 수 없습니다.")
+        if not can_manage_settlement(meeting_id, current_user.id, db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="정산 수정 권한이 없습니다.")
+
+        existing = db.query(Expense).filter(Expense.meeting_id == meeting_id).first()
+        if existing:
+            db.delete(existing)
+            db.flush()
+
+        return await create_rounding_settlement(meeting_id, settlement_data, db, current_user)
+    except HTTPException:
+        raise
+
 
 # =============================================================================
 # 소셜 모임 정산 API
@@ -413,6 +566,8 @@ async def create_social_settlement(
         settlement_targets = settlement_data.get('settlement_targets', [])
         notes = settlement_data.get('notes', '')
         exclude_remaining_amount = settlement_data.get('exclude_remaining_amount', False)
+        # 항목별 나머지 부담자 (미지정 시 앞에서부터)
+        default_extra_payer_id = settlement_data.get('extra_payer_id')
 
         total_cost = settlement_data.get('total_cost')
         if total_cost is None:
@@ -426,11 +581,22 @@ async def create_social_settlement(
 
         amount_per_person = Decimal('0') if (exclude_remaining_amount or target_count == 0) else total_cost / target_count
 
-        def _add_social_participants(expense_item, participant_ids, amount_per_person_val):
-            for pid in participant_ids:
+        def _add_social_participants(expense_item, participant_ids, amount_list):
+            """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액"""
+            for idx, pid in enumerate(participant_ids):
+                if idx >= len(amount_list):
+                    break
+                pid_int = int(pid) if pid is not None else None
+                if pid_int is None:
+                    continue
                 mp = db.query(MeetingParticipant).filter(
-                    MeetingParticipant.meeting_id == meeting_id,
-                    or_(MeetingParticipant.user_id == pid, MeetingParticipant.guest_id == pid)
+                    MeetingParticipant.meeting_id == meeting_id
+                ).filter(
+                    or_(
+                        MeetingParticipant.id == pid_int,
+                        MeetingParticipant.user_id == pid_int,
+                        MeetingParticipant.guest_id == pid_int
+                    )
                 ).first()
                 if mp:
                     eip = ExpenseItemParticipant(
@@ -438,7 +604,7 @@ async def create_social_settlement(
                         user_id=mp.user_id,
                         guest_id=mp.guest_id,
                         is_exempted=False,
-                        amount=amount_per_person_val
+                        amount=amount_list[idx]
                     )
                     db.add(eip)
 
@@ -454,15 +620,15 @@ async def create_social_settlement(
         db.add(expense)
         db.flush()
 
+        # 각 정산 항목 생성, 금액 합산 후 n명 균등 분배 (총액/n)
         for idx, item in enumerate(expense_items_data or []):
             amt = Decimal(str(item.get('amount', 0)))
             if amt <= 0:
                 continue
-            participants = item.get('participants') or []
             title = item.get('title') or item.get('name') or f"항목 {idx + 1}"
             ei = ExpenseItem(
                 expense_id=expense.id,
-                type=ExpenseItemType.OTHER,
+                type=ExpenseItemType.SOCIAL_ITEM,
                 title=title,
                 amount=amt,
                 covered_by_fee=False,
@@ -470,25 +636,14 @@ async def create_social_settlement(
             )
             db.add(ei)
             db.flush()
-            if participants:
-                per_amt = amt / len(participants)
-                _add_social_participants(ei, participants, per_amt)
-
-        items_sum = sum(Decimal(str(i.get('amount', 0))) for i in (expense_items_data or []))
-        remaining = total_cost - items_sum
-        if remaining > 0 and not exclude_remaining_amount and settlement_targets:
-            total_item = ExpenseItem(
-                expense_id=expense.id,
-                type=ExpenseItemType.TOTAL,
-                title="나머지 금액",
-                amount=remaining,
-                covered_by_fee=False,
-                order_index=999,
-            )
-            db.add(total_item)
-            db.flush()
-            per_amt = remaining / len(settlement_targets)
-            _add_social_participants(total_item, settlement_targets, per_amt)
+            if settlement_targets and target_count > 0:
+                extra_payer_id = item.get('extra_payer_id', default_extra_payer_id)
+                extra_idx = _resolve_extra_payer_index(settlement_targets, extra_payer_id)
+                amount_list = split_amount_10won(
+                    amt, target_count,
+                    extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                )
+                _add_social_participants(ei, settlement_targets, amount_list)
 
         db.commit()
         logger.info(f"소셜 정산 생성 완료 - expense.id: {expense.id}")
@@ -516,6 +671,36 @@ async def create_social_settlement(
             detail="서버 내부 오류가 발생했습니다."
         )
 
+
+@router.put("/{meeting_id}/settlement/social")
+async def update_social_settlement(
+    meeting_id: int,
+    settlement_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """소셜 모임 정산 수정 (기존 정산 삭제 후 재생성)"""
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        if meeting.meeting_type != MeetingType.SOCIAL:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="소셜 모임이 아닙니다.")
+        if meeting.settlement_confirmed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산이 이미 확정되어 수정할 수 없습니다.")
+        if not can_manage_settlement(meeting_id, current_user.id, db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="정산 수정 권한이 없습니다.")
+
+        existing = db.query(Expense).filter(Expense.meeting_id == meeting_id).first()
+        if existing:
+            db.delete(existing)
+            db.flush()
+
+        return await create_social_settlement(meeting_id, settlement_data, db, current_user)
+    except HTTPException:
+        raise
+
+
 # =============================================================================
 # 정산 조회 API
 # =============================================================================
@@ -538,21 +723,35 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
         ).filter(ExpenseItemParticipant.expense_item_id == item.id).all()
         all_eips.extend(eips)
 
-    seen = set()
-    participant_list = []
-    settlement_targets = []
+    # 참가자별 부담금·납부액 집계 (같은 user_id/guest_id가 여러 expense_item에 걸쳐 있을 수 있음)
+    agg = {}
     for ep in all_eips:
         key = (ep.user_id, ep.guest_id)
-        if key in seen:
-            continue
-        seen.add(key)
+        if key not in agg:
+            agg[key] = {"amount": Decimal("0"), "amount_paid": Decimal("0"), "is_paid": True, "paid_at": None, "ep": ep}
+        agg[key]["amount"] += Decimal(str(ep.amount or 0))
+        agg[key]["amount_paid"] += Decimal(str(ep.amount_paid or 0))
+        if not (ep.is_paid or False):
+            agg[key]["is_paid"] = False
+        if ep.paid_at and (agg[key]["paid_at"] is None or ep.paid_at > agg[key]["paid_at"]):
+            agg[key]["paid_at"] = ep.paid_at
+
+    participant_list = []
+    settlement_targets = []
+    for key, v in agg.items():
+        ep = v["ep"]
+        amt = float(v["amount"])
+        amt_paid = float(v["amount_paid"])
+        # 납부완료는 실제 납부액이 부담금 이상일 때만 (DB is_paid와 무관하게 금액 기준)
+        effective_is_paid = (amt <= 0) or (amt_paid >= amt)
         if ep.guest_id:
             g = ep.guest
             participant_list.append({
                 "id": ep.id, "user_id": None, "guest_id": ep.guest_id,
                 "user_name": g.name if g else "게스트", "user_email": None, "is_guest": True,
-                "amount_paid": float(ep.amount_paid or 0), "is_paid": ep.is_paid or False,
-                "paid_at": ep.paid_at.isoformat() if ep.paid_at else None, "is_settlement_target": True,
+                "amount": amt, "amount_paid": amt_paid,
+                "is_paid": effective_is_paid, "paid_at": v["paid_at"].isoformat() if v["paid_at"] and effective_is_paid else None,
+                "is_settlement_target": True,
             })
             settlement_targets.append(ep.guest_id)
         else:
@@ -560,8 +759,9 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
             participant_list.append({
                 "id": ep.id, "user_id": u.id if u else None, "guest_id": None,
                 "user_name": u.nickname if u else "알 수 없음", "user_email": u.email if u else None, "is_guest": False,
-                "amount_paid": float(ep.amount_paid or 0), "is_paid": ep.is_paid or False,
-                "paid_at": ep.paid_at.isoformat() if ep.paid_at else None, "is_settlement_target": True,
+                "amount": amt, "amount_paid": amt_paid,
+                "is_paid": effective_is_paid, "paid_at": v["paid_at"].isoformat() if v["paid_at"] and effective_is_paid else None,
+                "is_settlement_target": True,
             })
             if u:
                 settlement_targets.append(u.id)
@@ -577,10 +777,9 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
 
     if meeting_type_val == "SOCIAL":
         settlement_data["exclude_remaining_amount"] = bool(expense.exclude_remaining_amount)
+        settlement_data["extra_payer_id"] = None
         expense_items_api = []
         for item in sorted(expense.items, key=lambda x: x.order_index):
-            if item.type == ExpenseItemType.TOTAL:
-                continue
             pids = []
             for eip in db.query(ExpenseItemParticipant).filter(ExpenseItemParticipant.expense_item_id == item.id).all():
                 if eip.user_id:
@@ -624,7 +823,7 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
                 cart_covered = bool(item.covered_by_fee)
             elif t == "OTHER":
                 other_expense_items.append({"title": item.title or "기타", "amount": amt, "participants": pids})
-                other_fee += amt
+                other_fee += Decimal(str(amt))
         settlement_data["green_fee"] = green_fee
         settlement_data["caddy_fee"] = caddy_fee
         settlement_data["cart_fee"] = cart_fee
@@ -643,6 +842,21 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
         settlement_data["green_fee_covered_by_fee"] = green_covered
         settlement_data["caddy_fee_covered_by_fee"] = caddy_covered
         settlement_data["cart_fee_covered_by_fee"] = cart_covered
+        # 정산 방법 (n분의1 vs 개별정산) - 수정 폼에서 모드 표시용
+        sm = meeting.settlement_method
+        settlement_data["settlement_method"] = sm.value if sm and hasattr(sm, 'value') else (str(sm) if sm else None)
+        # 나머지 10원 부담자: 금액이 다른 참가자 중 가장 많이 부담한 사람 추정 (수정 폼 기본값용)
+        amt_to_id = []
+        for _, v in agg.items():
+            ep = v["ep"]
+            pid = ep.user_id if ep.user_id is not None else ep.guest_id
+            if pid is not None:
+                amt_to_id.append((float(v["amount"]), pid))
+        if len(amt_to_id) > 1 and len(set(a for a, _ in amt_to_id)) > 1:
+            inferred_extra = max(amt_to_id, key=lambda x: (float(x[0]), 0))[1]
+            settlement_data["extra_payer_id"] = inferred_extra
+        else:
+            settlement_data["extra_payer_id"] = None
     return {"settlement": settlement_data}
 
 
@@ -782,10 +996,10 @@ async def get_my_settlement(
                 ExpenseItemParticipant.is_exempted == False
             ).count()
             type_map = {"GREEN_FEE": "green_fee", "CADDY_FEE": "caddy_fee", "CART_FEE": "cart_fee",
-                        "OTHER": "expense_item", "TOTAL": "remaining_amount"}
+                        "OTHER": "expense_item", "SOCIAL_ITEM": "expense_item"}
             t = ei.type.value if hasattr(ei.type, "value") else str(ei.type)
             name = ei.title or ({"GREEN_FEE": "그린피", "CADDY_FEE": "캐디피", "CART_FEE": "카트비",
-                                 "TOTAL": "나머지 금액"}.get(t, "비용 항목"))
+                                 "OTHER": "기타", "SOCIAL_ITEM": "비용 항목"}.get(t, "비용 항목"))
             items.append({
                 "type": type_map.get(t, "expense_item"),
                 "name": name,

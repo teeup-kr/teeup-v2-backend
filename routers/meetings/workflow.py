@@ -16,14 +16,23 @@ from schemas.team import TeamMemberResponse
 from utils.datetime_utils import get_kst_now
 
 from database import get_db
-from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, Expense, Notification,
-                    MeetingResult, Guest, ParticipantType, Gender)
-from schemas import (MeetingType, MeetingSubtype, SettlementMethod, SocialSettlementMethod, MeetingStatus,
-                     NotificationType, NotificationStatus)
-from schemas import (RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, MeetingResponse,
-                     MeetingParticipantResponse, PaginatedResponse, TeamFormationRequest, TeamFormationResponse,
-                     TeamFormationMode, GuestCreate, TeamMemberAddRequest)
-from routers.auth import get_current_active_user, get_current_user
+from models import (
+    User, Club, ClubMembership, Meeting, MeetingParticipant,
+    Team, TeamMember, Expense,
+    Notification, MeetingResult, Guest, ParticipantType, Gender
+)
+from schemas import (
+    MeetingType, MeetingSubtype, SettlementMethod,
+    MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole,
+    ClubRole, NotificationType, NotificationStatus
+)
+from schemas import (
+    RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, 
+    MeetingResponse, MeetingParticipantResponse, PaginatedResponse,
+    TeamFormationRequest, TeamFormationResponse, TeamFormationMode,
+    TeamMemberResponse, TeamMemberAddRequest, GuestCreate
+)
+from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.handicap_calculator import process_meeting_completion
 from utils.team_formation import TeamFormationEngine
@@ -820,7 +829,7 @@ async def confirm_settlement(meeting_id: int,
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
         # 매니저/리더 권한 확인 (주최자 또는 참가자이면서 클럽 리더/매니저)
-        from routers.meeting_settlement import can_manage_settlement
+        from routers.meetings.settlement import can_manage_settlement
 
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 정산을 확정할 수 있습니다.")

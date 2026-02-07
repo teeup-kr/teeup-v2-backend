@@ -3,8 +3,7 @@ from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, Enum, F
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-from .enums import ExpenseItemType, Gender, ParticipantType
-
+from .enums import Gender, ParticipantStatus, ParticipantRole, ParticipantType, ExpenseItemType, SettlementMethod, MeetingType, MeetingSubtype, SocialType
 
 class Guest(Base):
     """게스트 정보 테이블"""
@@ -34,14 +33,13 @@ class Meeting(Base):
     meeting_time = Column(DateTime)
     tee_times = Column(JSON)
     max_participants = Column(Integer)
-    meeting_type = Column(String(50), nullable=False)
-    meeting_subtype = Column(String(50))
+    meeting_type = Column(Enum(MeetingType), nullable=False, comment="모임 타입 (ROUND/SOCIAL)")
+    meeting_subtype = Column(Enum(MeetingSubtype), nullable=True, comment="모임 하위 타입 (라운딩: REGULAR/IRREGULAR/ONE_TIME)")
     total_cost = Column(DECIMAL(10, 2))
     green_fee = Column(DECIMAL(10, 2))
     caddy_fee = Column(DECIMAL(10, 2))
     cart_fee = Column(DECIMAL(10, 2))
-    settlement_method = Column(String(50))
-    social_settlement_method = Column(String(50))
+    settlement_method = Column(Enum(SettlementMethod), nullable=True, comment="정산 방법 (라운딩/소셜 공통)")
     course_name = Column(String(255))
     hole_count = Column(Integer)
     reservation_name = Column(String(255))
@@ -60,6 +58,7 @@ class Meeting(Base):
     settlement_confirmed = Column(Boolean, default=False)
     social_cost = Column(DECIMAL(10, 2))
     social_notes = Column(Text)
+    social_type = Column(Enum(SocialType), nullable=True, comment="소셜 모임 유형 (CASUAL/DINNER/EVENT)")
     is_private = Column(Boolean, default=False, nullable=False, comment="프라이빗 라운딩 여부")
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="라운딩 생성자 ID")
     created_at = Column(DateTime, default=func.now())
@@ -84,6 +83,10 @@ class MeetingParticipant(Base):
     participant_type = Column(Enum(ParticipantType),
                               nullable=False,
                               comment="참가자 타입: USER 또는 GUEST (user_id가 있으면 USER, guest_id가 있으면 GUEST)")
+    status = Column(Enum(ParticipantStatus), default=ParticipantStatus.CONFIRMED, nullable=False,
+                    comment="참가 상태: PENDING/CONFIRMED/CANCELED/WAITING_LIST")
+    role = Column(Enum(ParticipantRole), default=ParticipantRole.PARTICIPANT, nullable=False,
+                  comment="참가 역할: PARTICIPANT/ORGANIZER/CO_ORGANIZER")
     handicap = Column(Integer)
     average_score = Column(Integer)
     pace_preference = Column(String(50))
@@ -179,7 +182,7 @@ class ExpenseItem(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="CASCADE"), nullable=False)
 
-    type = Column(Enum(ExpenseItemType), nullable=False, comment="TOTAL/GREEN_FEE/CADDY_FEE/CART_FEE/OTHER")
+    type = Column(Enum(ExpenseItemType), nullable=False, comment="GREEN_FEE/CADDY_FEE/CART_FEE/OTHER/SOCIAL_ITEM")
     title = Column(String(255), nullable=True, comment="OTHER 타입 시 항목명 (예: 점심비)")
     amount = Column(DECIMAL(10, 2), nullable=False)
     covered_by_fee = Column(Boolean, default=False, comment="회비에서 처리 여부")

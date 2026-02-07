@@ -1,8 +1,10 @@
 # 비용 정산 API들 (모임 전용)
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,6 +21,8 @@ from schemas import (
     ExpenseParticipantResponse, ExpenseParticipantUpdate, MessageResponse
 )
 from routers.auth import get_current_user, get_current_active_user
+from routers.meetings.settlement import can_manage_settlement
+from utils.amount_split import split_amount_10won
 
 router = APIRouter(prefix="/meetings", tags=["비용 정산"])
 
@@ -26,13 +30,14 @@ router = APIRouter(prefix="/meetings", tags=["비용 정산"])
 
 def _eip_to_response(eip: ExpenseItemParticipant, expense_id: int, db: Session) -> ExpenseParticipantResponse:
     """ExpenseItemParticipant를 ExpenseParticipantResponse로 변환"""
+    created_at = getattr(eip, "created_at", None)
     if eip.guest_id:
         g = db.query(Guest).filter(Guest.id == eip.guest_id).first()
         return ExpenseParticipantResponse(
             id=eip.id, expense_id=expense_id, user_id=None, guest_id=eip.guest_id,
             user_name=g.name if g else "게스트", user_nickname=g.name if g else "게스트",
             is_guest=True, amount_paid=float(eip.amount_paid or 0) if eip.amount_paid else None,
-            is_paid=eip.is_paid or False, paid_at=eip.paid_at, created_at=eip.created_at
+            is_paid=eip.is_paid or False, paid_at=eip.paid_at, created_at=created_at
         )
     else:
         u = db.query(User).filter(User.id == eip.user_id).first()
@@ -41,7 +46,7 @@ def _eip_to_response(eip: ExpenseItemParticipant, expense_id: int, db: Session) 
             user_name=u.realname or u.nickname if u else "알 수 없음",
             user_nickname=u.nickname if u else "알 수 없음",
             is_guest=False, amount_paid=float(eip.amount_paid or 0) if eip.amount_paid else None,
-            is_paid=eip.is_paid or False, paid_at=eip.paid_at, created_at=eip.created_at
+            is_paid=eip.is_paid or False, paid_at=eip.paid_at, created_at=created_at
         )
 
 
@@ -61,13 +66,31 @@ def _build_expense_response(expense: Expense, db: Session) -> ExpenseResponse:
     amount_per_person = total_amount / total_participants if total_participants else 0
     club = db.query(Club).filter(Club.id == expense.club_id).first()
     creator = db.query(User).filter(User.id == expense.created_by).first()
+
+    notes_display = expense.notes
+    settlement_type = None
+    try:
+        parsed = json.loads(expense.notes or "{}") if isinstance(expense.notes, str) else {}
+        if isinstance(parsed, dict) and parsed:
+            notes_display = parsed.get("category", expense.notes)
+            settlement_type = parsed.get("settlement_type")
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if settlement_type is None and items:
+        first_item = items[0]
+        if getattr(first_item, "covered_by_fee", False):
+            settlement_type = "CLUB_FUND"
+        else:
+            settlement_type = "EQUAL_SPLIT"
+
     return ExpenseResponse(
         id=expense.id, title=expense.title, description=expense.description,
         amount=total_amount, total_participants=total_participants, amount_per_person=amount_per_person,
         meeting_id=expense.meeting_id, club_id=expense.club_id, created_by=expense.created_by,
         creator_name=creator.nickname if creator else "알 수 없음",
-        notes=expense.notes, created_at=expense.created_at, updated_at=expense.updated_at,
+        notes=notes_display or expense.notes, created_at=expense.created_at, updated_at=expense.updated_at,
         participants=participant_responses,
+        settlement_type=settlement_type,
     )
 
 # ===== 모임 비용 정산 API =====
@@ -156,7 +179,18 @@ async def create_meeting_expense(
             )
         
         from models.enums import ExpenseItemType
-        amount_per_person = expense_data.amount / expense_data.total_participants
+        participant_ids = expense_data.participant_ids or []
+        n = len(participant_ids) or expense_data.total_participants or 1
+        extra_idx = None
+        if expense_data.extra_payer_id is not None and participant_ids:
+            try:
+                extra_idx = participant_ids.index(int(expense_data.extra_payer_id))
+            except (ValueError, TypeError):
+                pass
+        amount_list = split_amount_10won(
+            Decimal(str(expense_data.amount)), n,
+            extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+        ) if n > 0 else []
 
         expense = Expense(
             title=expense_data.title,
@@ -180,7 +214,9 @@ async def create_meeting_expense(
         db.add(ei)
         db.flush()
 
-        for participant_id in (expense_data.participant_ids or []):
+        for idx, participant_id in enumerate(expense_data.participant_ids or []):
+            if idx >= len(amount_list):
+                break
             mp = db.query(MeetingParticipant).filter(
                 MeetingParticipant.id == participant_id,
                 MeetingParticipant.meeting_id == meeting_id
@@ -191,7 +227,7 @@ async def create_meeting_expense(
                     user_id=mp.user_id,
                     guest_id=mp.guest_id,
                     is_exempted=False,
-                    amount=amount_per_person,
+                    amount=amount_list[idx],
                 ))
         db.commit()
         db.refresh(expense)
@@ -326,10 +362,21 @@ async def update_meeting_expense(
                     first_item.amount = expense_data.amount
                 participants = db.query(ExpenseItemParticipant).filter(ExpenseItemParticipant.expense_item_id == first_item.id).all()
                 n = expense_data.total_participants if expense_data.total_participants is not None else len(participants) or 1
-                amt = float(expense_data.amount if expense_data.amount is not None else first_item.amount or 0)
-                per_person = amt / n if n else 0
-                for p in participants:
-                    p.amount = per_person
+                amt = Decimal(str(expense_data.amount if expense_data.amount is not None else first_item.amount or 0))
+                extra_idx = None
+                if expense_data.extra_payer_id is not None and participants:
+                    pid = int(expense_data.extra_payer_id)
+                    for i, p in enumerate(participants):
+                        if (p.user_id and p.user_id == pid) or (p.guest_id and p.guest_id == pid):
+                            extra_idx = i
+                            break
+                amount_list = split_amount_10won(
+                    amt, n,
+                    extra_recipient_indices=[extra_idx] if extra_idx is not None else None
+                ) if n > 0 else []
+                for idx, p in enumerate(participants):
+                    if idx < len(amount_list):
+                        p.amount = amount_list[idx]
         db.commit()
         db.refresh(expense)
         return _build_expense_response(expense, db)
@@ -463,6 +510,87 @@ async def get_expense_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
+
+class MarkParticipantPaidBody(BaseModel):
+    """납부 완료 표시 요청"""
+    user_id: Optional[int] = None
+    guest_id: Optional[int] = None
+    is_paid: bool = True
+    amount_paid: Optional[float] = None
+
+
+@router.patch("/{meeting_id}/expenses/{expense_id}/participants/mark-paid")
+async def mark_participant_paid(
+    meeting_id: int,
+    expense_id: int,
+    data: MarkParticipantPaidBody = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)
+):
+    """정산 참가자 납부 완료/미완료 표시 (모임 관리 권한자만 가능, user_id 또는 guest_id로 일괄 업데이트)"""
+    try:
+        from decimal import Decimal
+        from sqlalchemy import and_
+        from utils.datetime_utils import get_kst_now
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        expense = db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.meeting_id == meeting_id
+        ).first()
+        if not expense:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="정산을 찾을 수 없습니다.")
+
+        user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+        if not user_id or not can_manage_settlement(meeting_id, user_id, db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="정산 관리를 할 권한이 없습니다.")
+
+        pid_user = data.user_id
+        pid_guest = data.guest_id
+        if (pid_user is None and pid_guest is None) or (pid_user is not None and pid_guest is not None):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id 또는 guest_id 중 하나만 지정해주세요.")
+
+        items = db.query(ExpenseItem).filter(ExpenseItem.expense_id == expense_id).all()
+        item_ids = [i.id for i in items]
+        filters = [ExpenseItemParticipant.expense_item_id.in_(item_ids)]
+        if pid_user is not None:
+            filters.append(ExpenseItemParticipant.user_id == pid_user)
+        else:
+            filters.append(ExpenseItemParticipant.guest_id == pid_guest)
+
+        eips = db.query(ExpenseItemParticipant).filter(and_(*filters)).all()
+        if not eips:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="해당 참가자를 찾을 수 없습니다.")
+
+        total_burden = sum(Decimal(str(eip.amount or 0)) for eip in eips)
+        paid_at = get_kst_now() if data.is_paid else None
+        amount_paid_val = Decimal(str(data.amount_paid)) if data.amount_paid is not None else None
+        # 납부완료: (1) 금액 미입력=전액 납부로 간주, (2) 입력 시 부담금 이상일 때만
+        if amount_paid_val is not None:
+            effective_is_paid = data.is_paid and (amount_paid_val >= total_burden)
+        else:
+            effective_is_paid = data.is_paid  # 빈 값 = 수동 전액 납부확인
+        # amount_paid는 "총 납부액" 의미 - 여러 EIP에 동일 값 저장 시 합산 시 중복되므로 첫 EIP에만 저장
+        for idx, eip in enumerate(eips):
+            eip.is_paid = effective_is_paid
+            eip.paid_at = paid_at if effective_is_paid else None
+            if amount_paid_val is not None:
+                eip.amount_paid = amount_paid_val if idx == 0 else Decimal("0")
+            elif data.is_paid:
+                eip.amount_paid = eip.amount or Decimal("0")
+            else:
+                eip.amount_paid = Decimal("0")
+        db.commit()
+        return {"message": "납부 상태가 변경되었습니다.", "updated_count": len(eips)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"납부 완료 표시 중 오류: {e}")
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
 
 @router.put("/{meeting_id}/expenses/{expense_id}/participants/{participant_id}", response_model=ExpenseParticipantResponse)
 async def update_expense_participant(

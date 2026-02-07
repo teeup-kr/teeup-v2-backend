@@ -1,8 +1,8 @@
 # 모임 관련 스키마
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional
 from datetime import datetime
-from .enums import MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ParticipantType
+from .enums import MeetingType, MeetingSubtype, SocialType, SettlementMethod, MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole, ParticipantType
 from .team import GuestCreate
 
 
@@ -63,13 +63,13 @@ class MeetingUpdate(BaseModel):
     caddy_fee: Optional[float] = Field(None, ge=0, description="캐디피")
     cart_fee: Optional[float] = Field(None, ge=0, description="카트비")
     settlement_method: Optional[SettlementMethod] = Field(None, description="정산 방법")
-    social_settlement_method: Optional[SettlementMethod] = Field(None, description="소셜 정산 방법")
     course_name: Optional[str] = Field(None, max_length=255, description="코스 이름")
     hole_count: Optional[int] = Field(None, ge=1, le=18, description="홀 수")
     reservation_name: Optional[str] = Field(None, max_length=255, description="예약자명")
     venue_name: Optional[str] = Field(None, max_length=255, description="장소명")
     social_cost: Optional[float] = Field(None, ge=0, description="소셜 비용")
     social_notes: Optional[str] = Field(None, description="소셜 모임 메모")
+    type: Optional[SocialType] = Field(None, description="소셜 모임 유형 (CASUAL/DINNER/EVENT)")
     is_private: Optional[bool] = Field(None, description="프라이빗 라운딩 여부")
 
 
@@ -91,7 +91,6 @@ class MeetingResponse(BaseModel):
     caddy_fee: Optional[float]
     cart_fee: Optional[float]
     settlement_method: Optional[SettlementMethod]
-    social_settlement_method: Optional[SettlementMethod]
     course_name: Optional[str]
     hole_count: Optional[int]
     reservation_name: Optional[str]
@@ -105,6 +104,7 @@ class MeetingResponse(BaseModel):
     participant_count: int
     social_cost: Optional[float]
     social_notes: Optional[str]
+    type: Optional[str] = None  # 소셜 모임 유형 (CASUAL/DINNER/EVENT)
     application_closed_early: bool = False
     team_formation_confirmed_at: Optional[datetime] = None
     rounding_started_at: Optional[datetime] = None
@@ -114,6 +114,13 @@ class MeetingResponse(BaseModel):
     is_private: bool = False
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
+    creator_id: Optional[int] = None  # 클라이언트 호환용 (created_by와 동일)
+
+    @model_validator(mode='after')
+    def set_creator_id(self):
+        if self.creator_id is None and self.created_by is not None:
+            return self.model_copy(update={'creator_id': self.created_by})
+        return self
 
     model_config = {"from_attributes": True}
 
@@ -141,11 +148,12 @@ class MeetingParticipantResponse(BaseModel):
 class SocialMeetingCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="소셜 모임 이름")
     description: Optional[str] = Field(None, description="소셜 모임 설명")
+    type: Optional[SocialType] = Field(None, description="소셜 모임 유형 (CASUAL/DINNER/EVENT)")
     meeting_time: datetime = Field(..., description="모임 시간")
     max_participants: Optional[int] = Field(None, ge=0, description="최대 참가자 수 (0 또는 null이면 제한 없음)")
     venue_name: str = Field(..., min_length=1, max_length=255, description="장소명")
     social_cost: float = Field(..., ge=0, description="소셜 비용 (필수)")
-    social_settlement_method: SettlementMethod = Field(..., description="소셜 정산 방법")
+    settlement_method: SettlementMethod = Field(..., description="정산 방법")
     club_id: int = Field(..., description="클럽 ID")
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
     social_notes: Optional[str] = Field(None, description="추가 메모")

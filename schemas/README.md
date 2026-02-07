@@ -82,8 +82,8 @@ from schemas import MeetingType, MeetingStatus
 ### `enums.py`
 모든 Enum 클래스 정의:
 - `ClubType`, `ClubStatus`, `ClubRole`, `BillingCycle`
-- `MeetingType`, `MeetingSubtype`, `SettlementMethod`, `SocialSettlementMethod`
-- `MeetingStatus`
+- `MeetingType`, `MeetingSubtype`, `SettlementMethod` (라운딩/소셜 정산 방법 공통)
+- `MeetingStatus`, `MeetingParticipantStatus`, `MeetingParticipantRole`
 - `RegulationStatus`, `MembershipStatus`
 - `TeamFormationMode`, `TeamStatus`
 - `NotificationType`, `NotificationStatus`

@@ -12,7 +12,7 @@ import logging
 
 from database import get_db
 from models import (
-    User, Club, ClubMembership, Meeting, MeetingParticipant, ParticipantType
+    User, Club, ClubMembership, Meeting, MeetingParticipant, ParticipantType, Guest
 )
 from schemas import (
     MeetingType, MeetingStatus
@@ -99,7 +99,8 @@ async def get_socials(
         meeting_dict = {**meeting.__dict__}
         meeting_dict.pop("_sa_instance_state", None)
         meeting_dict["tee_times"] = meeting.tee_times or []
-
+        st = getattr(meeting, "social_type", None)
+        meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
         meeting_responses.append(
             MeetingResponse(
                 **meeting_dict,
@@ -144,7 +145,21 @@ async def create_social(
         )
     
     # 모임 생성
-    meeting = Meeting(        name=meeting_data.name,
+    from models.enums import SettlementMethod as ModelSettlementMethod, SocialType as ModelSocialType
+    settlement_val = meeting_data.settlement_method
+    if settlement_val is not None:
+        v = settlement_val.value if hasattr(settlement_val, "value") else settlement_val
+        settlement_method = ModelSettlementMethod(v)
+    else:
+        settlement_method = None
+    type_val = getattr(meeting_data, "type", None)
+    if type_val is not None:
+        t_str = type_val.value if hasattr(type_val, "value") else type_val
+        social_type = ModelSocialType(t_str)
+    else:
+        social_type = None
+    meeting = Meeting(
+        name=meeting_data.name,
         description=meeting_data.description,
         meeting_time=meeting_data.meeting_time,
         application_deadline=meeting_data.application_deadline,
@@ -153,12 +168,9 @@ async def create_social(
         venue_name=meeting_data.venue_name,
         location=meeting_data.venue_name,
         social_cost=meeting_data.social_cost,
-        social_settlement_method=(
-            meeting_data.social_settlement_method.value
-            if hasattr(meeting_data.social_settlement_method, "value")
-            else meeting_data.social_settlement_method
-        ),
+        settlement_method=settlement_method,
         social_notes=meeting_data.social_notes,
+        social_type=social_type,
         club_id=meeting_data.club_id,
         status=MeetingStatus.SCHEDULED,
         tee_times=[],
@@ -209,6 +221,8 @@ async def create_social(
     meeting_dict = {**meeting.__dict__}
     meeting_dict.pop("_sa_instance_state", None)
     meeting_dict["tee_times"] = meeting.tee_times or []
+    st = getattr(meeting, "social_type", None)
+    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
 
     return MeetingResponse(
         **meeting_dict,
@@ -272,16 +286,8 @@ async def get_social(
     meeting_dict = {**meeting.__dict__}
     meeting_dict.pop("_sa_instance_state", None)
     meeting_dict["tee_times"] = meeting.tee_times or []
-
-    return MeetingResponse(
-        **meeting_dict,
-        club_name=meeting.club.name,
-        participant_count=participant_count,
-    )
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
-    meeting_dict["tee_times"] = meeting.tee_times or []
-
+    st = getattr(meeting, "social_type", None)
+    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
     return MeetingResponse(
         **meeting_dict,
         club_name=meeting.club.name,
@@ -323,9 +329,36 @@ async def update_social(
             detail="소셜 모임 매니저만 수정할 수 있습니다."
         )
     
-    # 수정 가능한 필드들만 업데이트
+    # 수정 가능한 필드들만 업데이트 (Enum 컬럼에는 모델 Enum 인스턴스로 저장)
+    from models.enums import SettlementMethod as ModelSettlementMethod
     update_data = meeting_data.dict(exclude_unset=True)
     for field, value in update_data.items():
+        if value is None:
+            if field == "settlement_method":
+                setattr(meeting, "settlement_method", None)
+            else:
+                setattr(meeting, field, None)
+            continue
+        if field == "settlement_method":
+            val_str = value.value if hasattr(value, "value") else value
+            try:
+                setattr(meeting, "settlement_method", ModelSettlementMethod(val_str))
+            except (ValueError, TypeError):
+                setattr(meeting, "settlement_method", value)
+            continue
+        if field == "type":
+            if value is None:
+                setattr(meeting, "social_type", None)
+            else:
+                from models.enums import SocialType as ModelSocialType
+                t_str = value.value if hasattr(value, "value") else value
+                try:
+                    setattr(meeting, "social_type", ModelSocialType(t_str))
+                except (ValueError, TypeError):
+                    setattr(meeting, "social_type", None)
+            continue
+        if hasattr(value, "value"):
+            value = value.value
         setattr(meeting, field, value)
     
     meeting.updated_at = get_kst_now()
@@ -341,10 +374,15 @@ async def update_social(
         MeetingParticipant.meeting_id == meeting.id
     ).count()
     
+    meeting_dict = {**meeting.__dict__}
+    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict["tee_times"] = meeting.tee_times or []
+    st = getattr(meeting, "social_type", None)
+    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
     return MeetingResponse(
-        **meeting.__dict__,
+        **meeting_dict,
         club_name=club.name,
-        participant_count=participant_count
+        participant_count=participant_count,
     )
 
 # =============================================================================
@@ -432,6 +470,19 @@ async def get_social_participants(
 
     result = []
     for p in participants:
+        # MeetingParticipant 모델에 status/role 컬럼 없음 - 파생값 사용
+        role = "ORGANIZER" if p.user_id and p.user_id == meeting.created_by else "PARTICIPANT"
+        status_val = "CONFIRMED"
+        club_role = None
+        if p.user_id:
+            m = db.query(ClubMembership).filter(
+                ClubMembership.user_id == p.user_id,
+                ClubMembership.club_id == meeting.club_id,
+                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+            ).first()
+            if m and m.role:
+                club_role = m.role.value if hasattr(m.role, "value") else str(m.role)
+
         if p.guest_id:
             guest = db.query(Guest).filter(Guest.id == p.guest_id).first()
             result.append({
@@ -441,8 +492,10 @@ async def get_social_participants(
                 "user_name": guest.name if guest else "게스트",
                 "user_nickname": guest.name if guest else "게스트",
                 "name": guest.name if guest else "게스트",
-                "status": p.status.value if hasattr(p.status, "value") else str(p.status),
-                "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                "status": status_val,
+                "role": "PARTICIPANT",
+                "club_role": None,
+                "membership_role": None,
                 "is_guest": True,
                 "created_at": p.created_at.isoformat() if p.created_at else None,
             })
@@ -456,8 +509,10 @@ async def get_social_participants(
                     "user_name": user.realname or user.nickname or "이름 없음",
                     "user_nickname": user.nickname or "닉네임 없음",
                     "name": user.realname or user.nickname or "이름 없음",
-                    "status": p.status.value if hasattr(p.status, "value") else str(p.status),
-                    "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                    "status": status_val,
+                    "role": role,
+                    "club_role": club_role,
+                    "membership_role": club_role,
                     "is_guest": False,
                     "created_at": p.created_at.isoformat() if p.created_at else None,
                 })
