@@ -520,6 +520,7 @@ async def send_terms_updated_notification(terms_id: int, db: Session):
     """약관 변경 알림 전송"""
     try:
         from utils import generate_cuid
+        from services.push_delivery_service import send_push_to_user
 
         # 약관 정보 조회
         terms = db.query(Terms).filter(Terms.id == terms_id).first()
@@ -554,6 +555,12 @@ async def send_terms_updated_notification(terms_id: int, db: Session):
                     status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=user.id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="system",
+                                  target_id=terms.id)
                 sent_count += 1
 
             except Exception as e:

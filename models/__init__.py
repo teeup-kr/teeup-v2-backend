@@ -31,6 +31,7 @@ from .inquiry import Inquiry, InquiryResponse
 
 # 기타 모델
 from .notification import Notification
+from .device_token import UserDeviceToken
 from .notice import Notice
 from .faq import FAQCategory, FAQ
 
@@ -104,6 +105,7 @@ __all__ = [
     "InquiryResponse",
     # Others
     "Notification",
+    "UserDeviceToken",
     "Notice",
     "FAQCategory",
     "FAQ"

@@ -15,6 +15,7 @@ from database import get_db
 from models import User
 from schemas import GoogleOAuthBody, UserStatus, Provider
 from schemas import OAuthLoginRequest, OAuthCallbackRequest, OAuthUserInfo
+from services.push_token_service import sync_user_push_token
 from utils.google_oauth import google_oauth
 from config import settings
 from utils.jwt_auth import jwt_auth
@@ -292,6 +293,13 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
         refresh_token = jwt_auth.create_refresh_token(jwt_payload)
 
         logger.info(f"Google OAuth 로그인 성공: {user.email}")
+
+        if request.push_token:
+            sync_user_push_token(db=db,
+                                 user_id=user.id,
+                                 push_token=request.push_token,
+                                 token_type=request.token_type or "FCM",
+                                 enabled=request.enabled if request.enabled is not None else True)
 
         return {
             "access_token": access_token,

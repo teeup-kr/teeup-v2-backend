@@ -12,6 +12,7 @@ import logging
 from database import get_db
 from models import User, Admin, UserStatus, Provider, RefreshTokenBlacklist, TokenRevokeReason
 from schemas import MessageResponse
+from services.push_token_service import deactivate_user_push_tokens, sync_user_push_token
 from utils.jwt_auth import jwt_auth
 from utils.csrf_protection import generate_csrf_token, get_middleware_instance
 import jwt
@@ -273,6 +274,16 @@ class LoginResponse(BaseModel):
     user: dict
 
 
+class PushTokenSyncRequest(BaseModel):
+    push_token: str
+    token_type: str = "FCM"
+    enabled: bool = True
+
+
+class LogoutRequest(BaseModel):
+    push_token: Optional[str] = None
+
+
 @router.get("/me")
 async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
     """현재 사용자 정보 조회"""
@@ -445,16 +456,37 @@ async def withdraw_user(current_user: User = Depends(get_current_active_user), d
 
 
 @router.post("/logout")
-async def logout(current_user: dict = Depends(get_current_active_user)):
+async def logout(payload: Optional[LogoutRequest] = Body(default=None),
+                 current_user: User = Depends(get_current_active_user),
+                 db: Session = Depends(get_db)):
     """로그아웃 (토큰 무효화)"""
     try:
-        # 현재는 간단한 토큰 시스템이므로 실제 무효화는 클라이언트에서 처리
-        # 향후 JWT 토큰 시스템으로 변경 시 토큰 블랙리스트에 추가하는 로직 구현
+        if payload and payload.push_token:
+            deactivate_user_push_tokens(db=db, user_id=current_user.id, push_token=payload.push_token)
+        else:
+            deactivate_user_push_tokens(db=db, user_id=current_user.id)
 
         return {"message": "로그아웃이 완료되었습니다.", "success": True}
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+
+@router.post("/push-token", response_model=MessageResponse)
+async def sync_push_token(payload: PushTokenSyncRequest,
+                          current_user: User = Depends(get_current_active_user),
+                          db: Session = Depends(get_db)):
+    """사용자 디바이스 푸시 토큰 등록/해제"""
+    try:
+        sync_user_push_token(db=db,
+                             user_id=current_user.id,
+                             push_token=payload.push_token,
+                             token_type=payload.token_type,
+                             enabled=payload.enabled)
+        return {"message": "푸시 토큰이 동기화되었습니다.", "success": True}
+    except Exception as e:
+        logger.error(f"푸시 토큰 동기화 실패: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="푸시 토큰 동기화에 실패했습니다.")
 
 
 # 토큰 갱신 스키마

@@ -40,7 +40,8 @@
 | POST | `/validate-average-score` | 평균 타수 유효성 검사 | `{score: int}` | `{is_valid: bool}` | ❌ |
 | PUT | `/change-password` | 비밀번호 변경 | `{current_password: str, new_password: str}` | [MessageResponse](#messageresponse) | ✅ |
 | DELETE | `/withdraw` | 회원 탈퇴 | - | [MessageResponse](#messageresponse) | ✅ |
-| POST | `/logout` | 로그아웃 | - | [MessageResponse](#messageresponse) | ✅ |
+| POST | `/push-token` | 디바이스 푸시 토큰 등록/해제 | `{push_token: str, token_type: "FCM", enabled: bool}` | [MessageResponse](#messageresponse) | ✅ |
+| POST | `/logout` | 로그아웃 | `{push_token?: str}` | [MessageResponse](#messageresponse) | ✅ |
 | POST | `/refresh` | 토큰 갱신 | `{refresh_token: str}` | `{access_token: str, refresh_token: str}` | ❌ |
 | POST | `/verify-token` | 토큰 검증 | `{token: str}` | `{valid: bool, payload: {}}` | ❌ |
 | POST | `/revoke-token` | 토큰 무효화 | `{token: str}` | [MessageResponse](#messageresponse) | ✅ |
@@ -50,6 +51,10 @@
 | GET | `/terms/{terms_type}` | 약관 조회 | Path: `terms_type` | [TermsResponse](#termsresponse) | ❌ |
 | POST | `/request-password-reset` | 비밀번호 재설정 요청 | `{email: str}` | [MessageResponse](#messageresponse) | ❌ |
 | POST | `/reset-password` | 비밀번호 재설정 | `{token: str, new_password: str}` | [MessageResponse](#messageresponse) | ❌ |
+
+> 모바일 푸시 동작:
+> - 로그인 완료(또는 앱 재실행 후 인증 유지) 시 `POST /api/v1/auth/push-token` 호출로 `enabled=true` 토큰 동기화
+> - 로그아웃 시 `POST /api/v1/auth/logout` 호출 시 해당 사용자의 활성 토큰을 비활성화
 
 ---
 
@@ -545,11 +550,8 @@
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
 | GET | `/google` | Google OAuth 로그인 | Query: `redirect_uri?` | Redirect to Google | ❌ |
-| GET | `/google/callback` | Google OAuth 콜백 | Query: `code, state?` | [LoginResponse](#loginresponse) | ❌ |
-| GET | `/kakao` | Kakao OAuth 로그인 | Query: `redirect_uri?` | Redirect to Kakao | ❌ |
-| GET | `/kakao/callback` | Kakao OAuth 콜백 | Query: `code, state?` | [LoginResponse](#loginresponse) | ❌ |
-| GET | `/naver` | Naver OAuth 로그인 | Query: `redirect_uri?` | Redirect to Naver | ❌ |
-| GET | `/naver/callback` | Naver OAuth 콜백 | Query: `code, state?` | [LoginResponse](#loginresponse) | ❌ |
+| POST | `/google/callback` | Google OAuth 콜백 | `{authorizationCode, codeVerifier, redirectUri?, push_token?, token_type?, enabled?}` | [LoginResponse](#loginresponse) | ❌ |
+| GET | `/drive/callback` | Google Drive OAuth 코드 수동 발급용 콜백 | Query: `code, state` | HTML | ❌ |
 
 ---
 
@@ -666,9 +668,7 @@
 
 - [POST `/api/v1/auth/login`](#1-인증-auth) - 로그인
 - [POST `/api/v1/auth/register`](#1-인증-auth) - 회원가입
-- [GET `/api/v1/auth/oauth/google/callback`](#11-oauth) - Google OAuth 콜백
-- [GET `/api/v1/auth/oauth/kakao/callback`](#11-oauth) - Kakao OAuth 콜백
-- [GET `/api/v1/auth/oauth/naver/callback`](#11-oauth) - Naver OAuth 콜백
+- [POST `/api/v1/auth/oauth/google/callback`](#11-oauth) - Google OAuth 콜백
 
 ```json
 {

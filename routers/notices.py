@@ -162,6 +162,7 @@ async def send_new_notice_notification(notice_id: int, db: Session):
     """새 공지사항 알림 전송"""
     try:
         from utils import generate_cuid
+        from services.push_delivery_service import send_push_to_user
         
         # 공지사항 정보 조회
         notice = db.query(Notice).filter(Notice.id == notice_id).first()
@@ -200,6 +201,12 @@ async def send_new_notice_notification(notice_id: int, db: Session):
                 )
                 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=user.id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="notice",
+                                  target_id=notice.id)
                 sent_count += 1
                 
             except Exception as e:

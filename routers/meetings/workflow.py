@@ -33,6 +33,7 @@ from schemas import (
     TeamMemberResponse, TeamMemberAddRequest, GuestCreate
 )
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
+from services.push_delivery_service import send_push_to_user
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.handicap_calculator import process_meeting_completion
 from utils.team_formation import TeamFormationEngine
@@ -977,6 +978,13 @@ async def send_application_closed_notification(meeting_id: int,
                     status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
 
             except Exception as e:
@@ -1047,6 +1055,13 @@ async def send_settlement_completed_notification(meeting_id: int, db: Session):
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
 
             except Exception as e:
@@ -1111,6 +1126,13 @@ async def send_team_formation_completed_notification(meeting_id: int, db: Sessio
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
                 logger.debug(f"팀 편성 완료 알림 추가 - user_id: {participant.user_id}, meeting_id: {meeting_id}")
 
@@ -1183,6 +1205,13 @@ async def send_rounding_completed_notification(meeting_id: int, db: Session):
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
 
             except Exception as e:
@@ -1243,6 +1272,13 @@ async def send_meeting_completed_notification(meeting_id: int, db: Session):
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
 
             except Exception as e:

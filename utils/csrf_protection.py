@@ -39,6 +39,8 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             "/api/v1/auth/login",
             "/api/v1/auth/register", 
             "/api/v1/auth/refresh",
+            "/api/v1/auth/push-token",
+            "/api/v1/auth/logout",
             "/api/v1/auth/oauth/google/callback",
             "/api/v1/admin/login",
             "/api/v1/auth/csrf-token"  # CSRF 토큰 요청은 제외
