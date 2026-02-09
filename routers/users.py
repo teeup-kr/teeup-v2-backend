@@ -1675,6 +1675,7 @@ class RoundingMeetingItem(BaseModel):
     club_name: str
     rounding_completed_at: datetime
     has_score: bool
+    has_hole_scores: bool
     gross_score: Optional[int] = None
     net_score: Optional[float] = None
 
@@ -1878,7 +1879,7 @@ async def get_my_rounding_meetings(
         score_histories = (db.query(UserScoreHistory).filter(
             UserScoreHistory.user_id == current_user.id,
             UserScoreHistory.meeting_id.in_(meeting_ids),
-        ).all())
+        ).all()) if meeting_ids else []
 
         score_map = {sh.meeting_id: sh for sh in score_histories}
 
@@ -1894,6 +1895,7 @@ async def get_my_rounding_meetings(
                     club_name=club.name,
                     rounding_completed_at=meeting.rounding_completed_at,
                     has_score=score_history is not None,
+                    has_hole_scores=bool(participant.has_hole_scores),
                     gross_score=score_history.gross_score if score_history else None,
                     net_score=(float(score_history.net_score) if score_history and score_history.net_score else None),
                 ))
