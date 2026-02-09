@@ -92,6 +92,7 @@ class MeetingParticipant(Base):
     pace_preference = Column(String(50))
     tee_preference = Column(String(50))
     is_newbie = Column(Boolean, default=False)
+    has_hole_scores = Column(Boolean, nullable=False, default=False, comment="홀별 점수 입력 여부")
     prefer_with = Column(JSON)
     avoid_with = Column(JSON)
     created_at = Column(DateTime, default=func.now())

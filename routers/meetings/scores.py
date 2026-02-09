@@ -3,10 +3,11 @@
 
 골프 라운딩 스코어 입력 및 관리 기능
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
 import logging
+from math import ceil
+from typing import Optional
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -17,8 +18,15 @@ from models import (
 )
 from schemas import ClubRole, MeetingType
 from schemas import (
-    ScoreCreate, ScoreUpdate, ScoreResponse, ScoreListResponse, ScoreStats, MessageResponse,
-    SimpleScoreCreate, SimpleScoreResponse
+    MessageResponse,
+    MeetingParticipantScoreCreate,
+    ScoreCreate,
+    ScoreListResponse,
+    ScoreResponse,
+    ScoreStats,
+    ScoreUpdate,
+    SimpleScoreCreate,
+    SimpleScoreResponse,
 )
 from routers.auth import get_current_active_user, get_user_role_from_token
 from fastapi.security import HTTPAuthorizationCredentials
@@ -36,6 +44,154 @@ router = APIRouter(prefix="/scores", tags=["scores"])
 
 # 모임 관련 스코어 엔드포인트를 위한 별도 router
 meeting_score_router = APIRouter(prefix="/meetings", tags=["모임 스코어"])
+# 라운딩 prefix 기반 호환용 router (RN 앱에서 사용)
+round_score_router = APIRouter(prefix="/rounds", tags=["라운딩 스코어"])
+
+
+def _build_score_response(score: Score, meeting: Optional[Meeting] = None) -> ScoreResponse:
+    participant = score.participant
+    meeting_obj = meeting or (participant.meeting if participant else None)
+    user_obj = participant.user if participant else None
+    return ScoreResponse(
+        id=score.id,
+        participant_id=score.participant_id,
+        user_id=participant.user_id if participant and participant.user_id else 0,
+        user_name=user_obj.realname if user_obj and user_obj.realname else "",
+        user_nickname=user_obj.nickname if user_obj and user_obj.nickname else "",
+        meeting_id=meeting_obj.id if meeting_obj else 0,
+        meeting_name=meeting_obj.name if meeting_obj and meeting_obj.name else "",
+        hole_number=score.hole_number,
+        strokes=score.strokes,
+        par=score.par,
+        score_to_par=score.score_to_par,
+        created_at=score.created_at,
+        updated_at=score.updated_at,
+    )
+
+
+def _empty_score_stats() -> ScoreStats:
+    return ScoreStats(
+        total_strokes=0,
+        total_par=0,
+        total_score_to_par=0,
+        average_strokes=0.0,
+        average_par=0.0,
+        average_score_to_par=0.0,
+        best_hole=0,
+        worst_hole=0,
+        birdies=0,
+        pars=0,
+        bogeys=0,
+        double_bogeys=0,
+        triple_bogeys=0,
+        worse=0,
+    )
+
+
+def _build_score_stats(scores: list[Score]) -> ScoreStats:
+    if not scores:
+        return _empty_score_stats()
+
+    total_holes = len(scores)
+    total_strokes = sum(score.strokes for score in scores)
+    total_par = sum(score.par for score in scores)
+    total_score_to_par = sum(score.score_to_par for score in scores)
+    score_to_par_values = [score.score_to_par for score in scores]
+    stroke_values = [score.strokes for score in scores]
+
+    return ScoreStats(
+        total_strokes=total_strokes,
+        total_par=total_par,
+        total_score_to_par=total_score_to_par,
+        average_strokes=round(total_strokes / total_holes, 2),
+        average_par=round(total_par / total_holes, 2),
+        average_score_to_par=round(total_score_to_par / total_holes, 2),
+        best_hole=min(stroke_values),
+        worst_hole=max(stroke_values),
+        birdies=sum(1 for value in score_to_par_values if value == -1),
+        pars=sum(1 for value in score_to_par_values if value == 0),
+        bogeys=sum(1 for value in score_to_par_values if value == 1),
+        double_bogeys=sum(1 for value in score_to_par_values if value == 2),
+        triple_bogeys=sum(1 for value in score_to_par_values if value == 3),
+        worse=sum(1 for value in score_to_par_values if value >= 4),
+    )
+
+
+def _calc_total_pages(total: int, limit: int) -> int:
+    if total <= 0:
+        return 0
+    return ceil(total / limit)
+
+
+def _resolve_participant(
+    db: Session,
+    meeting_id: int,
+    participant_id: str,
+    current_user: User,
+) -> MeetingParticipant:
+    if participant_id == "current":
+        participant = db.query(MeetingParticipant).filter(
+            MeetingParticipant.meeting_id == meeting_id,
+            MeetingParticipant.user_id == current_user.id,
+        ).first()
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="현재 사용자 참가자를 찾을 수 없습니다.",
+            )
+        return participant
+
+    try:
+        parsed_id = int(participant_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="participant_id가 유효하지 않습니다. 숫자 또는 'current'를 사용하세요.",
+        ) from error
+
+    participant = db.query(MeetingParticipant).filter(
+        MeetingParticipant.id == parsed_id,
+        MeetingParticipant.meeting_id == meeting_id,
+    ).first()
+    if not participant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="참가자를 찾을 수 없습니다.",
+        )
+    return participant
+
+
+def _ensure_round_meeting(db: Session, meeting_id: int) -> Meeting:
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="모임을 찾을 수 없습니다.",
+        )
+    _meeting_type = getattr(meeting.meeting_type, "value", meeting.meeting_type)
+    if _meeting_type != MeetingType.ROUND.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="라운딩 모임이 아닙니다.",
+        )
+    return meeting
+
+
+def _set_participant_hole_score_flag(db: Session, participant_id: int, has_hole_scores: bool) -> None:
+    db.query(MeetingParticipant).filter(
+        MeetingParticipant.id == participant_id
+    ).update(
+        {MeetingParticipant.has_hole_scores: has_hole_scores},
+        synchronize_session=False,
+    )
+
+
+def _sync_participant_hole_score_flag(db: Session, participant_id: int) -> bool:
+    has_hole_scores = db.query(Score.id).filter(
+        Score.participant_id == participant_id
+    ).first() is not None
+    _set_participant_hole_score_flag(db, participant_id, has_hole_scores)
+    return has_hole_scores
 
 def check_score_permission(user_id: int, participant_id: int, db: Session) -> bool:
     """스코어 관리 권한 확인 (본인 스코어만 수정 가능)"""
@@ -119,20 +275,22 @@ async def create_score(
         # 스코어 생성
         score = Score(
             hole_number=score_data.hole_number,
-            score=score_data.score,
-            putts=score_data.putts,
-            fairway_hit=score_data.fairway_hit,
-            gir=score_data.gir,
-            penalties=score_data.penalties or 0,
-            notes=score_data.notes,
+            strokes=score_data.strokes,
+            par=score_data.par,
+            score_to_par=score_data.score_to_par,
             participant_id=score_data.participant_id
         )
         
         db.add(score)
+        _set_participant_hole_score_flag(db, score_data.participant_id, True)
         db.commit()
         db.refresh(score)
         
-        return score
+        score = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(Score.id == score.id).first()
+        return _build_score_response(score)
         
     except HTTPException:
         raise
@@ -150,13 +308,16 @@ async def get_scores(
     meeting_id: Optional[int] = Query(None, description="모임 ID"),
     hole_number: Optional[int] = Query(None, description="홀 번호"),
     page: int = Query(1, ge=1, description="페이지 번호"),
-    size: int = Query(20, ge=1, le=100, description="페이지 크기"),
+    limit: int = Query(20, ge=1, le=100, description="페이지 크기"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     """스코어 목록 조회"""
     try:
-        query = db.query(Score).options(joinedload(Score.participant))
+        query = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        )
         
         # 필터링
         if participant_id:
@@ -194,20 +355,22 @@ async def get_scores(
                     query = query.filter(Score.participant_id.in_(participant_ids))
                 else:
                     # 참가한 모임이 없으면 빈 결과 반환
-                    return ScoreListResponse(scores=[], total=0, page=page, size=size)
+                    return ScoreListResponse(scores=[], total=0, page=page, limit=limit, total_pages=0)
         
         # 총 개수 조회
         total = query.count()
         
         # 페이징
-        offset = (page - 1) * size
-        scores = query.offset(offset).limit(size).all()
+        offset = (page - 1) * limit
+        scores = query.order_by(Score.participant_id, Score.hole_number).offset(offset).limit(limit).all()
+        score_responses = [_build_score_response(score) for score in scores]
         
         return ScoreListResponse(
-            scores=scores,
+            scores=score_responses,
             total=total,
             page=page,
-            size=size
+            limit=limit,
+            total_pages=_calc_total_pages(total, limit),
         )
         
     except HTTPException:
@@ -227,7 +390,10 @@ async def get_score(
 ):
     """스코어 상세 조회"""
     try:
-        score = db.query(Score).options(joinedload(Score.participant)).filter(
+        score = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(
             Score.id == score_id
         ).first()
         
@@ -251,7 +417,7 @@ async def get_score(
                     detail="스코어 조회 권한이 없습니다."
                 )
         
-        return score
+        return _build_score_response(score)
         
     except HTTPException:
         raise
@@ -305,14 +471,30 @@ async def update_score(
                 )
         
         # 스코어 업데이트
-        update_data = score_data.dict(exclude_unset=True)
+        update_data = score_data.model_dump(exclude_unset=True)
+
+        if "strokes" in update_data or "par" in update_data:
+            next_strokes = update_data.get("strokes", score.strokes)
+            next_par = update_data.get("par", score.par)
+            computed_score_to_par = next_strokes - next_par
+            if "score_to_par" in update_data and update_data["score_to_par"] != computed_score_to_par:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="score_to_par는 strokes - par 값과 같아야 합니다.",
+                )
+            update_data["score_to_par"] = computed_score_to_par
+
         for field, value in update_data.items():
             setattr(score, field, value)
         
         db.commit()
         db.refresh(score)
-        
-        return score
+        score = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(Score.id == score_id).first()
+
+        return _build_score_response(score)
         
     except HTTPException:
         raise
@@ -349,8 +531,10 @@ async def delete_score(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="스코어 삭제 권한이 없습니다."
                 )
-        
+        participant_id = score.participant_id
         db.delete(score)
+        db.flush()
+        _sync_participant_hole_score_flag(db, participant_id)
         db.commit()
         
         return MessageResponse(
@@ -386,45 +570,7 @@ async def get_score_stats(
         # 참가자 스코어 조회
         scores = db.query(Score).filter(Score.participant_id == participant_id).all()
         
-        if not scores:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="스코어 데이터가 없습니다."
-            )
-        
-        # 통계 계산
-        total_holes = len(scores)
-        total_strokes = sum(score.score for score in scores)
-        total_putts = sum(score.putts for score in scores if score.putts)
-        total_penalties = sum(score.penalties for score in scores)
-        
-        average_score = total_strokes / total_holes if total_holes > 0 else 0
-        average_putts = total_putts / total_holes if total_holes > 0 and total_putts > 0 else 0
-        
-        # 페어웨이 적중률
-        fairway_hits = sum(1 for score in scores if score.fairway_hit is True)
-        fairway_hit_rate = (fairway_hits / total_holes * 100) if total_holes > 0 else 0
-        
-        # 그린 적중률
-        gir_hits = sum(1 for score in scores if score.gir is True)
-        gir_rate = (gir_hits / total_holes * 100) if total_holes > 0 else 0
-        
-        # 최고/최저 홀
-        best_hole = min(score.score for score in scores)
-        worst_hole = max(score.score for score in scores)
-        
-        return ScoreStats(
-            total_holes=total_holes,
-            total_strokes=total_strokes,
-            total_putts=total_putts,
-            total_penalties=total_penalties,
-            average_score=round(average_score, 2),
-            average_putts=round(average_putts, 2),
-            fairway_hit_rate=round(fairway_hit_rate, 2),
-            gir_rate=round(gir_rate, 2),
-            best_hole=best_hole,
-            worst_hole=worst_hole
-        )
+        return _build_score_stats(scores)
         
     except HTTPException:
         raise
@@ -439,10 +585,11 @@ async def get_score_stats(
 # 모임 관련 스코어 엔드포인트 (base.py에서 이동)
 # =============================================================================
 
+@round_score_router.get("/{meeting_id}/participants/{participant_id}/scores", response_model=ScoreListResponse)
 @meeting_score_router.get("/{meeting_id}/participants/{participant_id}/scores", response_model=ScoreListResponse)
 async def get_participant_scores(
     meeting_id: int,
-    participant_id: int,
+    participant_id: str,
     page: int = 1,
     limit: int = 18,
     db: Session = Depends(get_db),
@@ -450,25 +597,8 @@ async def get_participant_scores(
 ):
     """참가자 스코어 조회"""
     try:
-        # 모임 존재 확인
-        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
-        if not meeting:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="모임을 찾을 수 없습니다."
-            )
-        
-        # 참가자 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.id == participant_id,
-            MeetingParticipant.meeting_id == meeting_id
-        ).first()
-        
-        if not participant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="참가자를 찾을 수 없습니다."
-            )
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = _resolve_participant(db, meeting_id, participant_id, current_user)
         
         # 권한 확인 (참가자 본인 또는 모임 매니저)
         user_id = current_user.id
@@ -485,37 +615,20 @@ async def get_participant_scores(
         offset = (page - 1) * limit
         
         # 스코어 조회
-        scores_query = db.query(Score).filter(Score.participant_id == participant_id)
+        scores_query = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(Score.participant_id == participant.id)
         total = scores_query.count()
         scores = scores_query.order_by(Score.hole_number).offset(offset).limit(limit).all()
-        
-        score_responses = []
-        for score in scores:
-            # 참가자와 사용자 정보 조회
-            participant = db.query(MeetingParticipant).filter(MeetingParticipant.id == score.participant_id).first()
-            user = db.query(User).filter(User.id == participant.user_id).first() if participant else None
-            
-            score_responses.append(ScoreResponse(
-                id=score.id,
-                participant_id=score.participant_id,
-                user_id=participant.user_id if participant else 0,
-                user_name=user.realname if user else "",
-                user_nickname=user.nickname if user else "",
-                meeting_id=meeting_id,
-                meeting_name=meeting.name if meeting else "",
-                hole_number=score.hole_number,
-                strokes=score.strokes,
-                par=score.par,
-                score_to_par=score.score_to_par,
-                created_at=score.created_at,
-                updated_at=score.updated_at
-            ))
+        score_responses = [_build_score_response(score, meeting=meeting) for score in scores]
         
         return ScoreListResponse(
             scores=score_responses,
             total=total,
             page=page,
-            size=limit
+            limit=limit,
+            total_pages=_calc_total_pages(total, limit),
         )
         
     except HTTPException:
@@ -527,34 +640,18 @@ async def get_participant_scores(
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
 
+@round_score_router.get("/{meeting_id}/participants/{participant_id}/scores/stats", response_model=ScoreStats)
 @meeting_score_router.get("/{meeting_id}/participants/{participant_id}/scores/stats", response_model=ScoreStats)
 async def get_participant_score_stats(
     meeting_id: int,
-    participant_id: int,
+    participant_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     """참가자 스코어 통계 조회"""
     try:
-        # 모임 존재 확인
-        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
-        if not meeting:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="모임을 찾을 수 없습니다."
-            )
-        
-        # 참가자 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.id == participant_id,
-            MeetingParticipant.meeting_id == meeting_id
-        ).first()
-        
-        if not participant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="참가자를 찾을 수 없습니다."
-            )
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = _resolve_participant(db, meeting_id, participant_id, current_user)
         
         # 권한 확인 (참가자 본인 또는 모임 매니저)
         user_id = current_user.id
@@ -567,45 +664,8 @@ async def get_participant_score_stats(
                 detail="스코어 통계 조회 권한이 없습니다."
             )
         
-        # 스코어 통계 계산
-        scores = db.query(Score).filter(Score.participant_id == participant_id).all()
-        
-        if not scores:
-            return ScoreStats(
-                total_holes=0,
-                total_strokes=0,
-                total_putts=0,
-                total_penalties=0,
-                average_score=0.0,
-                average_putts=0.0,
-                fairway_hit_rate=0.0,
-                gir_rate=0.0,
-                best_hole=0,
-                worst_hole=0
-            )
-        
-        total_holes = len(scores)
-        total_strokes = sum(score.score for score in scores)
-        total_putts = sum(score.putts for score in scores if score.putts)
-        total_penalties = sum(score.penalties for score in scores)
-        
-        scores_list = [score.score for score in scores]
-        putts_list = [score.putts for score in scores if score.putts]
-        fairway_hits = sum(1 for score in scores if score.fairway_hit)
-        gir_hits = sum(1 for score in scores if score.gir)
-        
-        return ScoreStats(
-            total_holes=total_holes,
-            total_strokes=total_strokes,
-            total_putts=total_putts,
-            total_penalties=total_penalties,
-            average_score=round(total_strokes / total_holes, 2),
-            average_putts=round(total_putts / len(putts_list), 2) if putts_list else 0.0,
-            fairway_hit_rate=round((fairway_hits / total_holes) * 100, 2),
-            gir_rate=round((gir_hits / total_holes) * 100, 2),
-            best_hole=min(scores_list),
-            worst_hole=max(scores_list)
-        )
+        scores = db.query(Score).filter(Score.participant_id == participant.id).all()
+        return _build_score_stats(scores)
         
     except HTTPException:
         raise
@@ -615,6 +675,193 @@ async def get_participant_score_stats(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
+
+
+@round_score_router.post("/{meeting_id}/participants/{participant_id}/scores", response_model=ScoreResponse)
+@meeting_score_router.post("/{meeting_id}/participants/{participant_id}/scores", response_model=ScoreResponse)
+async def create_participant_score(
+    meeting_id: int,
+    participant_id: str,
+    score_data: MeetingParticipantScoreCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """홀별 점수 등록"""
+    try:
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = _resolve_participant(db, meeting_id, participant_id, current_user)
+
+        if not check_score_permission(current_user.id, participant.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="스코어 등록 권한이 없습니다.",
+            )
+
+        existing_score = db.query(Score).filter(
+            Score.participant_id == participant.id,
+            Score.hole_number == score_data.hole_number,
+        ).first()
+        if existing_score:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"홀 {score_data.hole_number}번의 스코어가 이미 등록되어 있습니다.",
+            )
+
+        score = Score(
+            participant_id=participant.id,
+            hole_number=score_data.hole_number,
+            strokes=score_data.strokes,
+            par=score_data.par,
+            score_to_par=score_data.score_to_par,
+        )
+        db.add(score)
+        _set_participant_hole_score_flag(db, participant.id, True)
+        db.commit()
+        db.refresh(score)
+
+        score = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(Score.id == score.id).first()
+        return _build_score_response(score, meeting=meeting)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"홀별 점수 등록 실패: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"서버 내부 오류가 발생했습니다: {str(e)}",
+        )
+
+
+@round_score_router.put("/{meeting_id}/participants/{participant_id}/scores/{score_id}", response_model=ScoreResponse)
+@meeting_score_router.put("/{meeting_id}/participants/{participant_id}/scores/{score_id}", response_model=ScoreResponse)
+async def update_participant_score(
+    meeting_id: int,
+    participant_id: str,
+    score_id: int,
+    score_data: ScoreUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """홀별 점수 수정"""
+    try:
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = _resolve_participant(db, meeting_id, participant_id, current_user)
+
+        if not check_score_permission(current_user.id, participant.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="스코어 수정 권한이 없습니다.",
+            )
+
+        score = db.query(Score).filter(
+            Score.id == score_id,
+            Score.participant_id == participant.id,
+        ).first()
+        if not score:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="스코어를 찾을 수 없습니다.",
+            )
+
+        update_data = score_data.model_dump(exclude_unset=True)
+
+        if "strokes" in update_data or "par" in update_data:
+            next_strokes = update_data.get("strokes", score.strokes)
+            next_par = update_data.get("par", score.par)
+            computed_score_to_par = next_strokes - next_par
+            if "score_to_par" in update_data and update_data["score_to_par"] != computed_score_to_par:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="score_to_par는 strokes - par 값과 같아야 합니다.",
+                )
+            update_data["score_to_par"] = computed_score_to_par
+
+        next_hole_number = update_data.get("hole_number")
+        if next_hole_number and next_hole_number != score.hole_number:
+            existing_score = db.query(Score).filter(
+                Score.participant_id == participant.id,
+                Score.hole_number == next_hole_number,
+                Score.id != score_id,
+            ).first()
+            if existing_score:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"홀 {next_hole_number}번의 스코어가 이미 등록되어 있습니다.",
+                )
+
+        for field, value in update_data.items():
+            setattr(score, field, value)
+
+        db.commit()
+        db.refresh(score)
+
+        score = db.query(Score).options(
+            joinedload(Score.participant).joinedload(MeetingParticipant.user),
+            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        ).filter(Score.id == score.id).first()
+        return _build_score_response(score, meeting=meeting)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"홀별 점수 수정 실패: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"서버 내부 오류가 발생했습니다: {str(e)}",
+        )
+
+
+@round_score_router.delete("/{meeting_id}/participants/{participant_id}/scores/{score_id}", response_model=MessageResponse)
+@meeting_score_router.delete("/{meeting_id}/participants/{participant_id}/scores/{score_id}", response_model=MessageResponse)
+async def delete_participant_score(
+    meeting_id: int,
+    participant_id: str,
+    score_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """홀별 점수 삭제"""
+    try:
+        _ensure_round_meeting(db, meeting_id)
+        participant = _resolve_participant(db, meeting_id, participant_id, current_user)
+
+        if not check_score_permission(current_user.id, participant.id, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="스코어 삭제 권한이 없습니다.",
+            )
+
+        score = db.query(Score).filter(
+            Score.id == score_id,
+            Score.participant_id == participant.id,
+        ).first()
+        if not score:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="스코어를 찾을 수 없습니다.",
+            )
+
+        db.delete(score)
+        db.flush()
+        _sync_participant_hole_score_flag(db, participant.id)
+        db.commit()
+        return MessageResponse(success=True, message="스코어가 성공적으로 삭제되었습니다.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"홀별 점수 삭제 실패: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"서버 내부 오류가 발생했습니다: {str(e)}",
+        )
+
 
 @meeting_score_router.post("/{meeting_id}/participants/{participant_id}/simple-score", response_model=SimpleScoreResponse)
 async def create_simple_score(

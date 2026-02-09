@@ -29,11 +29,15 @@ from models import (
     ClubType,
     Gender,
     Meeting,
+    MeetingSubtype,
+    MeetingType,
     MeetingParticipant,
     MembershipStatus,
     ParticipantType,
     Provider,
+    SettlementMethod,
     Sido,
+    SocialType,
     User,
     UserStatus,
 )
@@ -372,11 +376,11 @@ def upsert_meetings_and_participants(
                 break
 
         for m_idx in range(meetings_per_club):
-            meeting_type = "ROUND" if m_idx % 4 != 3 else "SOCIAL"
+            meeting_type = MeetingType.ROUND if m_idx % 4 != 3 else MeetingType.SOCIAL
             meeting_time = base_time + timedelta(days=(c_idx * meetings_per_club + m_idx))
             status_value = status_cycle[m_idx % len(status_cycle)]
 
-            if meeting_type == "ROUND":
+            if meeting_type == MeetingType.ROUND:
                 meeting_name = f"{club.name} Round {m_idx + 1}"
             else:
                 meeting_name = f"{club.name} Social {m_idx + 1}"
@@ -399,25 +403,27 @@ def upsert_meetings_and_participants(
             else:
                 tee_count = max(1, (participant_count + 3) // 4)
                 tee_times = [f"{7 + i:02d}:00" for i in range(tee_count)]
+                is_round = meeting_type == MeetingType.ROUND
 
                 meeting = Meeting(
                     name=meeting_name,
-                    description=f"Auto generated {meeting_type.lower()} meeting",
-                    location=f"{club.name} course",
+                    description=f"Auto generated {meeting_type.value.lower()} meeting",
+                    location=f"{club.name} course" if is_round else f"{club.name} lounge",
                     meeting_time=meeting_time,
                     tee_times=tee_times,
                     max_participants=participant_count,
                     meeting_type=meeting_type,
-                    meeting_subtype="REGULAR",
-                    total_cost=120000 if meeting_type == "ROUND" else 60000,
-                    green_fee=80000 if meeting_type == "ROUND" else None,
-                    caddy_fee=30000 if meeting_type == "ROUND" else None,
-                    cart_fee=10000 if meeting_type == "ROUND" else None,
-                    settlement_method="EQUAL_SPLIT",
-                    social_settlement_method="EQUAL_SPLIT" if meeting_type == "SOCIAL" else None,
-                    course_name=f"{club.name} Course" if meeting_type == "ROUND" else None,
-                    venue_name=f"{club.name} Lounge" if meeting_type == "SOCIAL" else None,
-                    hole_count=18 if meeting_type == "ROUND" else None,
+                    meeting_subtype=MeetingSubtype.REGULAR if is_round else None,
+                    total_cost=120000 if is_round else None,
+                    green_fee=80000 if is_round else None,
+                    caddy_fee=30000 if is_round else None,
+                    cart_fee=10000 if is_round else None,
+                    settlement_method=SettlementMethod.EQUAL_SPLIT,
+                    course_name=f"{club.name} Course" if is_round else None,
+                    venue_name=f"{club.name} Lounge" if not is_round else None,
+                    hole_count=18 if is_round else None,
+                    social_cost=60000 if not is_round else None,
+                    social_type=rng.choice([SocialType.CASUAL, SocialType.DINNER, SocialType.EVENT]) if not is_round else None,
                     reservation_name=club.representative_name,
                     club_id=club.id,
                     status=status_value,

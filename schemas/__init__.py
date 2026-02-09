@@ -60,8 +60,16 @@ from .expense import (ExpenseCreate, ExpenseUpdate, ExpenseResponse, ExpenseList
                       ExpenseParticipantUpdate)
 
 # 스코어 관련 스키마
-from .score import (ScoreCreate, ScoreUpdate, ScoreResponse, SimpleScoreCreate, SimpleScoreResponse, ScoreListResponse,
-                    ScoreStats)
+from .score import (
+    ScoreCreate,
+    MeetingParticipantScoreCreate,
+    ScoreUpdate,
+    ScoreResponse,
+    SimpleScoreCreate,
+    SimpleScoreResponse,
+    ScoreListResponse,
+    ScoreStats,
+)
 
 # OAuth 관련 스키마
 from .oauth import (OAuthLoginRequest, OAuthCallbackRequest, OAuthUserInfo, GoogleOAuthBody)
@@ -189,6 +197,7 @@ __all__ = [
     "ExpenseParticipantUpdate",
     # Score
     "ScoreCreate",
+    "MeetingParticipantScoreCreate",
     "ScoreUpdate",
     "ScoreResponse",
     "SimpleScoreCreate",

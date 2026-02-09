@@ -88,9 +88,13 @@
 | GET | `/{user_id}/score-history` | 스코어 이력 조회 | - | `List`[[ScoreHistoryResponse](#scorehistoryresponse)] | ✅ |
 | GET | `/{user_id}/last-meeting-result` | 최근 모임 결과 조회 | - | [MeetingResultResponse](#meetingresultresponse)? | ✅ |
 | GET | `/me/schedule` | 내 일정 조회 | - | [UserScheduleResponse](#userscheduleresponse) | ✅ |
-| GET | `/me/rounding-meetings` | 내 라운딩 모임 조회 | - | [RoundingMeetingsResponse](#roundingmeetingsresponse) | ✅ |
+| GET | `/me/rounding-meetings` | 내 라운딩 모임 조회 | Query: `score_status?, page?, limit?` | [RoundingMeetingsResponse](#roundingmeetingsresponse) | ✅ |
 | GET | `/me/rounding-stats` | 라운딩 통계 조회 | - | [RoundingStatsResponse](#roundingstatsresponse) | ✅ |
 | GET | `/stats` | 사용자 통계 조회 | - | [UserStatsResponse](#userstatsresponse) | ✅ |
+
+> 성능/조회 정책:
+> `GET /api/v1/users/me/rounding-meetings`의 `has_hole_scores`는 `meeting_participants.has_hole_scores` 캐시 필드에서 조회합니다.
+> 목록 조회 시 `scores` 테이블을 매 페이지 스캔하지 않습니다.
 
 ---
 
@@ -355,7 +359,7 @@
 ### 5.6 점수 관리
 
 **파일:** `routers/meetings/scores.py`  
-**Prefix:** `/api/v1/scores` (일반), `/api/v1/meetings` (모임 관련)  
+**Prefix:** `/api/v1/scores` (일반), `/api/v1/meetings` (모임 관련), `/api/v1/rounds` (라운드 호환 경로)  
 **태그:** `scores`, `모임 스코어`
 
 #### 일반 스코어 관리
@@ -373,10 +377,16 @@
 
 | Method | Path | 설명 | Request | Response | 인증 필요 |
 |--------|------|------|---------|----------|----------|
-| GET | `/{meeting_id}/participants/{participant_id}/scores` | 참가자 스코어 조회 | Query: `page?, limit?` | [ScoreListResponse](#scorelistresponse) | ✅ |
-| GET | `/{meeting_id}/participants/{participant_id}/scores/stats` | 참가자 스코어 통계 조회 | - | [ScoreStats](#scorestats) | ✅ |
+| GET | `/{meeting_id}/participants/{participant_id}/scores` | 참가자 스코어 조회 | Query: `page?, limit?` (`participant_id`는 숫자 또는 `current`) | [ScoreListResponse](#scorelistresponse) | ✅ |
+| POST | `/{meeting_id}/participants/{participant_id}/scores` | 참가자 홀별 스코어 등록 | [MeetingParticipantScoreCreate](#meetingparticipantscorecreate) (`participant_id`는 숫자 또는 `current`) | [ScoreResponse](#scoreresponse) | ✅ |
+| PUT | `/{meeting_id}/participants/{participant_id}/scores/{score_id}` | 참가자 홀별 스코어 수정 | [ScoreUpdate](#scoreupdate) (`participant_id`는 숫자 또는 `current`) | [ScoreResponse](#scoreresponse) | ✅ |
+| DELETE | `/{meeting_id}/participants/{participant_id}/scores/{score_id}` | 참가자 홀별 스코어 삭제 | (`participant_id`는 숫자 또는 `current`) | [MessageResponse](#messageresponse) | ✅ |
+| GET | `/{meeting_id}/participants/{participant_id}/scores/stats` | 참가자 스코어 통계 조회 | (`participant_id`는 숫자 또는 `current`) | [ScoreStats](#scorestats) | ✅ |
 | POST | `/{meeting_id}/participants/{participant_id}/simple-score` | 간단 스코어 등록 | [SimpleScoreCreate](#simplescorecreate) | [SimpleScoreResponse](#simplescoreresponse) | ✅ |
 | PUT | `/{meeting_id}/participants/{participant_id}/simple-score` | 간단 스코어 수정 | [SimpleScoreCreate](#simplescorecreate) | [SimpleScoreResponse](#simplescoreresponse) | ✅ |
+
+> 위 모임 스코어 경로는 `/api/v1/meetings/...`와 `/api/v1/rounds/...` 모두 동일하게 제공합니다.
+> 홀별 점수 등록/삭제 시 `meeting_participants.has_hole_scores`가 즉시 동기화됩니다.
 
 ### 5.7 비용 관리
 
@@ -2077,6 +2087,30 @@ Authorization: Bearer {access_token}
 }
 ```
 
+#### RoundingMeetingItem
+
+**사용되는 엔드포인트:**
+
+- [GET `/api/v1/users/me/rounding-meetings`](#2-사용자-users) - 내 라운딩 모임 조회
+
+**필드 설명:**
+
+- `has_hole_scores`: `meeting_participants.has_hole_scores` 기준의 홀별 점수 입력 여부 (`true/false`)
+
+```json
+{
+  "meeting_id": int,
+  "meeting_name": string,
+  "meeting_time": datetime (ISO 8601),
+  "club_name": string,
+  "rounding_completed_at": datetime (ISO 8601),
+  "has_score": boolean,
+  "has_hole_scores": boolean,
+  "gross_score": int (nullable),
+  "net_score": float (nullable)
+}
+```
+
 #### RoundingMeetingsResponse
 
 **사용되는 엔드포인트:**
@@ -2085,7 +2119,7 @@ Authorization: Bearer {access_token}
 
 ```json
 {
-  "data": array[object],
+  "data": array[[RoundingMeetingItem](#roundingmeetingitem)],
   "total": int,
   "page": int,
   "limit": int,
@@ -2447,11 +2481,14 @@ Authorization: Bearer {access_token}
 }
 ```
 
-#### ScoreUpdate
+> `strokes` 필드는 하위호환으로 `score` 키로도 입력할 수 있습니다.
+
+#### MeetingParticipantScoreCreate
 
 **사용되는 엔드포인트:**
 
-- [PUT `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 수정
+- [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 홀별 스코어 등록
+- [POST `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 홀별 스코어 등록
 
 ```json
 {
@@ -2462,6 +2499,27 @@ Authorization: Bearer {access_token}
 }
 ```
 
+> `score_to_par`가 없으면 `strokes - par`로 자동 계산됩니다.
+
+#### ScoreUpdate
+
+**사용되는 엔드포인트:**
+
+- [PUT `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 수정
+- [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores/{score_id}`](#5-모임-meetings) - 참가자 홀별 스코어 수정
+- [PUT `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores/{score_id}`](#5-모임-meetings) - 참가자 홀별 스코어 수정
+
+```json
+{
+  "hole_number": int?,
+  "strokes": int?,
+  "par": int?,
+  "score_to_par": int?
+}
+```
+
+> 일부 필드만 보내도 됩니다. `strokes`/`par`가 변경되면 `score_to_par`는 자동 계산됩니다.
+
 #### ScoreResponse
 
 **사용되는 엔드포인트:**
@@ -2469,6 +2527,10 @@ Authorization: Bearer {access_token}
 - [POST `/api/v1/scores/`](#5-모임-meetings) - 스코어 등록
 - [GET `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 상세 조회
 - [PUT `/api/v1/scores/{score_id}`](#5-모임-meetings) - 스코어 수정
+- [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 홀별 스코어 등록
+- [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores/{score_id}`](#5-모임-meetings) - 참가자 홀별 스코어 수정
+- [POST `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 홀별 스코어 등록
+- [PUT `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores/{score_id}`](#5-모임-meetings) - 참가자 홀별 스코어 수정
 
 ```json
 {
@@ -2495,6 +2557,7 @@ Authorization: Bearer {access_token}
 - [GET `/api/v1/admin/scores`](#3-관리자-admin) - 스코어 목록 조회
 - [GET `/api/v1/scores/`](#5-모임-meetings) - 스코어 목록 조회
 - [GET `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 스코어 조회
+- [GET `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores`](#5-모임-meetings) - 참가자 스코어 조회
 
 ```json
 {
@@ -2512,15 +2575,8 @@ Authorization: Bearer {access_token}
 
 - [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
 - [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
-
-```json
-{
-  "total_score": int,
-  "putts": int
-}
-```
-
-또는
+- [POST `/api/v1/rounds/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
+- [PUT `/api/v1/rounds/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
 
 ```json
 {
@@ -2534,6 +2590,8 @@ Authorization: Bearer {access_token}
 
 - [POST `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
 - [PUT `/api/v1/meetings/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
+- [POST `/api/v1/rounds/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 등록
+- [PUT `/api/v1/rounds/{meeting_id}/participants/{participant_id}/simple-score`](#5-모임-meetings) - 간단 스코어 수정
 
 ```json
 {
@@ -2549,6 +2607,7 @@ Authorization: Bearer {access_token}
 
 - [GET `/api/v1/scores/stats/{participant_id}`](#5-모임-meetings) - 참가자 스코어 통계 조회
 - [GET `/api/v1/meetings/{meeting_id}/participants/{participant_id}/scores/stats`](#5-모임-meetings) - 참가자 스코어 통계 조회
+- [GET `/api/v1/rounds/{meeting_id}/participants/{participant_id}/scores/stats`](#5-모임-meetings) - 참가자 스코어 통계 조회
 
 ```json
 {

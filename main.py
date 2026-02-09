@@ -53,6 +53,7 @@ from routers.meetings import (
     teams_router,
     scores_router,
     meeting_score_router,
+    round_score_router,
     expenses_router,
     rounds_router,
     socials_router,
@@ -179,6 +180,7 @@ app.include_router(settlement_router, prefix="/api/v1")  # /meetings - 정산
 app.include_router(teams_router, prefix="/api/v1")  # /teams - 팀 관리
 app.include_router(scores_router, prefix="/api/v1")  # /scores - 점수 관리
 app.include_router(meeting_score_router, prefix="/api/v1")  # /meetings - 모임 스코어 관리
+app.include_router(round_score_router, prefix="/api/v1")  # /rounds - 라운딩 스코어 관리
 app.include_router(expenses_router, prefix="/api/v1")  # /expenses - 비용 관리
 app.include_router(rounds_router, prefix="/api/v1")  # /rounds - 라운딩 전용
 app.include_router(socials_router, prefix="/api/v1")  # /socials - 소셜 모임 전용

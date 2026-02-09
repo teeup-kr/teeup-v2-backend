@@ -17,7 +17,7 @@ from .settlement import router as settlement_router
 from .teams import router as teams_router
 
 # 점수 관리
-from .scores import router as scores_router, meeting_score_router
+from .scores import router as scores_router, meeting_score_router, round_score_router
 
 # 비용 관리
 from .expenses import router as expenses_router
@@ -34,8 +34,8 @@ __all__ = [
     "teams_router",
     "scores_router",
     "meeting_score_router",
+    "round_score_router",
     "expenses_router",
     "rounds_router",
     "socials_router"
 ]
-
