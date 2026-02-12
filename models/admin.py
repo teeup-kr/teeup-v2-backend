@@ -3,7 +3,7 @@ from sqlalchemy import Column, String, DateTime, Boolean, Integer, Enum, Foreign
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-from .enums import Provider, UserStatus
+from .enums import Provider, UserStatus, AdminRole
 
 
 class Admin(Base):
@@ -19,6 +19,7 @@ class Admin(Base):
     provider_id = Column(String(255))  # OAuth 제공자 ID
     email_verified = Column(DateTime)  # 이메일 인증일시
     status = Column(Enum(UserStatus), default=UserStatus.ACTIVE)
+    role = Column(Enum(AdminRole), default=AdminRole.SUPER_ADMIN, nullable=False, comment="관리자 역할")
     deactivated_at = Column(DateTime)  # 비활성화 일시
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
