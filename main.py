@@ -44,6 +44,7 @@ from routers.clubs import (
     regulations_router as club_regulations_router,
     members_router as clubs_members_router,
     fees_router as clubs_fees_router,
+    stats_router as clubs_stats_router,
 )
 from routers.meetings import (
     base_router,
@@ -136,10 +137,14 @@ class RawRequestLogMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RawRequestLogMiddleware)
 
 # CORS 설정 - 가장 먼저 추가해야 함 (미들웨어는 역순으로 실행됨)
-# 개발 환경을 위한 localhost 기본값 (하드코딩된 도메인 제거)
-default_dev_origins = ["http://localhost:8081"]
-# CORS_ORIGINS 환경 변수 필수 (프로덕션 도메인은 환경 변수로 설정)
-allowed_origins = (settings.cors_origins_list if settings.cors_origins_list else default_dev_origins)
+# 개발 환경을 위한 localhost 기본값 (React Native: 8081, Admin: 3003)
+default_dev_origins = ["http://localhost:8081", "http://localhost:3003", "http://127.0.0.1:8081", "http://127.0.0.1:3003"]
+configured_origins = settings.cors_origins_list or []
+# 개발 환경에서는 localhost 항상 포함, 프로덕션은 CORS_ORIGINS만 사용
+if settings.ENVIRONMENT.lower() == "development":
+    allowed_origins = list(dict.fromkeys(default_dev_origins + configured_origins))
+else:
+    allowed_origins = configured_origins if configured_origins else default_dev_origins
 logger.info(f"CORS origins: {allowed_origins}")
 app.add_middleware(
     CORSMiddleware,
@@ -171,6 +176,7 @@ app.include_router(clubs_notices_router, prefix="/api/v1")  # /clubs - 공지사
 app.include_router(club_regulations_router, prefix="/api/v1")  # /clubs - 규정
 app.include_router(clubs_members_router, prefix="/api/v1")  # /clubs - 멤버 관리
 app.include_router(clubs_fees_router, prefix="/api/v1")  # /clubs - 회비 관리
+app.include_router(clubs_stats_router, prefix="/api/v1")  # /clubs - 통계
 
 # 모임 관련 라우터 - 기능별로 통합됨
 app.include_router(base_router, prefix="/api/v1")  # /meetings - 기본 CRUD
