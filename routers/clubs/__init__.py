@@ -16,11 +16,15 @@ from .members import router as members_router
 # 클럽 회비 관리
 from .fees import router as fees_router
 
+# 클럽 통계
+from .stats import router as stats_router
+
 __all__ = [
     "base_router",
     "notices_router",
     "regulations_router",
     "members_router",
-    "fees_router"
+    "fees_router",
+    "stats_router"
 ]
 
