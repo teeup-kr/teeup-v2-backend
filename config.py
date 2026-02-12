@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     ADMIN_REGION_API_URL: str = ""
     DATA_GO_KR_API_KEY: str = ""
 
+    # Firebase Push
+    FIREBASE_SERVICE_ACCOUNT_FILE: str = ""
+
     @property
     def database_url(self) -> str:
         """SQLAlchemy database URL"""

@@ -29,6 +29,7 @@ from schemas import (
     MeetingResponse, MeetingParticipantResponse, PaginatedResponse
 )
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
+from services.push_delivery_service import send_push_to_user
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.amount_split import split_amount_10won, allocate_by_total, allocate_items_to_exact_totals
 from models import Notification
@@ -108,6 +109,13 @@ def send_settlement_created_notification(meeting_id: int, db: Session, is_edit: 
                 )
                 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
                 
             except Exception as e:
@@ -1099,8 +1107,6 @@ async def get_available_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
-
-
 
 
 

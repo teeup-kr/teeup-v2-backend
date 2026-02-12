@@ -1053,6 +1053,7 @@ async def send_meeting_notification(meeting_id: int,
                                     current_user: User = Depends(get_current_active_user)):
     """모임 참가자들에게 알림 전송 (모임 매니저만 가능)"""
     try:
+        from services.push_delivery_service import send_push_to_user
         # 모임 존재 확인
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
         if not meeting:
@@ -1090,6 +1091,13 @@ async def send_meeting_notification(meeting_id: int,
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 db.flush()  # notification.id를 얻기 위해 flush
                 notification_ids.append(notification.id)
                 sent_count += 1
@@ -1124,6 +1132,7 @@ async def send_meeting_reminder(meeting_id: int,
                                 current_user: User = Depends(get_current_active_user)):
     """모임 리마인더 전송 (모임 매니저만 가능)"""
     try:
+        from services.push_delivery_service import send_push_to_user
         # 모임 존재 확인
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
         if not meeting:
@@ -1165,6 +1174,13 @@ async def send_meeting_reminder(meeting_id: int,
                                             status=NotificationStatus.UNREAD.value)
 
                 db.add(notification)
+                send_push_to_user(db=db,
+                                  user_id=participant_obj.user_id,
+                                  title=notification.title,
+                                  content=notification.content,
+                                  category="meeting",
+                                  target_id=meeting_id,
+                                  extra_data={"meeting_type": meeting.meeting_type.value.lower()})
                 sent_count += 1
 
             except Exception as e:

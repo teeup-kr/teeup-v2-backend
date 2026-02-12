@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from models import Notification, NotificationType, NotificationStatus, User
 from datetime import datetime
 import logging
+from services.push_delivery_service import send_push_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,10 @@ def create_notification(
     user_id: int,
     notification_type: NotificationType,
     title: str,
-    content: str
+    content: str,
+    category: str = "system",
+    target_id: int = None,
+    extra_data: dict = None,
 ) -> Notification:
     """알림 생성"""
     try:
@@ -29,7 +33,19 @@ def create_notification(
         db.add(notification)
         db.commit()
         db.refresh(notification)
-        
+
+        try:
+            push_sent_count = send_push_to_user(db=db,
+                                                user_id=user_id,
+                                                title=title,
+                                                content=content,
+                                                category=category,
+                                                target_id=target_id,
+                                                extra_data=extra_data)
+            logger.info(f"푸시 전송 완료 - user_id: {user_id}, sent_count: {push_sent_count}")
+        except Exception as push_error:
+            logger.error(f"푸시 전송 실패 - user_id: {user_id}, error: {str(push_error)}")
+
         logger.info(f"알림 생성 완료 - user_id: {user_id}, type: {notification_type}, title: {title}")
         return notification
         
@@ -73,7 +89,9 @@ def create_meeting_notification(
         user_id=user_id,
         notification_type=NotificationType.MEETING_REMINDER,
         title=title,
-        content=content
+        content=content,
+        category="meeting",
+        target_id=meeting_id,
     )
 
 def create_social_notification(
@@ -111,7 +129,10 @@ def create_social_notification(
         user_id=user_id,
         notification_type=NotificationType.OTHER,
         title=title,
-        content=content
+        content=content,
+        category="meeting",
+        target_id=meeting_id,
+        extra_data={"meeting_type": "social"},
     )
 
 def create_notice_notification(
@@ -135,7 +156,10 @@ def create_notice_notification(
         user_id=user_id,
         notification_type=NotificationType.NEW_NOTICE,
         title=title,
-        content=content
+        content=content,
+        category="notice",
+        target_id=notice_id,
+        extra_data={"club_id": str(club_id)} if club_id is not None else None,
     )
 
 def create_inquiry_response_notification(
@@ -153,7 +177,8 @@ def create_inquiry_response_notification(
         user_id=user_id,
         notification_type=NotificationType.SYSTEM,
         title=title,
-        content=content
+        content=content,
+        category="system",
     )
 
 def create_admin_notification(
@@ -177,7 +202,8 @@ def create_admin_notification(
                 user_id=admin.id,
                 notification_type=NotificationType.SYSTEM,
                 title=title,
-                content=content
+                content=content,
+                category="system",
             )
             notifications.append(notification)
         
@@ -232,7 +258,9 @@ def create_club_membership_notification(
         user_id=user_id,
         notification_type=notification_type,
         title=title,
-        content=content
+        content=content,
+        category="club",
+        target_id=club_id,
     )
 
 def create_club_membership_request_notification(
@@ -253,7 +281,9 @@ def create_club_membership_request_notification(
             user_id=user_id,
             notification_type=NotificationType.CLUB_MEMBERSHIP_REQUEST,
             title=title,
-            content=content
+            content=content,
+            category="club",
+            target_id=club_id,
         )
         notifications.append(notification)
     
@@ -277,7 +307,10 @@ def create_team_formation_completed_notification(
             user_id=user_id,
             notification_type=NotificationType.TEAM_FORMATION_COMPLETED,
             title=title,
-            content=content
+            content=content,
+            category="meeting",
+            target_id=meeting_id,
+            extra_data={"meeting_type": "rounding"},
         )
         
         logger.info(f"팀 편성 완료 알림 생성 성공 - user_id: {user_id}, meeting_id: {meeting_id}")
@@ -303,5 +336,8 @@ def create_social_settlement_completed_notification(
         user_id=user_id,
         notification_type=NotificationType.SOCIAL_SETTLEMENT_COMPLETED,
         title=title,
-        content=content
+        content=content,
+        category="meeting",
+        target_id=meeting_id,
+        extra_data={"meeting_type": "social"},
     )
