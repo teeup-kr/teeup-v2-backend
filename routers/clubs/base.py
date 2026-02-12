@@ -382,6 +382,25 @@ async def get_club(club_id: str, db: Session = Depends(get_db), current_user: Us
             region.gungu_code for region in db.query(ClubRegion).filter(ClubRegion.club_id == club.id).all()
         ]
 
+        # 회비 요약 (비회원 포함 조회용)
+        from models import ClubFee
+        from models.enums import BillingCycle
+        regular_fee = db.query(ClubFee).filter(
+            ClubFee.club_id == club.id,
+            ClubFee.is_active == True,
+            ClubFee.cycle.in_([BillingCycle.MONTHLY, BillingCycle.QUARTERLY, BillingCycle.YEARLY])
+        ).first()
+        cycle_labels = {"MONTHLY": "월 1회", "QUARTERLY": "분기 1회", "YEARLY": "연 1회"}
+        if regular_fee:
+            club.fee_summary = {
+                "has_regular_fee": True,
+                "amount": float(regular_fee.amount) if regular_fee.amount else None,
+                "cycle": regular_fee.cycle.value if regular_fee.cycle else None,
+                "cycle_label": cycle_labels.get(regular_fee.cycle.value, regular_fee.cycle.value) if regular_fee.cycle else None,
+            }
+        else:
+            club.fee_summary = {"has_regular_fee": False, "amount": None, "cycle": None, "cycle_label": None}
+
         # 대표자명 계산: 항상 현재 리더의 실명으로 설정
         original_representative_name = club.representative_name
         try:

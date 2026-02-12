@@ -66,23 +66,23 @@ async def create_regulation_category(
                 detail="클럽 리더나 매니저만 규정 카테고리를 생성할 수 있습니다."
             )
         
-        # 중복 순서 확인
-        existing_category = db.query(RegulationCategory).filter(
-            RegulationCategory.club_id == club.id,  # 실제 클럽 ID 사용
-            RegulationCategory.order == category_data.order
+        # order 결정: 미지정이거나 중복 시 자동 부여
+        order = category_data.order
+        existing_same_order = db.query(RegulationCategory).filter(
+            RegulationCategory.club_id == club.id,
+            RegulationCategory.order == order
         ).first()
-        
-        if existing_category:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="이미 해당 순서를 사용하는 카테고리가 있습니다."
-            )
-        
+        if existing_same_order:
+            max_order = db.query(RegulationCategory).filter(
+                RegulationCategory.club_id == club.id
+            ).count()
+            order = max_order
+
         # 카테고리 생성
         category = RegulationCategory(
             club_id=club.id,  # 실제 클럽 ID 사용
             name=category_data.name,
-            order=category_data.order
+            order=order
         )
         
         db.add(category)
@@ -176,6 +176,24 @@ async def get_regulation_categories(
             detail="서버 내부 오류가 발생했습니다."
         )
 
+def _resolve_club(db: Session, club_id: str):
+    """club_id(display_id 또는 숫자)로 Club 조회"""
+    club = db.query(Club).filter(
+        Club.display_id == club_id,
+        Club.deleted_at.is_(None)
+    ).first()
+    if not club:
+        try:
+            club_id_int = int(club_id)
+            club = db.query(Club).filter(
+                Club.id == club_id_int,
+                Club.deleted_at.is_(None)
+            ).first()
+        except ValueError:
+            pass
+    return club
+
+
 @router.put("/{club_id}/regulations/categories/{category_id}", response_model=RegulationCategoryResponse)
 async def update_regulation_category(
     club_id: str,
@@ -186,9 +204,15 @@ async def update_regulation_category(
 ):
     """규정 카테고리 수정 (리더/매니저만 가능)"""
     try:
+        club = _resolve_club(db, club_id)
+        if not club:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="클럽을 찾을 수 없습니다."
+            )
         # 클럽 멤버 권한 확인
         membership = db.query(ClubMembership).filter(
-            ClubMembership.club_id == club_id,
+            ClubMembership.club_id == club.id,
             ClubMembership.user_id == current_user.id,
             ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER])
         ).first()
@@ -202,7 +226,7 @@ async def update_regulation_category(
         # 카테고리 조회
         category = db.query(RegulationCategory).filter(
             RegulationCategory.id == category_id,
-            RegulationCategory.club_id == club_id
+            RegulationCategory.club_id == club.id
         ).first()
         
         if not category:
@@ -214,7 +238,7 @@ async def update_regulation_category(
         # 순서 변경 시 중복 확인
         if category_data.order is not None and category_data.order != category.order:
             existing_category = db.query(RegulationCategory).filter(
-                RegulationCategory.club_id == club_id,
+                RegulationCategory.club_id == club.id,
                 RegulationCategory.order == category_data.order,
                 RegulationCategory.id != category_id
             ).first()
@@ -255,9 +279,15 @@ async def delete_regulation_category(
 ):
     """규정 카테고리 삭제 (리더/매니저만 가능)"""
     try:
+        club = _resolve_club(db, club_id)
+        if not club:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="클럽을 찾을 수 없습니다."
+            )
         # 클럽 멤버 권한 확인
         membership = db.query(ClubMembership).filter(
-            ClubMembership.club_id == club_id,
+            ClubMembership.club_id == club.id,
             ClubMembership.user_id == current_user.id,
             ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER])
         ).first()
@@ -271,7 +301,7 @@ async def delete_regulation_category(
         # 카테고리 조회
         category = db.query(RegulationCategory).filter(
             RegulationCategory.id == category_id,
-            RegulationCategory.club_id == club_id
+            RegulationCategory.club_id == club.id
         ).first()
         
         if not category:
