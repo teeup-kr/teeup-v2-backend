@@ -7,7 +7,7 @@ from typing import Optional
 import logging
 
 from database import get_db
-from models import Admin, UserStatus, Provider
+from models import Admin, UserStatus, Provider, AdminRole
 from schemas import AdminResponse, AdminCreate, AdminUpdate, AdminPasswordUpdate, PaginatedResponse
 from utils.datetime_utils import get_kst_now
 from .deps import get_admin_user
@@ -42,6 +42,7 @@ async def get_admin_list(
         data = [
             AdminResponse(id=a.id, email=a.email, name=a.name, profile_image=a.profile_image, phone_number=a.phone_number,
                           provider=a.provider.value if a.provider else None, status=a.status.value if a.status else None,
+                          role=a.role.value if a.role else "SUPER_ADMIN",
                           created_at=a.created_at, updated_at=a.updated_at)
             for a in admins
         ]
@@ -59,6 +60,7 @@ async def get_admin_detail(admin_id: int, db: Session = Depends(get_db), current
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="관리자를 찾을 수 없습니다")
     return AdminResponse(id=admin.id, email=admin.email, name=admin.name, profile_image=admin.profile_image, phone_number=admin.phone_number,
                         provider=admin.provider.value if admin.provider else None, status=admin.status.value if admin.status else None,
+                        role=admin.role.value if admin.role else "SUPER_ADMIN",
                         created_at=admin.created_at, updated_at=admin.updated_at)
 
 
@@ -69,13 +71,20 @@ async def create_admin(data: AdminCreate, db: Session = Depends(get_db), current
     existing = db.query(Admin).filter(Admin.email == data.email, Admin.deleted_at.is_(None)).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 존재하는 이메일입니다")
+    role_val = AdminRole.SUPER_ADMIN
+    if data.role:
+        try:
+            role_val = AdminRole[data.role]
+        except KeyError:
+            pass
     admin = Admin(email=data.email, password=hashlib.sha256(data.password.encode()).hexdigest(), name=data.name,
-                  phone_number=data.phone_number, profile_image=data.profile_image, provider=Provider.LOCAL, status=UserStatus.ACTIVE)
+                  phone_number=data.phone_number, profile_image=data.profile_image, provider=Provider.LOCAL, status=UserStatus.ACTIVE, role=role_val)
     db.add(admin)
     db.commit()
     db.refresh(admin)
     return AdminResponse(id=admin.id, email=admin.email, name=admin.name, profile_image=admin.profile_image, phone_number=admin.phone_number,
                         provider=admin.provider.value if admin.provider else None, status=admin.status.value if admin.status else None,
+                        role=admin.role.value if admin.role else "SUPER_ADMIN",
                         created_at=admin.created_at, updated_at=admin.updated_at)
 
 
@@ -96,11 +105,17 @@ async def update_admin(admin_id: int, data: AdminUpdate, db: Session = Depends(g
             admin.status = UserStatus[data.status]
         except KeyError:
             pass
+    if data.role is not None:
+        try:
+            admin.role = AdminRole[data.role]
+        except KeyError:
+            pass
     admin.updated_at = get_kst_now()
     db.commit()
     db.refresh(admin)
     return AdminResponse(id=admin.id, email=admin.email, name=admin.name, profile_image=admin.profile_image, phone_number=admin.phone_number,
                         provider=admin.provider.value if admin.provider else None, status=admin.status.value if admin.status else None,
+                        role=admin.role.value if admin.role else "SUPER_ADMIN",
                         created_at=admin.created_at, updated_at=admin.updated_at)
 
 

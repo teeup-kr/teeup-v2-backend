@@ -92,8 +92,11 @@ async def get_current_admin(current_user: dict = Depends(get_admin_user)):
             "email": current_user["email"],
             "name": current_user.get("name", ""),
             "nickname": current_user.get("name", ""),
-            "role": "ADMIN",
+            "phone_number": current_user.get("phone_number"),
+            "role": current_user.get("role", "SUPER_ADMIN"),
             "status": current_user.get("status", "ACTIVE"),
+            "created_at": current_user.get("created_at"),
+            "updated_at": current_user.get("updated_at"),
         }
     except Exception as e:
         logger.error(f"관리자 정보 조회 중 오류: {str(e)}")

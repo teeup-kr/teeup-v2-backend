@@ -5,7 +5,7 @@
 from .enums import (UserStatus, Provider, Gender, ClubType, ClubStatus, ClubRole, MembershipStatus, MeetingType, MeetingSubtype, SocialType, MeetingStatus,
                     SettlementMethod, ParticipantStatus, ParticipantRole, ParticipantType, PaymentStatus, SubscriptionStatus,
                     BillingCycle, TermsType, InquiryType, InquiryStatus, FeeType, ExpenseStatus, ExpenseItemType, NoticeType, TokenRevokeReason,
-                    HandicapUpdateMethod, NotificationType, NotificationStatus)
+                    HandicapUpdateMethod, NotificationType, NotificationStatus, AdminRole)
 
 # User 관련 모델
 from .user import User, RefreshTokenBlacklist
@@ -67,6 +67,7 @@ __all__ = [
     "HandicapUpdateMethod",
     "NotificationType",
     "NotificationStatus",
+    "AdminRole",
     # User
     "User",
     "RefreshTokenBlacklist",
