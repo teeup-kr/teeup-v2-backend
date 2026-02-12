@@ -31,6 +31,14 @@ class ClubUpdate(BaseModel):
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
 
 
+class ClubFeeSummary(BaseModel):
+    """클럽 상세용 회비 요약 (비회원도 조회 가능)"""
+    has_regular_fee: bool = False
+    amount: Optional[float] = None
+    cycle: Optional[str] = None  # MONTHLY, QUARTERLY, YEARLY
+    cycle_label: Optional[str] = None  # 월 1회, 분기 1회, 연 1회
+
+
 class ClubResponse(BaseModel):
     id: int
     display_id: Optional[str]
@@ -49,6 +57,7 @@ class ClubResponse(BaseModel):
     updated_at: datetime
     membership_status: Optional[str] = None  # 현재 사용자의 멤버십 상태
     membership_role: Optional[str] = None  # 현재 사용자의 멤버십 역할
+    fee_summary: Optional[ClubFeeSummary] = None  # 회비 요약 (비회원 포함 조회용)
 
     class Config:
         from_attributes = True
@@ -247,6 +256,7 @@ class RegulationListResponse(BaseModel):
 class RegulationCategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="카테고리 이름")
     description: Optional[str] = Field(None, description="카테고리 설명")
+    order: int = Field(default=0, description="정렬 순서")
 
 
 class RegulationCategoryUpdate(BaseModel):
