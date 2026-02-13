@@ -38,6 +38,7 @@ from config import settings
 from database import get_db, init_database, test_connection
 from routers import (auth, plans, payments, payment_methods, region, subscriptions, users, terms, notices, inquiries,
                      upload, admin, oauth, faq)
+from routers.internal import loadtest_router
 from routers.clubs import (
     base_router as clubs_router,
     notices_router as clubs_notices_router,
@@ -194,6 +195,7 @@ app.include_router(inquiries.router, prefix="/api/v1")
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(faq.client_router, prefix="/api/v1")
+app.include_router(loadtest_router, prefix="/api/v1")
 
 # 외부 데이터 관련 API 라우터
 app.include_router(region.region_router, prefix="/api/v1")
