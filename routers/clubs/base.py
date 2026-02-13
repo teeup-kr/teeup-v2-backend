@@ -10,12 +10,39 @@ logger = logging.getLogger(__name__)
 from database import get_db
 from models import User, Club, ClubMembership, ClubRegion
 from schemas import (ClubCreate, ClubUpdate, ClubResponse, ClubMembersResponse, ClubMembershipResponse,
-                     PaginatedResponse, MessageResponse, ClubRole, ClubStatus, MembershipStatus)
+                     PaginatedResponse, MessageResponse, ClubRole, ClubStatus, MembershipStatus, MeetingStatus,
+                     MeetingType)
 from routers.auth import get_current_user, get_current_active_user
 from utils.datetime_utils import get_kst_now
 from utils.region import validate_gungu_codes
 
 router = APIRouter(prefix="/clubs", tags=["클럽 관리"])
+
+
+@router.get("/{club_id}/meetings", response_model=PaginatedResponse)
+async def get_club_meetings_legacy(
+    club_id: str,
+    page: int = 1,
+    limit: int = 10,
+    status_filter: Optional[MeetingStatus] = None,
+    meeting_type_filter: Optional[MeetingType] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """클럽별 모임 목록 조회 (레거시 경로 호환)"""
+    from routers.meetings.base import get_club_meetings
+
+    return await get_club_meetings(
+        club_id=club_id,
+        page=page,
+        limit=limit,
+        status_filter=status_filter,
+        meeting_type_filter=meeting_type_filter,
+        search=search,
+        db=db,
+        current_user=current_user,
+    )
 
 
 @router.post("/register", response_model=ClubResponse)
