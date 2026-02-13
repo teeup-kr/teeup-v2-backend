@@ -1,1 +1,0 @@
-"""Load test scaffold package."""

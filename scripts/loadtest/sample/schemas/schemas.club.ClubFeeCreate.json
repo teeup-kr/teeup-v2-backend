@@ -1,0 +1,7 @@
+{
+  "name": "test",
+  "amount": 1.0,
+  "cycle": "MONTHLY",
+  "description": "test",
+  "is_active": true
+}

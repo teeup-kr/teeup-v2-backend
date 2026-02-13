@@ -1,0 +1,16 @@
+{
+  "email": "loadtest.user@teeup.run",
+  "realname": "Load User",
+  "nickname": "load_user",
+  "phone_number": "01000001234",
+  "birthdate": "1990-01-01",
+  "gender": "MALE",
+  "handicap_init": 12.0,
+  "average_score_init": 95,
+  "status": "ACTIVE",
+  "needs_terms_agreement": false,
+  "terms_agreement": true,
+  "privacy_policy": true,
+  "privacy_collection": true,
+  "marketing_consent": false
+}

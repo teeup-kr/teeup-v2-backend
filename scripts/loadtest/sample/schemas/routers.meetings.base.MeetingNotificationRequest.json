@@ -1,0 +1,9 @@
+{
+  "title": "test",
+  "content": "test",
+  "notification_type": "MEETING_UPDATE",
+  "send_to_all_participants": true,
+  "participant_ids": [
+    1
+  ]
+}

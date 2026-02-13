@@ -1,0 +1,18 @@
+{
+  "total_cost": 30000,
+  "green_fee": 10000,
+  "caddy_fee": 10000,
+  "cart_fee": 10000,
+  "other_fee": 0,
+  "green_fee_participants": [
+    1
+  ],
+  "caddy_fee_participants": [
+    1
+  ],
+  "cart_fee_participants": [
+    1
+  ],
+  "other_expense_items": [],
+  "settlement_method": "EQUAL_SPLIT"
+}

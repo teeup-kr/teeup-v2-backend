@@ -126,10 +126,10 @@ python scripts/loadtest/profile_team_formation.py --meeting-id <MEETING_ID> --mo
 ## 포함 파일
 
 - `scripts/loadtest/locustfile.py`: Locust 진입점 및 사용자 클래스
-- `scripts/loadtest/auth_provider.py`: bootstrap, OAuth mock, 온보딩 헬퍼
-- `scripts/loadtest/scenario_user.py`: 일반 사용자 시나리오
-- `scripts/loadtest/scenario_manager.py`: 리더/매니저 시나리오
-- `scripts/loadtest/state_store.py`: 공유 런타임 상태 저장
+- `scripts/loadtest/lib/auth_provider.py`: bootstrap, OAuth mock, 온보딩 헬퍼
+- `scripts/loadtest/lib/scenario_user.py`: 일반 사용자 시나리오
+- `scripts/loadtest/lib/scenario_manager.py`: 리더/매니저 시나리오
+- `scripts/loadtest/lib/state_store.py`: 공유 런타임 상태 저장
 - `scripts/loadtest/report_parser.py`: Locust CSV 요약 파서
 - `scripts/loadtest/run_headless.sh`: 헤드리스 실행 스크립트
 - `scripts/loadtest/profile_team_formation.py`: 팀 편성 line-profiler 실행 스크립트
@@ -184,7 +184,7 @@ python scripts/loadtest/profile_team_formation.py --meeting-id <MEETING_ID> --mo
 ## 참고
 
 - `settlement/rounding` payload는 백엔드에서 dict 기반으로 처리됩니다.
-- 정산 검증 규칙이 변경되면 `scripts/loadtest/scenario_manager.py`의 payload를 먼저 갱신하세요.
+- 정산 검증 규칙이 변경되면 `scripts/loadtest/lib/scenario_manager.py`의 payload를 먼저 갱신하세요.
 
 ## 본 코드 변경내역
 
@@ -199,10 +199,10 @@ python scripts/loadtest/profile_team_formation.py --meeting-id <MEETING_ID> --mo
 
 로드테스트 스크립트 변경:
 - `scripts/loadtest/locustfile.py`: 사용자 타입(Regular/Manager) 및 태스크 구성
-- `scripts/loadtest/auth_provider.py`: bootstrap 1회 실행 + OAuth mock + 약관 동의 + 프로필 완성
-- `scripts/loadtest/scenario_user.py`: 일반 사용자 시나리오(클럽/모임/점수 입력)
-- `scripts/loadtest/scenario_manager.py`: 운영자 시나리오(클럽 관리/승인/워크플로우/정산/완료)
-- `scripts/loadtest/state_store.py`: 사용자/클럽/모임 공유 상태 저장소
+- `scripts/loadtest/lib/auth_provider.py`: bootstrap 1회 실행 + OAuth mock + 약관 동의 + 프로필 완성
+- `scripts/loadtest/lib/scenario_user.py`: 일반 사용자 시나리오(클럽/모임/점수 입력)
+- `scripts/loadtest/lib/scenario_manager.py`: 운영자 시나리오(클럽 관리/승인/워크플로우/정산/완료)
+- `scripts/loadtest/lib/state_store.py`: 사용자/클럽/모임 공유 상태 저장소
 
 실행/분석 보조 추가:
 - `scripts/loadtest/run_headless.sh`: 헤드리스 실행 스크립트

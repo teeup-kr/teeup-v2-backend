@@ -1,0 +1,6 @@
+{
+  "user_id": 1,
+  "guest_id": 1,
+  "is_paid": true,
+  "amount_paid": 1.0
+}

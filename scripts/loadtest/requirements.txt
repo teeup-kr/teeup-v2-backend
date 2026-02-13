@@ -1,3 +1,6 @@
+# 설치:
+#   .venv/bin/pip install -r scripts/loadtest/requirements.txt
+
 locust>=2.31,<3
 line-profiler>=4.1,<5
-
+matplotlib>=3.8,<4

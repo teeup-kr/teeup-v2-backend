@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# 실행:
+#   chmod +x scripts/loadtest/run_headless.sh
+#   scripts/loadtest/run_headless.sh
+# 테스트 요약:
+#   - locustfile.py를 헤드리스 모드로 실행
+#   - 사용자 수/증가율/실행시간은 환경변수로 제어
+#   - 결과 CSV를 scripts/loadtest/output 하위로 저장
+
 set -euo pipefail
 
 BASE_URL="${LOADTEST_BASE_URL:-http://127.0.0.1:8200}"
@@ -18,4 +26,3 @@ locust \
   -t "$RUN_TIME" \
   --csv "$CSV_PREFIX" \
   --csv-full-history
-

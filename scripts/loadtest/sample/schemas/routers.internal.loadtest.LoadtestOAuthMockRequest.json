@@ -1,0 +1,10 @@
+{
+  "provider_id": "load-single-test-1",
+  "email": "load+single-test-1@teeup.run",
+  "name": "load_single_test",
+  "picture": "",
+  "verified_email": true,
+  "push_token": "mock-push-token",
+  "token_type": "FCM",
+  "enabled": true
+}

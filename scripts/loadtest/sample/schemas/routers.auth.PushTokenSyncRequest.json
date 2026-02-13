@@ -1,0 +1,5 @@
+{
+  "push_token": "test",
+  "token_type": "FCM",
+  "enabled": true
+}

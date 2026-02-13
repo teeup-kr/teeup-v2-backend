@@ -1,0 +1,29 @@
+{
+  "name": "loadtest-round",
+  "description": "loadtest meeting",
+  "location": "Load Test CC",
+  "meeting_time": "2099-12-31T10:00:00+00:00",
+  "tee_times": [
+    "07:30"
+  ],
+  "max_participants": 16,
+  "meeting_type": "ROUND",
+  "meeting_subtype": "REGULAR",
+  "total_cost": 30000,
+  "green_fee": 10000,
+  "caddy_fee": 10000,
+  "cart_fee": 10000,
+  "settlement_method": "EQUAL_SPLIT",
+  "course_name": "Load Course",
+  "hole_count": 18,
+  "reservation_name": "loadtest",
+  "application_deadline": "2099-12-30T10:00:00+00:00",
+  "club_id": 1,
+  "team_formation_mode": "GENDER_MIXED_RANDOM",
+  "team_size": 4,
+  "is_private": false,
+  "selected_participants": [
+    1
+  ],
+  "selected_guests": []
+}

@@ -1,0 +1,16 @@
+{
+  "expense_items": [
+    {
+      "title": "meal",
+      "amount": 12000,
+      "participants": [
+        1
+      ]
+    }
+  ],
+  "settlement_targets": [
+    1
+  ],
+  "notes": "loadtest social settlement",
+  "exclude_remaining_amount": false
+}
