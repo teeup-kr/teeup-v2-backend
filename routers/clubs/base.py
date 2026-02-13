@@ -69,8 +69,7 @@ async def create_club(club_data: ClubCreate,
                     status=ClubStatus.ACTIVE)
 
         db.add(club)
-        db.commit()
-        db.refresh(club)
+        db.flush()
 
         # 디버깅: current_user 타입 확인
         print(f"current_user 타입: {type(current_user)}")
@@ -90,10 +89,10 @@ async def create_club(club_data: ClubCreate,
         membership = ClubMembership(club_id=club.id, user_id=user_id, role=ClubRole.LEADER)
 
         db.add(membership)
-        db.commit()
 
         # 멤버 수 업데이트
         club.member_count = 1
+
         db.commit()
         db.refresh(club)
 
