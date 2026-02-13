@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from create_default_terms import create_default_terms
+from utils.handicap_calculator import calculate_handicap_from_average_score
 from models import (
     Club,
     ClubMembership,
@@ -115,6 +116,9 @@ def upsert_users(db: Session, names: list[str], target_count: int,
             counters["skipped"] += 1
             continue
 
+        average_score = 82 + (i % 12)
+        handicap = calculate_handicap_from_average_score(average_score)
+
         user = User(
             email=email,
             nickname=nickname,
@@ -123,10 +127,10 @@ def upsert_users(db: Session, names: list[str], target_count: int,
             status=UserStatus.ACTIVE,
             gender=rng.choice([Gender.MALE, Gender.FEMALE]),
             birthdate=datetime(1980 + (i % 20), (i % 12) + 1, ((i % 28) + 1)),
-            average_score_init=82 + (i % 12),
-            average_score=82 + (i % 12),
-            handicap_init=max(0, (82 + (i % 12)) - 72),
-            handicap=max(0, (82 + (i % 12)) - 72),
+            average_score_init=average_score,
+            average_score=average_score,
+            handicap_init=handicap,
+            handicap=handicap,
             terms_agreement=True,
             privacy_policy=True,
             privacy_collection=True,

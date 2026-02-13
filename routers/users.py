@@ -213,7 +213,7 @@ async def update_my_profile(
         # ---------------------------
         from models import Gender, HandicapUpdateMethod
         from utils.handicap_calculator import (
-            calculate_initial_handicap_from_average, )
+            calculate_handicap_from_average_score, )
         from datetime import datetime
 
         for field, value in update_data.items():
@@ -247,11 +247,10 @@ async def update_my_profile(
         # ---------------------------
         if (user.average_score is None and "average_score_init" in update_data
                 and update_data["average_score_init"] is not None):
-            calculated_handicap = calculate_initial_handicap_from_average(update_data["average_score_init"])
-            if calculated_handicap is not None:
-                user.average_score_init = update_data["average_score_init"]
-                user.handicap_init = calculated_handicap
-                user.handicap_update_method = HandicapUpdateMethod.MANUAL
+            calculated_handicap = calculate_handicap_from_average_score(update_data["average_score_init"])
+            user.average_score_init = update_data["average_score_init"]
+            user.handicap_init = calculated_handicap
+            user.handicap_update_method = HandicapUpdateMethod.MANUAL
 
         db.commit()
         db.refresh(user)
@@ -412,7 +411,7 @@ async def update_user(
         # ---------------------------
         from models import Gender, HandicapUpdateMethod
         from utils.handicap_calculator import (
-            calculate_initial_handicap_from_average, )
+            calculate_handicap_from_average_score, )
         from datetime import datetime
 
         for field, value in update_data.items():
@@ -441,11 +440,10 @@ async def update_user(
         # ---------------------------
         if (user.average_score is None and "average_score_init" in update_data
                 and update_data["average_score_init"] is not None):
-            calculated_handicap = calculate_initial_handicap_from_average(update_data["average_score_init"])
-            if calculated_handicap is not None:
-                user.average_score_init = update_data["average_score_init"]
-                user.handicap_init = calculated_handicap
-                user.handicap_update_method = HandicapUpdateMethod.MANUAL
+            calculated_handicap = calculate_handicap_from_average_score(update_data["average_score_init"])
+            user.average_score_init = update_data["average_score_init"]
+            user.handicap_init = calculated_handicap
+            user.handicap_update_method = HandicapUpdateMethod.MANUAL
 
         db.commit()
         db.refresh(user)
@@ -1347,7 +1345,7 @@ async def update_user_handicap(
             )
 
         from decimal import Decimal
-        from utils.handicap_calculator import calculate_initial_handicap_from_average
+        from utils.handicap_calculator import calculate_handicap_from_average_score
         from models import HandicapUpdateMethod
 
         # average_score가 있으면 자동 계산 (우선순위 1)
@@ -1359,14 +1357,13 @@ async def update_user_handicap(
                     detail="평균 타수는 55 이상 144 이하여야 합니다.",
                 )
 
-            calculated_handicap = calculate_initial_handicap_from_average(handicap_data.average_score)
-            if calculated_handicap is not None:
-                logger.info(
-                    f"평균 타수로부터 핸디캡 자동 계산 - user_id: {user_id}, average_score: {handicap_data.average_score}, calculated_handicap: {calculated_handicap}"
-                )
-                user.handicap_init = calculated_handicap
-                user.average_score = handicap_data.average_score
-                user.handicap_update_method = HandicapUpdateMethod.MANUAL
+            calculated_handicap = calculate_handicap_from_average_score(handicap_data.average_score)
+            logger.info(
+                f"평균 타수로부터 핸디캡 자동 계산 - user_id: {user_id}, average_score: {handicap_data.average_score}, calculated_handicap: {calculated_handicap}"
+            )
+            user.handicap_init = calculated_handicap
+            user.average_score = handicap_data.average_score
+            user.handicap_update_method = HandicapUpdateMethod.MANUAL
         # initial_handicap만 있으면 직접 입력 (하위 호환성)
         elif handicap_data.initial_handicap is not None:
             # 핸디캡 값을 float로 변환
@@ -1438,6 +1435,8 @@ async def calculate_handicap(
 ):
     """사용자 핸디캡 자동 계산 (평균타수 기반)"""
     try:
+        from utils.handicap_calculator import calculate_handicap_from_average_score as calc_handicap_from_average
+
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(
@@ -1451,8 +1450,8 @@ async def calculate_handicap(
                 detail="평균타수가 설정되지 않아 핸디캡을 계산할 수 없습니다.",
             )
 
-        # 핸디캡 계산 (파 72 기준)
-        calculated_handicap = max(0, user.average_score - 72)
+        # 핸디캡 계산 (공통 계산 유틸 사용)
+        calculated_handicap = float(calc_handicap_from_average(user.average_score))
 
         return HandicapResponse(
             user_id=user.id,
