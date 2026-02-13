@@ -58,13 +58,25 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
 
     # 사용자가 생성한 프라이빗 라운딩 ID 목록
     user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
+    manager_club_ids = db.query(ClubMembership.club_id).filter(
+        and_(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+        )
+    ).subquery()
 
-    # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자인 경우
+    # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중
+    # 참가자/생성자/클럽 리더·매니저인 경우
     query = query.filter(
         or_(
             Meeting.is_private == False,  # 일반 라운딩
             and_(Meeting.is_private == True,
-                 or_(Meeting.id.in_(user_participant_meeting_ids), Meeting.id.in_(user_created_meeting_ids)))))
+                 or_(
+                     Meeting.id.in_(user_participant_meeting_ids),
+                     Meeting.id.in_(user_created_meeting_ids),
+                     Meeting.club_id.in_(manager_club_ids),
+                 ))))
 
     # 상태 필터
     if status:
@@ -327,9 +339,18 @@ async def get_round(meeting_id: int,
                      MeetingParticipant.user_id == current_user.id)).first()
 
             is_creator = meeting.created_by == current_user.id
+            is_manager_or_leader = db.query(ClubMembership).filter(
+                and_(
+                    ClubMembership.user_id == current_user.id,
+                    ClubMembership.club_id == meeting.club_id,
+                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+                    ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+                )
+            ).first()
 
-            if not is_participant and not is_creator:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="프라이빗 라운딩은 참가자 또는 생성자만 조회할 수 있습니다.")
+            if not is_participant and not is_creator and not is_manager_or_leader:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail="프라이빗 라운딩은 참가자/생성자/클럽 리더·매니저만 조회할 수 있습니다.")
     else:
         # 일반 라운딩: 클럽 멤버십 확인 (관리자는 제외)
         from models import Admin
@@ -608,10 +629,18 @@ async def get_round_participants(meeting_id: int,
                          MeetingParticipant.user_id == current_user.id)).first()
 
                 is_creator = meeting.created_by == current_user.id
+                is_manager_or_leader = db.query(ClubMembership).filter(
+                    and_(
+                        ClubMembership.user_id == current_user.id,
+                        ClubMembership.club_id == meeting.club_id,
+                        ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+                        ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+                    )
+                ).first()
 
-                if not is_participant and not is_creator:
+                if not is_participant and not is_creator and not is_manager_or_leader:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                        detail="프라이빗 라운딩의 참가자 목록은 참가자 또는 생성자만 조회할 수 있습니다.")
+                                        detail="프라이빗 라운딩의 참가자 목록은 참가자/생성자/클럽 리더·매니저만 조회할 수 있습니다.")
         else:
             # 일반 라운딩: 클럽 멤버십 확인 (관리자는 제외)
             if user_role != "ADMIN":

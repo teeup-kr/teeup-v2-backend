@@ -15,7 +15,7 @@ from models import (
     User, Club, ClubMembership, Meeting, MeetingParticipant, ParticipantType, Guest
 )
 from schemas import (
-    MeetingType, MeetingStatus
+    MeetingType, MeetingStatus, ClubRole
 )
 from schemas import (
     SocialMeetingCreate, MeetingUpdate, MeetingResponse,
@@ -128,7 +128,7 @@ async def create_social(
     current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
-    """소셜 모임 생성 (모든 멤버 가능)"""
+    """소셜 모임 생성 (리더/매니저만 가능)"""
     
     # 클럽 멤버십 확인
     membership = db.query(ClubMembership).filter(
@@ -143,6 +143,12 @@ async def create_social(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="해당 클럽의 멤버가 아닙니다."
+        )
+
+    if membership.role not in [ClubRole.LEADER, ClubRole.MANAGER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="클럽 리더/매니저만 소셜 모임을 생성할 수 있습니다."
         )
     
     # 모임 생성
