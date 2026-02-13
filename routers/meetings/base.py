@@ -36,6 +36,7 @@ from utils.cuid import generate_cuid
 from utils.handicap_calculator import (check_all_holes_completed, process_participant_score,
                                        get_user_handicap_for_formation, save_score_to_history, update_user_handicap,
                                        create_meeting_results)
+from utils.notification_service import notify_round_participants_status_changed
 
 router = APIRouter(prefix="/meetings", tags=["모임 관리"])
 
@@ -598,6 +599,84 @@ async def get_my_meetings(page: int = 1,
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"서버 내부 오류가 발생했습니다: {str(e)}")
 
 
+@router.get("/my/participating", response_model=PaginatedResponse)
+async def get_my_participating_meetings(page: int = 1,
+                                        limit: int = 10,
+                                        status_filter: Optional[MeetingStatus] = None,
+                                        meeting_type_filter: Optional[MeetingType] = None,
+                                        db: Session = Depends(get_db),
+                                        current_user: User = Depends(get_current_active_user)):
+    """내가 참여중인(참가자) 모임 목록 조회"""
+    try:
+        # 페이지네이션 계산
+        offset = (page - 1) * limit
+
+        # 내가 참가자인 모임만 조회 (생성자 조건 제외)
+        participant_meetings = db.query(MeetingParticipant.meeting_id).filter(
+            MeetingParticipant.user_id == current_user.id,
+            MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
+        ).subquery()
+
+        my_meetings_query = db.query(Meeting).filter(Meeting.id.in_(participant_meetings))
+
+        if status_filter:
+            my_meetings_query = my_meetings_query.filter(Meeting.status == status_filter)
+
+        if meeting_type_filter:
+            my_meetings_query = my_meetings_query.filter(Meeting.meeting_type == meeting_type_filter)
+
+        # 총 개수
+        total_count = my_meetings_query.count()
+
+        # 페이지네이션 적용
+        meetings = my_meetings_query.order_by(Meeting.meeting_time.desc()).offset(offset).limit(limit).all()
+
+        # 응답 데이터 구성
+        meetings_data = []
+        for meeting in meetings:
+            # 클럽 정보 조회
+            club = db.query(Club).filter(Club.id == meeting.club_id).first()
+
+            # 참가자 수 조회
+            participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
+
+            # 내 참가 정보 조회
+            my_participation = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting.id, MeetingParticipant.user_id == current_user.id).first()
+
+            meetings_data.append({
+                "id": meeting.id,
+                "name": meeting.name,
+                "description": meeting.description,
+                "location": meeting.location,
+                "meeting_time": meeting.meeting_time,
+                "max_participants": meeting.max_participants,
+                "meeting_type": meeting.meeting_type.value if meeting.meeting_type else None,
+                "course_name": meeting.course_name,
+                "hole_count": meeting.hole_count,
+                "status": meeting.status,
+                "cancel_reason": meeting.cancel_reason,
+                "club_id": meeting.club_id,
+                "club_name": club.name if club else "알 수 없는 클럽",
+                "participant_count": participant_count,
+                "my_participation": {
+                    "id": my_participation.id,
+                    "participant_type": my_participation.participant_type
+                } if my_participation else None,
+                "created_at": meeting.created_at,
+                "updated_at": meeting.updated_at
+            })
+
+        # 총 페이지 수 계산
+        total_pages = (total_count + limit - 1) // limit
+
+        return {"data": meetings_data, "total": total_count, "total_pages": total_pages, "page": page, "limit": limit}
+
+    except Exception as e:
+        logger.error(f"내 참여중 모임 목록 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"서버 내부 오류가 발생했습니다: {str(e)}")
+
+
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_meeting(meeting_id: int,
                       db: Session = Depends(get_db),
@@ -749,6 +828,8 @@ async def update_meeting(meeting_id: int,
         if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="모임 매니저만 모임 정보를 수정할 수 있습니다.")
 
+        previous_status = meeting.status
+
         # 모임 정보 수정
         if meeting_data.name is not None:
             meeting.name = meeting_data.name
@@ -776,6 +857,16 @@ async def update_meeting(meeting_id: int,
         
         db.commit()
         db.refresh(meeting)
+
+        try:
+            notify_round_participants_status_changed(
+                db=db,
+                meeting_id=meeting_id,
+                previous_status=previous_status,
+                current_status=meeting.status,
+            )
+        except Exception as e:
+            logger.error(f"라운딩 상태 변경 알림 전송 실패 - meeting_id: {meeting_id}, error: {str(e)}")
 
         # 클럽 정보 조회
         club = db.query(Club).filter(Club.id == meeting.club_id).first()
@@ -899,11 +990,23 @@ async def cancel_meeting(meeting_id: int,
         if meeting.status == MeetingStatus.CANCELED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 취소된 모임입니다.")
 
+        previous_status = meeting.status
+
         # 모임 취소
         cancel_reason = request_data.get('reason', '개설자에 의한 모임 취소')
         meeting.status = MeetingStatus.CANCELED
         meeting.cancel_reason = cancel_reason
         db.commit()
+
+        try:
+            notify_round_participants_status_changed(
+                db=db,
+                meeting_id=meeting_id,
+                previous_status=previous_status,
+                current_status=meeting.status,
+            )
+        except Exception as e:
+            logger.error(f"라운딩 상태 변경 알림 전송 실패 - meeting_id: {meeting_id}, error: {str(e)}")
 
         return {"message": "모임이 성공적으로 취소되었습니다.", "success": True}
 

@@ -37,6 +37,7 @@ from services.push_delivery_service import send_push_to_user
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.handicap_calculator import process_meeting_completion
 from utils.team_formation import TeamFormationEngine
+from utils.notification_service import notify_organizer_participant_added_after_recruitment_closed
 
 router = APIRouter(prefix="/meetings", tags=["meeting-workflow"])
 logger = logging.getLogger(__name__)
@@ -158,6 +159,17 @@ async def add_round_guest(meeting_id: int,
                                                  guest_birthdate=guest_data.birthdate,
                                                  guest_gender=guest_gender_enum,
                                                  db=db)
+
+        try:
+            notify_organizer_participant_added_after_recruitment_closed(
+                db=db,
+                meeting_id=meeting_id,
+                participant_guest_name=guest_data.name,
+            )
+        except Exception as notify_error:
+            logger.error(
+                f"모집 완료 단계 organizer 알림 전송 실패 - meeting_id: {meeting_id}, guest_name: {guest_data.name}, error: {str(notify_error)}"
+            )
 
         return {
             "message": "게스트가 추가되었습니다.",

@@ -13,6 +13,7 @@ import logging
 from database import get_db
 from utils.datetime_utils import get_kst_now
 from utils.amount_split import split_amount_10won, allocate_by_total, allocate_items_to_exact_totals
+from utils.notification_service import notify_round_participants_status_changed
 
 from .deps import get_admin_user
 
@@ -1788,6 +1789,8 @@ async def update_admin_meeting(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
+        previous_status = meeting.status
+
         # 모임 데이터 업데이트
         update_fields = ['name', 'description', 'location', 'meeting_time', 'max_participants', 'status']
         for field in update_fields:
@@ -1803,6 +1806,16 @@ async def update_admin_meeting(meeting_id: int,
         meeting.updated_at = get_kst_now()
         db.commit()
         db.refresh(meeting)
+
+        try:
+            notify_round_participants_status_changed(
+                db=db,
+                meeting_id=meeting_id,
+                previous_status=previous_status,
+                current_status=meeting.status,
+            )
+        except Exception as e:
+            logger.error(f"라운딩 상태 변경 알림 전송 실패(관리자 수정) - meeting_id: {meeting_id}, error: {str(e)}")
 
         # 클럽 정보 조회
         club = db.query(Club).filter(Club.id == meeting.club_id).first()
