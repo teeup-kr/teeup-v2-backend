@@ -36,7 +36,7 @@ class ManagerScenario:
             if role not in ("LEADER", "MANAGER"):
                 continue
             display_id = club["display_id"] if club["display_id"] else str(club["id"])
-            state.managed_club_id = display_id
+            state.managed_club_id = str(club["id"])
             state.managed_club_numeric_id = club["id"]
             self.state_store.upsert_club(club_id=club["id"], display_id=display_id, owner_vu_id=state.vu_id)
             return
@@ -90,7 +90,7 @@ class ManagerScenario:
                 return
             club = response.json()
             display_id = club["display_id"] if club["display_id"] else str(club["id"])
-            state.managed_club_id = display_id
+            state.managed_club_id = str(club["id"])
             state.managed_club_numeric_id = club["id"]
             self.state_store.upsert_club(club_id=club["id"], display_id=display_id, owner_vu_id=state.vu_id)
             response.success()
@@ -102,11 +102,12 @@ class ManagerScenario:
         self._create_managed_club(state)
 
     def approve_pending_members(self, state: UserRuntimeState) -> None:
-        if not state.managed_club_id:
+        if state.managed_club_numeric_id is None:
             return
+        club_id = state.managed_club_numeric_id
 
         response = self.client.get(
-            f"/api/v1/clubs/{state.managed_club_id}/members?all_members=true&page=1&limit=500",
+            f"/api/v1/clubs/{club_id}/members?all_members=true&page=1&limit=500",
             headers=self._headers(state.access_token),
             name="clubs.members_all",
         )
@@ -120,7 +121,7 @@ class ManagerScenario:
                 continue
             user_id = member["user_id"]
             with self.client.post(
-                f"/api/v1/clubs/{state.managed_club_id}/members/{user_id}/approve",
+                f"/api/v1/clubs/{club_id}/members/{user_id}/approve",
                 headers=self._headers(state.access_token),
                 name="clubs.approve",
                 catch_response=True,
@@ -133,7 +134,7 @@ class ManagerScenario:
                     )
 
     def create_round_meeting(self, state: UserRuntimeState) -> None:
-        if not state.managed_club_id or state.managed_club_numeric_id is None:
+        if state.managed_club_numeric_id is None:
             return
 
         meeting_time = datetime.utcnow() + timedelta(days=3)
@@ -158,7 +159,7 @@ class ManagerScenario:
         }
 
         with self.client.post(
-            f"/api/v1/meetings?club_id={state.managed_club_id}",
+            f"/api/v1/meetings?club_id={state.managed_club_numeric_id}",
             json=payload,
             headers=self._headers(state.access_token),
             name="meetings.create",

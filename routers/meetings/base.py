@@ -1,7 +1,7 @@
 # 모임 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, or_, and_
+from sqlalchemy import text, or_, and_, select
 from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -137,7 +137,7 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
 
             # 클럽의 모든 멤버 조회 (생성자 제외)
             club_members = db.query(ClubMembership).filter(
-                ClubMembership.club_id == club_id,
+                ClubMembership.club_id == club.id,
                 ClubMembership.user_id != current_user.id  # 생성자 제외
             ).all()
 
@@ -225,16 +225,17 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
         # 라운딩 모임 조회 (ROUNDING 타입) - DELETED 상태 제외
         # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
         # 사용자가 참가한 프라이빗 라운딩 ID 목록
-        user_participant_meeting_ids = db.query(
-            MeetingParticipant.meeting_id).filter(MeetingParticipant.user_id == current_user.id).subquery()
+        user_participant_meeting_ids = select(MeetingParticipant.meeting_id).where(
+            MeetingParticipant.user_id == current_user.id
+        )
 
         # 사용자가 생성한 프라이빗 라운딩 ID 목록
-        user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
-        manager_club_ids = db.query(ClubMembership.club_id).filter(
+        user_created_meeting_ids = select(Meeting.id).where(Meeting.created_by == current_user.id)
+        manager_club_ids = select(ClubMembership.club_id).where(
             ClubMembership.user_id == current_user.id,
             ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
             ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
-        ).subquery()
+        )
 
         query = db.query(Meeting).filter(
             Meeting.club_id.in_(club_ids),
@@ -465,16 +466,17 @@ async def get_meetings(club_id: Optional[int] = None,
 
         # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
         # 사용자가 참가한 프라이빗 라운딩 ID 목록
-        user_participant_meeting_ids = db.query(
-            MeetingParticipant.meeting_id).filter(MeetingParticipant.user_id == current_user.id).subquery()
+        user_participant_meeting_ids = select(MeetingParticipant.meeting_id).where(
+            MeetingParticipant.user_id == current_user.id
+        )
 
         # 사용자가 생성한 프라이빗 라운딩 ID 목록
-        user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
-        manager_club_ids = db.query(ClubMembership.club_id).filter(
+        user_created_meeting_ids = select(Meeting.id).where(Meeting.created_by == current_user.id)
+        manager_club_ids = select(ClubMembership.club_id).where(
             ClubMembership.user_id == current_user.id,
             ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
             ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
-        ).subquery()
+        )
 
         # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자/클럽 리더·매니저인 경우
         meetings_query = meetings_query.filter(
@@ -564,11 +566,12 @@ async def get_my_meetings(page: int = 1,
 
         # 내가 참가한 모임 조회 (참가자이거나 생성자인 경우)
         # 참가한 모임
-        participant_meetings = db.query(
-            MeetingParticipant.meeting_id).filter(MeetingParticipant.user_id == current_user.id).subquery()
+        participant_meetings = select(MeetingParticipant.meeting_id).where(
+            MeetingParticipant.user_id == current_user.id
+        )
 
         # 생성한 모임 (프라이빗 라운딩 포함)
-        created_meetings = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
+        created_meetings = select(Meeting.id).where(Meeting.created_by == current_user.id)
 
         my_meetings_query = db.query(Meeting).filter(
             or_(Meeting.id.in_(participant_meetings), Meeting.id.in_(created_meetings)))
@@ -646,10 +649,10 @@ async def get_my_participating_meetings(page: int = 1,
         offset = (page - 1) * limit
 
         # 내가 참가자인 모임만 조회 (생성자 조건 제외)
-        participant_meetings = db.query(MeetingParticipant.meeting_id).filter(
+        participant_meetings = select(MeetingParticipant.meeting_id).where(
             MeetingParticipant.user_id == current_user.id,
             MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
-        ).subquery()
+        )
 
         my_meetings_query = db.query(Meeting).filter(Meeting.id.in_(participant_meetings))
 

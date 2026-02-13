@@ -79,13 +79,13 @@ class MeetingResponse(BaseModel):
     description: Optional[str]
     location: Optional[str]
     meeting_time: Optional[datetime]
-    application_deadline: Optional[datetime]
+    application_deadline: Optional[datetime] = None
     tee_times: List[str] = Field(default_factory=list)
     max_participants: Optional[int]
     meeting_type: MeetingType
     meeting_subtype: Optional[MeetingSubtype]
-    team_formation_mode: Optional[str]
-    team_size: Optional[int]
+    team_formation_mode: Optional[str] = None
+    team_size: Optional[int] = None
     total_cost: Optional[float]
     green_fee: Optional[float]
     caddy_fee: Optional[float]
@@ -94,7 +94,7 @@ class MeetingResponse(BaseModel):
     course_name: Optional[str]
     hole_count: Optional[int]
     reservation_name: Optional[str]
-    venue_name: Optional[str]
+    venue_name: Optional[str] = None
     club_id: int
     status: MeetingStatus
     cancel_reason: Optional[str]
@@ -102,8 +102,8 @@ class MeetingResponse(BaseModel):
     updated_at: datetime
     club_name: str
     participant_count: int
-    social_cost: Optional[float]
-    social_notes: Optional[str]
+    social_cost: Optional[float] = None
+    social_notes: Optional[str] = None
     type: Optional[str] = None  # 소셜 모임 유형 (CASUAL/DINNER/EVENT)
     application_closed_early: bool = False
     team_formation_confirmed_at: Optional[datetime] = None

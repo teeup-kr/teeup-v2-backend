@@ -515,7 +515,7 @@ async def add_club_member(
         
         # 이미 멤버인지 확인
         existing_membership = db.query(ClubMembership).filter(
-            ClubMembership.club_id == club_id,
+            ClubMembership.club_id == club.id,
             ClubMembership.user_id == member_data.user_id
         ).first()
         
@@ -527,7 +527,7 @@ async def add_club_member(
         
         # 멤버 추가
         new_membership = ClubMembership(
-            club_id=club_id,
+            club_id=club.id,
             user_id=member_data.user_id,
             role=member_data.role
         )

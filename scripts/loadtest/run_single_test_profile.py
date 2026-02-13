@@ -829,13 +829,18 @@ def _build_path_param_values(regular_state, manager_state) -> dict[str, str]:
     """현재 준비된 상태값으로 path param 샘플 맵을 구성한다."""
     meeting_id = manager_state.target_meeting_id or regular_state.target_meeting_id or 1
     participant_id = regular_state.target_participant_id or 1
-    club_display_id = manager_state.managed_club_id or regular_state.joined_club_id or "1"
-    club_numeric_id = manager_state.managed_club_numeric_id or 1
+    club_numeric_id = manager_state.managed_club_numeric_id
+    if club_numeric_id is None:
+        joined_club_id = regular_state.joined_club_id
+        if joined_club_id and str(joined_club_id).isdigit():
+            club_numeric_id = int(joined_club_id)
+    if club_numeric_id is None:
+        club_numeric_id = 1
 
     return {
         "admin_id": "1",
         "category_id": "1",
-        "club_id": str(club_display_id),
+        "club_id": str(club_numeric_id),
         "expense_id": "1",
         "faq_id": "1",
         "fee_id": "1",

@@ -28,7 +28,7 @@ class UserScenario:
     def join_shared_club(self, state: UserRuntimeState) -> None:
         shared_club = self.state_store.get_random_club()
         if shared_club is not None:
-            club_id = shared_club.display_id
+            club_id = str(shared_club.id)
         else:
             response = self.client.get(
                 "/api/v1/clubs?page=1&limit=20",
@@ -42,7 +42,7 @@ class UserScenario:
             if not clubs:
                 return
             club = clubs[0]
-            club_id = club["display_id"] if club["display_id"] else str(club["id"])
+            club_id = str(club["id"])
 
         with self.client.post(
             f"/api/v1/clubs/{club_id}/join",
