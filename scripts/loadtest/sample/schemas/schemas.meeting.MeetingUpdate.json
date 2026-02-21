@@ -1,0 +1,27 @@
+{
+  "name": "loadtest-meeting-updated",
+  "description": "loadtest update",
+  "location": "Load Test CC",
+  "meeting_time": "2099-12-31T10:00:00+00:00",
+  "application_deadline": "2099-12-30T10:00:00+00:00",
+  "tee_times": [
+    "07:30"
+  ],
+  "max_participants": 16,
+  "meeting_subtype": "REGULAR",
+  "status": "SCHEDULED",
+  "cancel_reason": "",
+  "total_cost": 30000,
+  "green_fee": 10000,
+  "caddy_fee": 10000,
+  "cart_fee": 10000,
+  "settlement_method": "EQUAL_SPLIT",
+  "course_name": "Load Course",
+  "hole_count": 18,
+  "reservation_name": "loadtest",
+  "venue_name": "Load Venue",
+  "social_cost": 20000,
+  "social_notes": "loadtest",
+  "type": "CASUAL",
+  "is_private": false
+}

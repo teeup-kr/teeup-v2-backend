@@ -1,0 +1,6 @@
+{
+  "has_regular_fee": true,
+  "regular_fee_amount": 1.0,
+  "regular_fee_cycle": "MONTHLY",
+  "regular_fee_description": "test"
+}

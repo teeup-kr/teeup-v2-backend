@@ -1,0 +1,13 @@
+{
+  "name": "loadtest-club",
+  "sido_code": "11",
+  "gungu_codes": [
+    "11010"
+  ],
+  "type": "REGULAR",
+  "description": "loadtest club",
+  "member_count": 16,
+  "contact_info": "010-0000-0000",
+  "representative_name": "load manager",
+  "additional_info": "loadtest"
+}

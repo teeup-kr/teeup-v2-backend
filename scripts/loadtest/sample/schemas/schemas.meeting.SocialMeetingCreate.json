@@ -1,0 +1,13 @@
+{
+  "name": "loadtest-social",
+  "description": "loadtest social meeting",
+  "type": "CASUAL",
+  "meeting_time": "2099-12-31T12:00:00+00:00",
+  "max_participants": 12,
+  "venue_name": "Load Venue",
+  "social_cost": 20000,
+  "settlement_method": "EQUAL_SPLIT",
+  "club_id": 1,
+  "application_deadline": "2099-12-30T12:00:00+00:00",
+  "social_notes": "loadtest"
+}

@@ -154,109 +154,102 @@ async def get_clubs(page: int = 1,
                     current_user: User = Depends(get_current_active_user)):
     """클럽 목록 조회"""
     try:
-        print(f"클럽 목록 조회 시작 - page: {page}, limit: {limit}")
-
-        # 페이지네이션 계산
         offset = (page - 1) * limit
-        print(f"offset: {offset}")
+        from sqlalchemy import func, or_
 
-        # 클럽 조회 쿼리
         clubs_query = db.query(Club).filter(Club.deleted_at.is_(None))
-        print(f"기본 쿼리 생성 완료")
 
         # 지역 필터 적용 (gungu_codes가 있으면 sido_code는 무시)
         filtered_gungu_codes = [code for code in (gungu_codes or []) if code]
         if filtered_gungu_codes:
-            from sqlalchemy import or_
             like_filters = [
                 ClubRegion.gungu_code.like(f"{code}%") for code in filtered_gungu_codes
             ]
-            matching_club_ids = db.query(ClubRegion.club_id).filter(
+            matching_club_ids_query = db.query(ClubRegion.club_id).filter(
                 or_(*like_filters)
-            ).subquery()
-            clubs_query = clubs_query.filter(Club.id.in_(matching_club_ids))
-            print(f"군구 필터 적용: {filtered_gungu_codes}")
+            )
+            clubs_query = clubs_query.filter(Club.id.in_(matching_club_ids_query))
         elif sido_code:
             clubs_query = clubs_query.filter(Club.sido_code == sido_code)
-            print(f"시도 필터 적용: {sido_code}")
 
         # status_filter가 있으면 해당 상태만 필터링
         if status_filter:
             clubs_query = clubs_query.filter(Club.status == status_filter)
-            print(f"상태 필터 적용: {status_filter}")
-        # status_filter가 없으면 모든 상태 조회 (INACTIVE도 포함, 상세 페이지에서 모달로 처리)
-
-        total = clubs_query.count()
-        print(f"총 클럽 수: {total}")
+        total = clubs_query.order_by(None).with_entities(func.count(Club.id)).scalar() or 0
 
         clubs = clubs_query.order_by(Club.created_at.desc()).offset(offset).limit(limit).all()
-        print(f"클럽 조회 완료: {len(clubs)}개")
-
         total_pages = (total + limit - 1) // limit
-        print(f"총 페이지 수: {total_pages}")
 
-        # Club 객체를 ClubResponse로 변환
+        if not clubs:
+            return {"data": [], "total": total, "page": page, "limit": limit, "total_pages": total_pages}
+
+        from schemas import MembershipStatus
+
+        club_ids = [club.id for club in clubs]
+        membership_rows = db.query(
+            ClubMembership.club_id,
+            ClubMembership.user_id,
+            ClubMembership.status,
+            ClubMembership.role,
+            User.realname,
+            User.nickname,
+            User.email,
+        ).join(
+            User,
+            User.id == ClubMembership.user_id,
+        ).filter(
+            ClubMembership.club_id.in_(club_ids),
+        ).all()
+
+        member_count_map: dict[int, int] = {}
+        leader_name_map: dict[int, str] = {}
+        my_membership_map: dict[int, tuple] = {}
+        for club_id, user_id, membership_status, membership_role, realname, nickname, email in membership_rows:
+            if membership_status == MembershipStatus.ACTIVE or membership_status == "APPROVED":
+                member_count_map[club_id] = member_count_map.get(club_id, 0) + 1
+                if membership_role == ClubRole.LEADER and club_id not in leader_name_map:
+                    leader_name_map[club_id] = realname or nickname or email
+
+            if user_id == current_user.id and club_id not in my_membership_map:
+                my_membership_map[club_id] = (membership_status, membership_role)
+
+        region_rows = db.query(
+            ClubRegion.club_id,
+            ClubRegion.gungu_code,
+        ).filter(
+            ClubRegion.club_id.in_(club_ids)
+        ).all()
+        gungu_codes_map: dict[int, list[str]] = {}
+        for club_id, gungu_code in region_rows:
+            gungu_codes_map.setdefault(club_id, []).append(gungu_code)
+
         club_responses = []
         for club in clubs:
-            # 실제 멤버 수 계산 (승인된 멤버만)
-            from sqlalchemy import or_
-            from schemas import MembershipStatus
-            from models import ClubRole
-            actual_member_count = db.query(ClubMembership).filter(
-                ClubMembership.club_id == club.id,
-                or_(
-                    ClubMembership.status == MembershipStatus.ACTIVE,
-                    ClubMembership.status == "APPROVED"  # 이전에 APPROVED로 저장된 멤버도 포함
-                )).count()
-
-            # 대표자명 계산: 항상 현재 리더의 실명으로 설정
-            representative_name = club.representative_name
-            try:
-                leader_membership = db.query(ClubMembership).filter(
-                    ClubMembership.club_id == club.id, ClubMembership.role == ClubRole.LEADER,
-                    or_(ClubMembership.status == MembershipStatus.ACTIVE, ClubMembership.status == "APPROVED")).first()
-
-                if leader_membership:
-                    leader_user = db.query(User).filter(User.id == leader_membership.user_id).first()
-                    if leader_user:
-                        representative_name = leader_user.realname or leader_user.nickname or leader_user.email
-            except Exception as e:
-                print(f"리더 조회 중 오류: {str(e)}")
-
-            # 현재 사용자의 멤버십 상태 확인
-            user_membership = db.query(ClubMembership).filter(ClubMembership.club_id == club.id,
-                                                              ClubMembership.user_id == current_user.id).first()
-
             membership_status = None
             membership_role = None
-            if user_membership:
-                membership_status = user_membership.status.value if hasattr(user_membership.status,
-                                                                            "value") else user_membership.status
-                membership_role = user_membership.role.value if hasattr(user_membership.role,
-                                                                        "value") else user_membership.role
+            if club.id in my_membership_map:
+                raw_status, raw_role = my_membership_map[club.id]
+                membership_status = raw_status.value if hasattr(raw_status, "value") else raw_status
+                membership_role = raw_role.value if hasattr(raw_role, "value") else raw_role
 
-            gungu_codes = [
-                region.gungu_code for region in db.query(ClubRegion).filter(ClubRegion.club_id == club.id).all()
-            ]
-            club_data = {
+            club_responses.append({
                 "id": club.id,
                 "display_id": club.display_id,
                 "name": club.name,
                 "sido_code": club.sido_code,
-                "gungu_codes": gungu_codes,
+                "gungu_codes": gungu_codes_map.get(club.id, []),
                 "type": club.type,
                 "description": club.description,
-                "member_count": actual_member_count,  # 실제 멤버 수 사용
+                "member_count": member_count_map.get(club.id, 0),
                 "contact_info": club.contact_info,
-                "representative_name": representative_name,
+                "representative_name": leader_name_map.get(club.id, club.representative_name),
                 "additional_info": club.additional_info,
                 "status": club.status,
-                "membership_status": membership_status,  # 현재 사용자의 멤버십 상태
-                "membership_role": membership_role,  # 현재 사용자의 멤버십 역할
+                "membership_status": membership_status,
+                "membership_role": membership_role,
                 "created_at": club.created_at,
-                "updated_at": club.updated_at
-            }
-            club_responses.append(club_data)
+                "updated_at": club.updated_at,
+            })
 
         return {"data": club_responses, "total": total, "page": page, "limit": limit, "total_pages": total_pages}
 

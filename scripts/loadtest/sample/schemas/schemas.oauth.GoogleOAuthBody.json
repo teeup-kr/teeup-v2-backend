@@ -1,0 +1,8 @@
+{
+  "authorizationCode": "mock-auth-code",
+  "codeVerifier": "mock-code-verifier",
+  "redirectUri": "http://localhost:8081",
+  "push_token": "mock-push-token",
+  "token_type": "FCM",
+  "enabled": true
+}

@@ -1,0 +1,14 @@
+{
+  "name": "loadtest-club-updated",
+  "sido_code": "11",
+  "gungu_codes": [
+    "11010"
+  ],
+  "type": "REGULAR",
+  "description": "loadtest club update",
+  "member_count": 20,
+  "contact_info": "010-0000-0000",
+  "representative_name": "load manager",
+  "additional_info": "updated",
+  "application_deadline": "2099-12-31T23:59:59+00:00"
+}

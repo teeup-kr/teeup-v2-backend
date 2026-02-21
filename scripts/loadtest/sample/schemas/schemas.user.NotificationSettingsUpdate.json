@@ -1,0 +1,8 @@
+{
+  "push_enabled": true,
+  "email_enabled": true,
+  "meeting_reminders": true,
+  "payment_notifications": true,
+  "club_updates": true,
+  "marketing_emails": true
+}

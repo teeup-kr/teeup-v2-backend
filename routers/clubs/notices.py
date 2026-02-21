@@ -230,7 +230,7 @@ async def create_club_notice(
             "is_private": notice.is_private,
             "author_id": notice.author_id,
             "author_name": author.nickname if author else "Unknown",
-            "view_count": notice.view_count,
+            "views": notice.view_count,
             "created_at": notice.created_at,
             "updated_at": notice.updated_at
         }

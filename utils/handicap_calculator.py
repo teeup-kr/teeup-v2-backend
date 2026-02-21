@@ -3,6 +3,7 @@
 
 핸디캡 자동 계산 및 관리 로직
 """
+import logging
 from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime
@@ -10,6 +11,36 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from models import (User, UserScoreHistory, Meeting, MeetingStatus, HandicapUpdateMethod, Score, MeetingParticipant,
                     MeetingResult)
+
+logger = logging.getLogger(__name__)
+
+
+def calculate_handicap_from_average_score(average_score: float) -> Decimal:
+    """
+    평균 타수 기반 핸디캡 계산 공통 함수
+
+    Args:
+        average_score: 평균 타수
+
+    Returns:
+        핸디캡 (0~72 범위로 클램프, 소수점 첫째 자리까지)
+    """
+    handicap = float(average_score) - 72.0
+    handicap = max(0.0, min(72.0, handicap))
+    return Decimal(str(round(handicap, 1)))
+
+
+# def calculate_handicap_from_average_score(average_score: float) -> int:
+#     """
+#     평균 타수 기반 핸디캡 인덱스(int) 계산
+
+#     Args:
+#         average_score: 평균 타수
+
+#     Returns:
+#         핸디캡 인덱스 (정수)
+#     """
+#     return int(calculate_handicap_from_average_score(average_score))
 
 
 def calculate_handicap_from_average_score(average_score: float) -> Decimal:
@@ -385,8 +416,6 @@ def process_meeting_completion(db: Session, meeting_id: int, score_count: int = 
 
         except Exception as e:
             # 개별 참가자 처리 실패 시 로그만 남기고 계속 진행
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"참가자 스코어 처리 실패: participant_id={participant.id}, error={str(e)}")
             continue
 
@@ -411,9 +440,6 @@ def create_meeting_results(db: Session, meeting_id: int) -> int:
     Returns:
         생성된 MeetingResult 개수
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     # 모임 정보 조회
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if not meeting:

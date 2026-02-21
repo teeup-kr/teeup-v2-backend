@@ -204,12 +204,29 @@ async def update_regulation_category(
 ):
     """규정 카테고리 수정 (리더/매니저만 가능)"""
     try:
-        club = _resolve_club(db, club_id)
-        if not club:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="클럽을 찾을 수 없습니다."
-            )
+        # # 클럽 조회 (display_id로 먼저 조회)
+        # club = db.query(Club).filter(
+        #     Club.display_id == club_id,
+        #     Club.deleted_at.is_(None)
+        # ).first()
+
+        # if not club:
+        #     # display_id로 찾지 못했으면 숫자로 변환 가능한지 확인 후 id로 조회
+        #     try:
+        #         club_id_int = int(club_id)
+        #         club = db.query(Club).filter(
+        #             Club.id == club_id_int,
+        #             Club.deleted_at.is_(None)
+        #         ).first()
+        #     except ValueError:
+        #         club = None
+
+        # if not club:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_404_NOT_FOUND,
+        #         detail="클럽을 찾을 수 없습니다."
+        #     )
+
         # 클럽 멤버 권한 확인
         membership = db.query(ClubMembership).filter(
             ClubMembership.club_id == club.id,
@@ -279,12 +296,29 @@ async def delete_regulation_category(
 ):
     """규정 카테고리 삭제 (리더/매니저만 가능)"""
     try:
-        club = _resolve_club(db, club_id)
-        if not club:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="클럽을 찾을 수 없습니다."
-            )
+        # # 클럽 조회 (display_id로 먼저 조회)
+        # club = db.query(Club).filter(
+        #     Club.display_id == club_id,
+        #     Club.deleted_at.is_(None)
+        # ).first()
+
+        # if not club:
+        #     # display_id로 찾지 못했으면 숫자로 변환 가능한지 확인 후 id로 조회
+        #     try:
+        #         club_id_int = int(club_id)
+        #         club = db.query(Club).filter(
+        #             Club.id == club_id_int,
+        #             Club.deleted_at.is_(None)
+        #         ).first()
+        #     except ValueError:
+        #         club = None
+
+        # if not club:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_404_NOT_FOUND,
+        #         detail="클럽을 찾을 수 없습니다."
+        #     )
+
         # 클럽 멤버 권한 확인
         membership = db.query(ClubMembership).filter(
             ClubMembership.club_id == club.id,

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+# 실행:
+#   .venv/bin/python scripts/loadtest/report_parser.py
+# 테스트 요약:
+#   - Locust stats CSV를 읽어 요청/실패율 집계
+#   - p95 상위 endpoint 및 실패 상위 endpoint를 출력
+#   - 부하 테스트 결과를 빠르게 확인하는 후처리 스크립트
+
+import argparse
 import csv
-import sys
 from pathlib import Path
 
 
@@ -34,12 +41,21 @@ def parse_stats_csv(stats_csv: Path) -> dict:
     }
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: python scripts/loadtest/report_parser.py <locust_stats.csv>")
-        return 1
+def parse_args() -> argparse.Namespace:
+    """리포트 입력 파일 경로를 파싱한다."""
+    parser = argparse.ArgumentParser(description="Parse locust stats CSV")
+    parser.add_argument(
+        "stats_csv",
+        nargs="?",
+        default="scripts/loadtest/output/loadtest_stats.csv",
+        help="locust stats csv path (기본: scripts/loadtest/output/loadtest_stats.csv)",
+    )
+    return parser.parse_args()
 
-    stats_csv = Path(sys.argv[1])
+
+def main() -> int:
+    args = parse_args()
+    stats_csv = Path(args.stats_csv)
     if not stats_csv.exists():
         print(f"File not found: {stats_csv}")
         return 1

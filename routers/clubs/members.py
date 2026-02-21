@@ -20,6 +20,15 @@ from utils.datetime_utils import get_kst_now
 
 router = APIRouter(prefix="/clubs", tags=["클럽 멤버 관리"])
 
+ACTIVE_MEMBERSHIP_STATUSES = [MembershipStatus.ACTIVE, "APPROVED"]
+
+
+def _is_active_membership(membership: Optional[ClubMembership]) -> bool:
+    if not membership or not membership.status:
+        return False
+    status_value = membership.status.value if hasattr(membership.status, "value") else str(membership.status)
+    return status_value in {"ACTIVE", "APPROVED"}
+
 
 @router.get("/members/search", response_model=ClubMemberSearchResponse)
 async def search_members_in_my_clubs(
@@ -160,21 +169,54 @@ async def get_club_members(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="클럽을 찾을 수 없습니다."
             )
-        
+
+        # 조회 권한 확인
+        current_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == current_user.id
+        ).first()
+
+        is_active_member = _is_active_membership(current_membership)
+        current_role = None
+        if current_membership and current_membership.role:
+            current_role = (
+                current_membership.role.value
+                if hasattr(current_membership.role, "value")
+                else str(current_membership.role)
+            )
+        is_manager_or_leader = is_active_member and current_role in {"LEADER", "MANAGER"}
+
+        if all_members and not is_manager_or_leader:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="리더 또는 매니저만 멤버 관리 목록을 조회할 수 있습니다."
+            )
+
+        if not all_members and not is_active_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="클럽 구성원만 회원 목록을 조회할 수 있습니다."
+            )
+
         # 페이지네이션 계산
         offset = (page - 1) * limit
-        
+
         # 멤버 목록 조회 쿼리 (실제 club.id 사용)
         if all_members:
-            # 모든 멤버 조회 (멤버 관리 페이지용)
+            # 멤버 관리 페이지: 승인 멤버 + 가입 신청자
             memberships_query = db.query(ClubMembership).filter(
-                ClubMembership.club_id == club.id
+                ClubMembership.club_id == club.id,
+                ClubMembership.status.in_([
+                    MembershipStatus.ACTIVE,
+                    MembershipStatus.PENDING,
+                    "APPROVED",
+                ])
             )
         else:
             # 승인된 회원만 표시 (일반 멤버 목록용)
             memberships_query = db.query(ClubMembership).filter(
                 ClubMembership.club_id == club.id,
-                ClubMembership.status.in_([MembershipStatus.ACTIVE, "APPROVED"])
+                ClubMembership.status.in_(ACTIVE_MEMBERSHIP_STATUSES)
             )
         
         # 전체 개수 조회
@@ -388,7 +430,8 @@ async def join_club(
             # 클럽의 리더/매니저 조회
             leaders_managers = db.query(ClubMembership).filter(
                 ClubMembership.club_id == club.id,
-                ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER])
+                ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+                ClubMembership.status.in_(ACTIVE_MEMBERSHIP_STATUSES)
             ).all()
             
             if leaders_managers:
@@ -472,7 +515,7 @@ async def add_club_member(
         
         # 이미 멤버인지 확인
         existing_membership = db.query(ClubMembership).filter(
-            ClubMembership.club_id == club_id,
+            ClubMembership.club_id == club.id,
             ClubMembership.user_id == member_data.user_id
         ).first()
         
@@ -484,7 +527,7 @@ async def add_club_member(
         
         # 멤버 추가
         new_membership = ClubMembership(
-            club_id=club_id,
+            club_id=club.id,
             user_id=member_data.user_id,
             role=member_data.role
         )
@@ -549,10 +592,12 @@ async def approve_membership(
         # 권한 확인 (리더/매니저만 가능)
         membership = db.query(ClubMembership).filter(
             ClubMembership.club_id == actual_club_id,
-            ClubMembership.user_id == current_user.id
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+            ClubMembership.status.in_(ACTIVE_MEMBERSHIP_STATUSES)
         ).first()
-        
-        if not membership or membership.role not in [ClubRole.LEADER, ClubRole.MANAGER]:
+
+        if not membership:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="리더 또는 매니저만 가입을 승인할 수 있습니다."
@@ -572,7 +617,7 @@ async def approve_membership(
             )
         
         # 가입 승인
-        pending_membership.status = "ACTIVE"
+        pending_membership.status = MembershipStatus.ACTIVE
         pending_membership.updated_at = get_kst_now()
         
         # 클럽 멤버 수 증가 (PENDING -> ACTIVE로 변경된 경우)

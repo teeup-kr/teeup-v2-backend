@@ -1,7 +1,23 @@
 from __future__ import annotations
 
+# 실행:
+#   .venv/bin/python scripts/loadtest/profile_team_formation.py
+# 테스트 요약:
+#   - 특정 ROUND 모임의 팀 편성 로직을 line-profiler로 라인 단위 측정
+#   - 팀 편성 관련 핵심 함수 호출 비용을 출력
+#   - 병목 함수 식별용 단일 프로파일링 도구
+
 import argparse
+import sys
+from pathlib import Path
 from typing import Sequence
+
+from sqlalchemy import func
+
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from database import SessionLocal
 from models import Meeting, MeetingParticipant, MeetingType
@@ -26,7 +42,12 @@ except ImportError as exc:  # pragma: no cover - runtime guard
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Line profile for team formation")
-    parser.add_argument("--meeting-id", type=int, required=True, help="target ROUND meeting_id")
+    parser.add_argument(
+        "--meeting-id",
+        type=int,
+        default=None,
+        help="target ROUND meeting_id (기본: 참가자 2명 이상 ROUND 중 최신)",
+    )
     parser.add_argument(
         "--mode",
         type=str,
@@ -47,12 +68,35 @@ def _validate_inputs(meeting: Meeting | None, participants: Sequence[MeetingPart
         raise SystemExit("At least 2 participants are required for team formation.")
 
 
+def _resolve_target_meeting_id(db, meeting_id: int | None) -> int:
+    """명시 meeting_id가 없으면 참가자 2명 이상 ROUND 중 최신 meeting_id를 선택한다."""
+    if meeting_id is not None:
+        return meeting_id
+
+    row = (
+        db.query(Meeting.id)
+        .join(MeetingParticipant, MeetingParticipant.meeting_id == Meeting.id)
+        .filter(Meeting.meeting_type == MeetingType.ROUND)
+        .group_by(Meeting.id)
+        .having(func.count(MeetingParticipant.id) >= 2)
+        .order_by(Meeting.id.desc())
+        .first()
+    )
+    if row is None:
+        raise SystemExit(
+            "No ROUND meeting with at least 2 participants found. "
+            "Use --meeting-id or prepare test data first."
+        )
+    return row[0]
+
+
 def main() -> int:
     args = parse_args()
     db = SessionLocal()
     try:
-        meeting = db.query(Meeting).filter(Meeting.id == args.meeting_id).first()
-        participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == args.meeting_id).all()
+        target_meeting_id = _resolve_target_meeting_id(db, args.meeting_id)
+        meeting = db.query(Meeting).filter(Meeting.id == target_meeting_id).first()
+        participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == target_meeting_id).all()
         _validate_inputs(meeting, participants)
 
         mode = TeamFormationMode(args.mode)
@@ -66,7 +110,7 @@ def main() -> int:
         profiler.add_function(form_random_teams)
 
         teams = profiler.runcall(form_teams_by_mode, participants, mode, db, args.team_size)
-        print(f"meeting_id={args.meeting_id}, participants={len(participants)}, teams={len(teams)}")
+        print(f"meeting_id={target_meeting_id}, participants={len(participants)}, teams={len(teams)}")
         profiler.print_stats(stripzeros=True)
         return 0
     finally:

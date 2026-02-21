@@ -9,3 +9,4 @@ mock.py
 scripts/apply_mock_users_to_meeting.py
 teeup-264ed-firebase-adminsdk-fbsvc-7fe74e28f0.json
 AGENTS.md
+scripts/loadtest/output/
