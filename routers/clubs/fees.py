@@ -299,6 +299,83 @@ async def get_club_fees(
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
 
+
+@router.get("/{club_id}/fees/{fee_id}", response_model=ClubFeeResponse)
+async def get_club_fee(
+    club_id: str,
+    fee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """회비 항목 상세 조회 (클럽 멤버만 가능)"""
+    try:
+        club = db.query(Club).filter(
+            Club.display_id == club_id,
+            Club.deleted_at.is_(None)
+        ).first()
+
+        if not club:
+            try:
+                club_id_int = int(club_id)
+                club = db.query(Club).filter(
+                    Club.id == club_id_int,
+                    Club.deleted_at.is_(None)
+                ).first()
+            except ValueError:
+                club = None
+
+        if not club:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="클럽을 찾을 수 없습니다."
+            )
+
+        membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == current_user.id
+        ).first()
+
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="클럽 멤버만 회비 항목을 조회할 수 있습니다."
+            )
+
+        fee = db.query(ClubFee).filter(
+            ClubFee.id == fee_id,
+            ClubFee.club_id == club.id
+        ).first()
+
+        if not fee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="회비 항목을 찾을 수 없습니다."
+            )
+
+        cycle_value = fee.cycle.value if hasattr(fee.cycle, 'value') else str(fee.cycle) if fee.cycle else None
+        return {
+            "id": fee.id,
+            "club_id": fee.club_id,
+            "name": fee.name,
+            "amount": float(fee.amount),
+            "cycle": cycle_value,
+            "description": fee.description,
+            "is_active": fee.is_active if fee.is_active is not None else True,
+            "created_by": fee.created_by,
+            "created_at": fee.created_at,
+            "updated_at": fee.updated_at
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"회비 항목 조회 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다."
+        )
+
+
 @router.post("/{club_id}/fees", response_model=ClubFeeResponse)
 async def create_club_fee(
     club_id: str,

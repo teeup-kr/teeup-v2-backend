@@ -14,6 +14,7 @@ class AdminResponse(BaseModel):
     phone_number: Optional[str] = None
     provider: Optional[str] = None
     status: str
+    role: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -27,6 +28,7 @@ class AdminCreate(BaseModel):
     name: str = Field(..., description="관리자 이름")
     phone_number: Optional[str] = Field(None, description="전화번호")
     profile_image: Optional[str] = Field(None, description="프로필 이미지 URL")
+    role: Optional[str] = Field("SUPER_ADMIN", description="역할 (SUPER_ADMIN, CLUB_ADMIN, MEETING_ADMIN, USER_ADMIN, CONTENT_ADMIN, SUPPORT_ADMIN)")
 
 
 class AdminUpdate(BaseModel):
@@ -35,6 +37,7 @@ class AdminUpdate(BaseModel):
     phone_number: Optional[str] = Field(None, description="전화번호")
     profile_image: Optional[str] = Field(None, description="프로필 이미지 URL")
     status: Optional[str] = Field(None, description="상태 (ACTIVE, DEACTIVATED)")
+    role: Optional[str] = Field(None, description="역할")
 
 
 class AdminPasswordUpdate(BaseModel):
