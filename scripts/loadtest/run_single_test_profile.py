@@ -4,10 +4,11 @@ from __future__ import annotations
 #   .venv/bin/python scripts/loadtest/run_single_test_profile.py
 # 테스트 요약:
 #   - main.py 라우터를 import해 전체 endpoint 카탈로그 수집
-#   - 테스트 모드 서버 기동 후 GET/POST/PATCH/PUT 라우트를 1회씩 호출
+#   - 테스트 모드 서버 기동 후 GET/POST/PATCH/PUT 라우트를 10회씩 호출(1회 워밍업 제외)
 #   - body payload는 sample/routes, sample/schemas를 우선 사용
 #   - endpoint 지연시간 집계, 커버리지 계산, 상위 구간 그래프/JSON 리포트 생성
-#   - 지연 상위 endpoint를 실제 router 함수 대상으로 line_profiler(lprof) 수집
+#   - 출력물은 output/YYYYMMDD_HHMMSS/ 하위로 실행별 분리 저장
+#   - 실행된 endpoint 전체를 실제 router 함수 대상으로 line_profiler(lprof) 수집
 
 import argparse
 import asyncio
@@ -65,6 +66,8 @@ ENDPOINT_BLACKLIST_PATH_PREFIXES: set[str] = {
     "/admin/upload",
     "/admin/notices/upload",
 }
+ENDPOINT_REPEAT_COUNT = 10
+ENDPOINT_WARMUP_DROPS = 1
 
 
 @dataclass
@@ -92,7 +95,7 @@ class ReplayRequest:
 
 class ResponseContext:
     def __init__(self, response: requests.Response, record: RequestRecord, sink: list[RequestRecord]):
-        """Locust catch_response 호환 응답 컨텍스트를 초기화한다."""
+        """Locust catch_response 호환 응답 컨텍스트를 초기화"""
         self._response = response
         self._record = record
         self._sink = sink
@@ -100,20 +103,20 @@ class ResponseContext:
 
     @property
     def status_code(self) -> int:
-        """응답 상태 코드를 반환한다."""
+        """응답 상태 코드를 반환"""
         return self._response.status_code
 
     @property
     def text(self) -> str:
-        """응답 본문 텍스트를 반환한다."""
+        """응답 본문 텍스트를 반환"""
         return self._response.text
 
     def json(self):
-        """응답 본문 JSON을 반환한다."""
+        """응답 본문 JSON을 반환"""
         return self._response.json()
 
     def success(self) -> None:
-        """현재 요청을 성공으로 표시한다."""
+        """현재 요청을 성공으로 표시"""
         self._record.failed = False
         self._record.error = None
 
@@ -123,18 +126,18 @@ class ResponseContext:
         self._record.error = message
 
     def _finalize(self) -> None:
-        """기록이 중복 추가되지 않도록 1회만 확정한다."""
+        """기록이 중복 추가되지 않도록 1회만 확정"""
         if self._finalized:
             return
         self._finalized = True
         self._sink.append(self._record)
 
     def __enter__(self):
-        """with 블록 진입 시 컨텍스트 자신을 반환한다."""
+        """with 블록 진입 시 컨텍스트 자신을 반환"""
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        """with 블록 종료 시 예외 여부를 기록하고 요청을 확정한다."""
+        """with 블록 종료 시 예외 여부를 기록하고 요청을 확정"""
         if exc is not None:
             self._record.failed = True
             self._record.error = str(exc)
@@ -144,7 +147,7 @@ class ResponseContext:
 
 class LocustLikeHttpClient:
     def __init__(self, base_url: str, timeout_sec: int = 30):
-        """요청 기록/리플레이를 위한 경량 HTTP 클라이언트를 초기화한다."""
+        """요청 기록/리플레이를 위한 경량 HTTP 클라이언트를 초기화"""
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
         self.session = requests.Session()
@@ -166,13 +169,13 @@ class LocustLikeHttpClient:
         }
 
     def _needs_csrf(self, method: str, path: str) -> bool:
-        """요청 메서드/경로 기준으로 CSRF 토큰 필요 여부를 계산한다."""
+        """요청 메서드/경로 기준으로 CSRF 토큰 필요 여부를 계산"""
         if method in {"GET", "HEAD", "OPTIONS"}:
             return False
         return path not in self._csrf_exempt_paths
 
     def _fetch_csrf_token(self) -> str:
-        """테스트 서버에서 CSRF 토큰을 발급받아 반환한다."""
+        """테스트 서버에서 CSRF 토큰을 발급받아 반환"""
         response = self.session.get(
             f"{self.base_url}/api/v1/auth/csrf-token",
             timeout=self.timeout_sec,
@@ -195,7 +198,7 @@ class LocustLikeHttpClient:
         name: Optional[str] = None,
         catch_response: bool = False,
     ):
-        """요청을 전송하고 응답/프로파일링용 리플레이 정보를 함께 기록한다."""
+        """요청을 전송하고 응답/프로파일링용 리플레이 정보를 함께 기록"""
         if not path.startswith("/"):
             path = f"/{path}"
         url = f"{self.base_url}{path}"
@@ -272,7 +275,7 @@ class LocustLikeHttpClient:
         return response
 
     def get(self, path: str, *, headers: Optional[dict] = None, name: Optional[str] = None, catch_response: bool = False):
-        """GET 요청을 전송한다."""
+        """GET 요청을 전송"""
         return self._request("GET", path, headers=headers, name=name, catch_response=catch_response)
 
     def post(
@@ -284,7 +287,7 @@ class LocustLikeHttpClient:
         name: Optional[str] = None,
         catch_response: bool = False,
     ):
-        """POST 요청을 전송한다."""
+        """POST 요청을 전송"""
         return self._request(
             "POST",
             path,
@@ -303,7 +306,7 @@ class LocustLikeHttpClient:
         name: Optional[str] = None,
         catch_response: bool = False,
     ):
-        """PUT 요청을 전송한다."""
+        """PUT 요청을 전송"""
         return self._request(
             "PUT",
             path,
@@ -315,7 +318,7 @@ class LocustLikeHttpClient:
 
 
 def ensure_user_ready(auth_provider: AuthProvider, state, label: str) -> None:
-    """테스트 사용자 계정의 온보딩 필수 단계를 완료한다."""
+    """테스트 사용자 계정의 온보딩 필수 단계를 완료"""
     if not auth_provider.ensure_bootstrap():
         raise RuntimeError(f"{label}: bootstrap failed")
     if not auth_provider.oauth_mock_login(state):
@@ -346,7 +349,7 @@ def ensure_user_ready(auth_provider: AuthProvider, state, label: str) -> None:
 
 
 def print_route_sweep_summary(total_routes: int, elapsed_ms: float, requests: list[dict]) -> None:
-    """라우터 전수 실행 결과를 요약 출력한다."""
+    """라우터 전수 실행 결과를 요약 출력"""
     total_requests = len(requests)
     failed = sum(1 for row in requests if row.get("failed"))
     success = total_requests - failed
@@ -363,7 +366,7 @@ def start_test_server(
     log_path: Path,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen, object]:
-    """테스트 모드 환경변수로 main.py 서버 프로세스를 기동한다."""
+    """테스트 모드 환경변수로 main.py 서버 프로세스를 기동"""
     log_file = log_path.open("w", encoding="utf-8")
     env = os.environ.copy()
     env.update(
@@ -389,7 +392,7 @@ def start_test_server(
 
 
 def apply_test_env_defaults_for_inprocess(port: int) -> None:
-    """in-process app import/replay용 테스트 환경변수 기본값을 설정한다."""
+    """in-process app import/replay용 테스트 환경변수 기본값을 설정"""
     os.environ.setdefault("ENVIRONMENT", "test")
     os.environ.setdefault("ENABLE_LOADTEST_AUTH_MOCK", "true")
     os.environ.setdefault("LOADTEST_AUTH_MOCK_ALLOWED_IPS", "127.0.0.1,::1")
@@ -409,7 +412,7 @@ def stop_server(process: subprocess.Popen, log_file) -> None:
 
 
 def wait_until_ready(base_url: str, process: subprocess.Popen, timeout_sec: int = 60) -> None:
-    """health 체크가 성공할 때까지 서버 기동을 대기한다."""
+    """health 체크가 성공할 때까지 서버 기동을 대기"""
     deadline = time.time() + timeout_sec
     health_url = f"{base_url.rstrip('/')}/health"
 
@@ -442,7 +445,7 @@ def normalize_endpoint_path(path: str) -> str:
 
 
 def _unwrap_annotation(annotation: Any) -> Any:
-    """Annotated/Optional 등 래핑된 annotation을 본 타입으로 단순화한다."""
+    """Annotated/Optional 등 래핑된 annotation을 본 타입으로 단순화"""
     if annotation is None:
         return None
 
@@ -461,7 +464,7 @@ def _unwrap_annotation(annotation: Any) -> Any:
 
 
 def _is_blacklisted_endpoint(method: str, path_template: str) -> bool:
-    """endpoint 블랙리스트 포함 여부를 반환한다."""
+    """endpoint 블랙리스트 포함 여부를 반환"""
     if (method, path_template) in ENDPOINT_BLACKLIST:
         return True
     for prefix in ENDPOINT_BLACKLIST_PATH_PREFIXES:
@@ -487,7 +490,7 @@ def load_backend_app_from_main() -> Any:
 
 
 def _route_router_name(route: APIRoute) -> str:
-    """APIRoute에서 라우터 식별용 이름(태그/모듈)을 추출한다."""
+    """APIRoute에서 라우터 식별용 이름(태그/모듈)을 추출"""
     tags = list(getattr(route, "tags", []) or [])
     if tags:
         return str(tags[0])
@@ -501,7 +504,7 @@ def _route_router_name(route: APIRoute) -> str:
 
 
 def collect_router_endpoints(app: Any) -> tuple[list[dict], dict[str, list[dict]], list[dict]]:
-    """앱의 모든 APIRoute를 수집해 카탈로그/라우터별 목록/매처를 생성한다."""
+    """앱의 모든 APIRoute를 수집해 카탈로그/라우터별 목록/매처를 생성"""
     route_catalog: list[dict] = []
     router_endpoints: dict[str, list[dict]] = defaultdict(list)
     route_matchers: list[dict] = []
@@ -579,7 +582,7 @@ def collect_router_endpoints(app: Any) -> tuple[list[dict], dict[str, list[dict]
 
 
 def print_router_endpoint_inventory(router_endpoints: dict[str, list[dict]]) -> None:
-    """라우터별 endpoint 개수를 콘솔 표로 출력한다."""
+    """라우터별 endpoint 개수를 콘솔 표로 출력"""
     print("\n=== Router Endpoint Inventory ===")
     print(f"{'Router':24} {'Endpoints':>10}")
     print("-" * 38)
@@ -603,7 +606,7 @@ def _match_route_template(method: str, request_path: str, route_matchers: list[d
 
 
 def aggregate_endpoint_stats(records: list[dict], route_matchers: list[dict]) -> list[dict]:
-    """요청 기록을 endpoint 단위로 집계해 평균/최대 지연시간을 계산한다."""
+    """요청 기록을 endpoint 단위로 집계해 평균/최대 지연시간을 계산"""
     agg: dict[tuple[str, str], dict] = {}
 
     for rec in records:
@@ -651,7 +654,7 @@ def aggregate_endpoint_stats(records: list[dict], route_matchers: list[dict]) ->
 
 
 def build_endpoint_coverage(route_catalog: list[dict], endpoint_stats: list[dict]) -> list[dict]:
-    """전체 라우트 카탈로그 대비 실제 호출 커버리지를 계산한다."""
+    """전체 라우트 카탈로그 대비 실제 호출 커버리지를 계산"""
     stats_map = {(row["method"], row["path"]): row for row in endpoint_stats}
     coverage_rows: list[dict] = []
 
@@ -676,7 +679,7 @@ def build_endpoint_coverage(route_catalog: list[dict], endpoint_stats: list[dict
 
 
 def print_coverage_summary(coverage_rows: list[dict]) -> None:
-    """endpoint 커버리지 요약(hit/total)을 출력한다."""
+    """endpoint 커버리지 요약(hit/total)을 출력"""
     total = len(coverage_rows)
     hit = sum(1 for row in coverage_rows if row["hit"])
     ratio = (hit / total * 100.0) if total else 0.0
@@ -684,7 +687,7 @@ def print_coverage_summary(coverage_rows: list[dict]) -> None:
 
 
 def print_endpoint_table(stats: list[dict], title: str = "Endpoint Latency Summary") -> None:
-    """endpoint 지연시간 집계 결과를 표 형태로 출력한다."""
+    """endpoint 지연시간 집계 결과를 표 형태로 출력"""
     print(f"\n=== {title} ===")
     print(f"{'Endpoint':32} {'Count':>6} {'Avg(ms)':>10} {'Max(ms)':>10} {'Fail':>6}")
     print("-" * 72)
@@ -704,7 +707,7 @@ def save_endpoint_graph_matplotlib(
     output_png: Path,
     show_ms_labels: bool = True,
 ) -> None:
-    """endpoint 평균 지연시간 막대 그래프를 PNG로 저장한다."""
+    """endpoint 평균 지연시간 막대 그래프를 PNG로 저장"""
     if not stats:
         print("\n[Graph] endpoint data 없음")
         return
@@ -760,7 +763,7 @@ def _endpoint_key_for_request(
     request_path: str,
     route_matchers: list[dict],
 ) -> tuple[str, str]:
-    """요청 메서드/경로를 라우트 템플릿 키(method, path)로 변환한다."""
+    """요청 메서드/경로를 라우트 템플릿 키(method, path)로 변환"""
     matched = _match_route_template(method, request_path, route_matchers)
     if matched:
         return matched["method"], matched["path"]
@@ -768,7 +771,7 @@ def _endpoint_key_for_request(
 
 
 def _safe_filename(text: str, max_length: int = 120) -> str:
-    """endpoint 이름을 파일 저장 가능한 안전한 문자열로 변환한다."""
+    """endpoint 이름을 파일 저장 가능한 안전한 문자열로 변환"""
     safe = text.lower()
     safe = safe.replace("[", "").replace("]", "")
     safe = safe.replace(" ", "_")
@@ -781,12 +784,12 @@ def _safe_filename(text: str, max_length: int = 120) -> str:
 
 
 def _route_sample_key(method: str, path: str) -> str:
-    """라우트(method+path)를 sample/routes 파일명 키로 변환한다."""
+    """라우트(method+path)를 sample/routes 파일명 키로 변환"""
     return _safe_filename(f"{method.lower()} {path}")
 
 
 def _schema_sample_keys(annotation: Any) -> list[str]:
-    """annotation에서 schema 샘플 검색 우선순위 키를 생성한다."""
+    """annotation에서 schema 샘플 검색 우선순위 키를 생성"""
     annotation = _unwrap_annotation(annotation)
     if annotation is None:
         return []
@@ -802,7 +805,7 @@ def _schema_sample_keys(annotation: Any) -> list[str]:
 
 
 def _load_json_samples(directory: Path) -> dict[str, dict]:
-    """sample 디렉터리의 json 파일을 stem 기준으로 로드한다."""
+    """sample 디렉터리의 json 파일을 stem 기준으로 로드"""
     samples: dict[str, dict] = {}
     if not directory.exists():
         return samples
@@ -815,7 +818,7 @@ def _load_json_samples(directory: Path) -> dict[str, dict]:
 
 
 def _default_path_param_value(param_name: str) -> str:
-    """알 수 없는 path param에 대한 기본 샘플 값을 반환한다."""
+    """알 수 없는 path param에 대한 기본 샘플 값을 반환"""
     if param_name.endswith("_id") or param_name in {"id"}:
         return "1"
     if param_name in {"terms_type"}:
@@ -826,7 +829,7 @@ def _default_path_param_value(param_name: str) -> str:
 
 
 def _build_path_param_values(regular_state, manager_state) -> dict[str, str]:
-    """현재 준비된 상태값으로 path param 샘플 맵을 구성한다."""
+    """현재 준비된 상태값으로 path param 샘플 맵을 구성"""
     meeting_id = manager_state.target_meeting_id or regular_state.target_meeting_id or 1
     participant_id = regular_state.target_participant_id or 1
     club_numeric_id = manager_state.managed_club_numeric_id
@@ -874,7 +877,7 @@ def _render_route_path(
     path_param_values: dict[str, str],
     path_param_annotations: Optional[dict[str, Any]] = None,
 ) -> str:
-    """라우트 템플릿(/x/{id})을 실제 호출 경로(/x/1)로 변환한다."""
+    """라우트 템플릿(/x/{id})을 실제 호출 경로(/x/1)로 변환"""
     rendered = full_path
     for param_name in path_param_names:
         value = path_param_values.get(param_name, _default_path_param_value(param_name))
@@ -891,7 +894,7 @@ def _render_route_path(
 
 
 def _sample_value_for_annotation(annotation: Any, depth: int = 0) -> Any:
-    """pydantic/typing annotation에서 샘플 값을 생성한다."""
+    """pydantic/typing annotation에서 샘플 값을 생성"""
     if depth > 4 or annotation is None:
         return None
 
@@ -957,7 +960,7 @@ def _sample_value_for_annotation(annotation: Any, depth: int = 0) -> Any:
 
 
 def _build_body_from_annotation(annotation: Any) -> Optional[dict]:
-    """요청 본문 annotation에서 JSON 샘플 payload를 생성한다."""
+    """요청 본문 annotation에서 JSON 샘플 payload를 생성"""
     sample = _sample_value_for_annotation(annotation)
     if sample is None:
         return None
@@ -971,7 +974,7 @@ def _build_body_for_route(
     schema_samples: dict[str, dict],
     route_samples: dict[str, dict],
 ) -> Optional[dict]:
-    """라우트별 body 샘플을 route > schema > annotation 순으로 선택한다."""
+    """라우트별 body 샘플을 route > schema > annotation 순으로 선택"""
     route_sample_key = matcher.get("route_sample_key")
     if route_sample_key and route_sample_key in route_samples:
         return copy.deepcopy(route_samples[route_sample_key])
@@ -985,7 +988,7 @@ def _build_body_for_route(
 
 
 def _build_headers_for_route(method: str, auth_token: Optional[str]) -> dict[str, str]:
-    """엔드포인트 호출용 기본 헤더를 구성한다."""
+    """엔드포인트 호출용 기본 헤더를 구성"""
     headers: dict[str, str] = {}
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
@@ -1002,7 +1005,7 @@ def _invoke_route_once(
     json_body: Optional[dict],
     name: str,
 ) -> None:
-    """단일 라우트를 실행하고 예외를 RequestRecord로 기록한다."""
+    """단일 라우트를 실행하고 예외를 RequestRecord로 기록"""
     started = perf_counter()
     try:
         client._request(
@@ -1035,8 +1038,10 @@ def run_all_router_endpoints_once(
     route_matchers: list[dict],
     schema_samples: dict[str, dict],
     route_samples: dict[str, dict],
+    repeat_count: int = ENDPOINT_REPEAT_COUNT,
+    warmup_drop_count: int = ENDPOINT_WARMUP_DROPS,
 ) -> dict:
-    """main.py 라우트(GET/POST/PATCH/PUT)를 모두 1회씩 호출한다."""
+    """main.py 라우트(GET/POST/PATCH/PUT)를 반복 호출하고 워밍업 요청을 제외"""
     client = LocustLikeHttpClient(base_url=base_url, timeout_sec=10)
     store = StateStore()
 
@@ -1066,6 +1071,8 @@ def run_all_router_endpoints_once(
     auth_token = manager_state.access_token or regular_state.access_token
 
     started = perf_counter()
+    repeats = max(1, int(repeat_count))
+    warmup_drops = max(0, min(int(warmup_drop_count), repeats - 1))
     for matcher in sorted(route_matchers, key=lambda x: (x["router"], x["path"], x["method"])):
         method = matcher["method"]
         path = _render_route_path(
@@ -1083,14 +1090,20 @@ def run_all_router_endpoints_once(
             )
 
         headers = _build_headers_for_route(method, auth_token)
-        _invoke_route_once(
-            client=client,
-            method=method,
-            path=path,
-            headers=headers,
-            json_body=body,
-            name=f"route.{method} {matcher['path']}",
-        )
+        for attempt_index in range(repeats):
+            records_len_before = len(client.records)
+            replay_len_before = len(client.replay_requests)
+            _invoke_route_once(
+                client=client,
+                method=method,
+                path=path,
+                headers=headers,
+                json_body=body,
+                name=f"route.{method} {matcher['path']}",
+            )
+            if attempt_index < warmup_drops:
+                del client.records[records_len_before:]
+                del client.replay_requests[replay_len_before:]
 
     total_elapsed_ms = (perf_counter() - started) * 1000
     request_dicts = [asdict(item) for item in client.records]
@@ -1100,6 +1113,8 @@ def run_all_router_endpoints_once(
         "client": client,
         "route_sweep_elapsed_ms": total_elapsed_ms,
         "route_sweep_count": len(route_matchers),
+        "repeat_count": repeats,
+        "warmup_drop_count": warmup_drops,
     }
 
 
@@ -1111,7 +1126,7 @@ def run_lprof_for_top_endpoints(
     route_matchers: list[dict],
     output_dir: Path,
 ) -> list[dict]:
-    """지연 상위 endpoint의 실제 라우터 함수를 lprof 대상으로 리플레이/저장한다."""
+    """지연 상위 endpoint의 실제 라우터 함수를 lprof 대상으로 리플레이/저장"""
     if not endpoint_rows:
         print("\n[lprof] profile 대상 endpoint 없음")
         return []
@@ -1147,7 +1162,7 @@ def run_lprof_for_top_endpoints(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
-    print(f"\n=== lprof Replay (Top {len(endpoint_rows)}) ===")
+    print(f"\n=== lprof Replay (Targets {len(endpoint_rows)}) ===")
     for index, row in enumerate(endpoint_rows, start=1):
         key = (row["method"], row["path"])
         replay = representative_requests.get(key)
@@ -1180,7 +1195,7 @@ def run_lprof_for_top_endpoints(
         profiled_function = f"{endpoint_callable.__module__}.{getattr(endpoint_callable, '__name__', 'unknown')}"
 
         async def _replay_against_asgi() -> httpx.Response:
-            """ASGI in-process 재요청으로 실제 라우터 함수를 실행한다."""
+            """ASGI in-process 재요청으로 실제 라우터 함수를 실행"""
             asgi_transport = httpx.ASGITransport(app=backend_app)
             async with httpx.AsyncClient(
                 transport=asgi_transport,
@@ -1284,10 +1299,23 @@ def run_lprof_for_top_endpoints(
     return results
 
 
-def main() -> int:
-    """단일 프로파일링 실행 전체 흐름을 구성하고 결과를 저장한다."""
+@dataclass
+class RunOutputPaths:
+    run_output_dir: Path
+    server_log_path: Path
+    output_json_path: Path
+    output_plot_path: Path
+    lprof_output_dir: Path
+
+
+def parse_args() -> argparse.Namespace:
+    """스크립트 실행 인자를 파싱한다."""
     parser = argparse.ArgumentParser(
-        description="단일 실행: main.py 라우트 전수 수집 -> 테스트 모드 실행 -> 모든 GET/POST/PATCH/PUT 라우트 1회 호출 -> endpoint latency 그래프 출력"
+        description=(
+            "단일 실행: main.py 라우트 전수 수집 -> 테스트 모드 실행 -> "
+            "모든 GET/POST/PATCH/PUT 라우트 10회 호출(1회 워밍업 제외) -> "
+            "endpoint latency 그래프 출력"
+        )
     )
     parser.add_argument("--port", type=int, default=8210, help="테스트 서버 포트 (기본: 8210)")
     parser.add_argument("--run-id", default=f"single-{int(time.time())}", help="로드테스트 run_id")
@@ -1298,13 +1326,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-json",
-        default=str(CURRENT_DIR / "output" / "single_test_profile_report.json"),
-        help="결과 JSON 경로",
+        default=None,
+        help="결과 JSON 경로 (미지정 시 output/YYYYMMDD_HHMMSS/single_test_profile_report.json)",
     )
     parser.add_argument(
         "--output-plot",
-        default=str(CURRENT_DIR / "output" / "single_test_profile_top20.png"),
-        help="엔드포인트 지연시간 막대그래프 PNG 경로",
+        default=None,
+        help="엔드포인트 지연시간 막대그래프 PNG 경로 (미지정 시 output/YYYYMMDD_HHMMSS/single_test_profile_top20.png)",
     )
     parser.add_argument(
         "--plot-ms-labels",
@@ -1321,20 +1349,166 @@ def main() -> int:
     parser.add_argument(
         "--lprof-top-n",
         type=int,
-        default=20,
-        help="line_profiler 재실행 대상 상위 N개 endpoint 수 (기본: 20)",
+        default=0,
+        help="line_profiler 재실행 대상 endpoint 수 (0 이하면 전체, 기본: 0)",
     )
     parser.add_argument(
         "--lprof-dir",
-        default=str(CURRENT_DIR / "output" / "lprof"),
-        help="line_profiler 결과(.lprof/.txt) 저장 디렉터리",
+        default=None,
+        help="line_profiler 결과(.lprof/.txt) 저장 디렉터리 (미지정 시 output/YYYYMMDD_HHMMSS/lprof)",
     )
     parser.add_argument(
         "--server-log",
-        default=f"/tmp/teeup_single_test_server_{int(time.time())}.log",
-        help="테스트 서버 로그 파일 경로",
+        default=None,
+        help="테스트 서버 로그 파일 경로 (미지정 시 output/YYYYMMDD_HHMMSS/server.log)",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def resolve_run_output_paths(args: argparse.Namespace, run_started_at: datetime.datetime) -> RunOutputPaths:
+    """실행 시점과 인자로부터 결과물 경로를 결정한다."""
+    run_output_dir = CURRENT_DIR / "output" / run_started_at.strftime("%Y%m%d_%H%M%S")
+    server_log_path = Path(args.server_log) if args.server_log else run_output_dir / "server.log"
+    output_json_path = Path(args.output_json) if args.output_json else run_output_dir / "single_test_profile_report.json"
+    output_plot_path = Path(args.output_plot) if args.output_plot else run_output_dir / "single_test_profile_top20.png"
+    lprof_output_dir = Path(args.lprof_dir) if args.lprof_dir else run_output_dir / "lprof"
+    return RunOutputPaths(
+        run_output_dir=run_output_dir,
+        server_log_path=server_log_path,
+        output_json_path=output_json_path,
+        output_plot_path=output_plot_path,
+        lprof_output_dir=lprof_output_dir,
+    )
+
+
+def ensure_output_dirs(paths: RunOutputPaths) -> None:
+    """리포트/그래프/로그/lprof 결과 저장 디렉터리를 생성한다."""
+    paths.run_output_dir.mkdir(parents=True, exist_ok=True)
+    paths.server_log_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.output_json_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.output_plot_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.lprof_output_dir.mkdir(parents=True, exist_ok=True)
+
+
+def print_endpoint_blacklist() -> None:
+    """현재 적용 중인 endpoint 블랙리스트를 콘솔에 출력한다."""
+    if not ENDPOINT_BLACKLIST and not ENDPOINT_BLACKLIST_PATH_PREFIXES:
+        return
+
+    exact_text = ", ".join(sorted(f"[{method}] {path}" for method, path in ENDPOINT_BLACKLIST))
+    prefix_text = ", ".join(sorted(ENDPOINT_BLACKLIST_PATH_PREFIXES))
+    if exact_text:
+        print(f"Endpoint blacklist exact: {exact_text}")
+    if prefix_text:
+        print(f"Endpoint blacklist prefixes: {prefix_text}")
+
+
+def ensure_server_ready(
+    base_url: str,
+    python_exec: str,
+    port: int,
+    server_log_path: Path,
+) -> tuple[Optional[subprocess.Popen], Optional[Any], bool]:
+    """health 확인 후 기존 서버를 재사용하거나 테스트 서버를 새로 기동한다."""
+    process = None
+    log_file = None
+    started_server = False
+
+    try:
+        response = requests.get(f"{base_url}/health", timeout=1.2)
+        if response.status_code == 200:
+            print(f"Reusing existing server: {base_url}")
+            return process, log_file, started_server
+        raise requests.RequestException("health not 200")
+    except requests.RequestException:
+        process, log_file = start_test_server(
+            python_executable=python_exec,
+            port=port,
+            log_path=server_log_path,
+        )
+        started_server = True
+        wait_until_ready(base_url, process, timeout_sec=80)
+        print(f"Started test-mode server: {base_url}")
+        return process, log_file, started_server
+
+
+def select_profile_targets(
+    endpoint_coverage: list[dict],
+    top_n: int,
+    requested_lprof_top_n: int,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """커버리지 결과에서 출력 상위 endpoint와 lprof 대상을 추린다."""
+    executed_endpoints = [row for row in endpoint_coverage if row["hit"]]
+    executed_endpoints.sort(key=lambda x: x["avg_ms"], reverse=True)
+    endpoint_top_stats = executed_endpoints[:top_n]
+    if requested_lprof_top_n <= 0:
+        lprof_targets = executed_endpoints
+    else:
+        lprof_targets = executed_endpoints[:requested_lprof_top_n]
+    return executed_endpoints, endpoint_top_stats, lprof_targets
+
+
+def build_report_payload(
+    *,
+    base_url: str,
+    run_id: str,
+    run_result: dict,
+    endpoint_stats: list[dict],
+    endpoint_coverage: list[dict],
+    endpoint_top_stats: list[dict],
+    route_catalog: list[dict],
+    router_counts: list[dict],
+    executed_endpoints: list[dict],
+    top_n: int,
+    lprof_top_n: int,
+    requested_lprof_top_n: int,
+    lprof_results: list[dict],
+    paths: RunOutputPaths,
+    schema_samples: dict[str, dict],
+    route_samples: dict[str, dict],
+    plot_ms_labels: bool,
+) -> dict:
+    """JSON 리포트 payload를 조립한다."""
+    return {
+        "base_url": base_url,
+        "run_id": run_id,
+        "generated_at_epoch": int(time.time()),
+        "route_sweep_count": run_result["route_sweep_count"],
+        "route_sweep_elapsed_ms": run_result["route_sweep_elapsed_ms"],
+        "route_repeat_count": run_result["repeat_count"],
+        "route_warmup_drop_count": run_result["warmup_drop_count"],
+        "endpoints": endpoint_top_stats,
+        "endpoint_stats_all": endpoint_stats,
+        "endpoint_coverage": endpoint_coverage,
+        "route_catalog": route_catalog,
+        "route_catalog_count": len(route_catalog),
+        "router_counts": router_counts,
+        "covered_endpoint_count": len(executed_endpoints),
+        "top_n": top_n,
+        "lprof_top_n": lprof_top_n,
+        "requested_lprof_top_n": requested_lprof_top_n,
+        "endpoint_blacklist_exact": sorted(
+            [{"method": method, "path": path} for method, path in ENDPOINT_BLACKLIST],
+            key=lambda x: (x["method"], x["path"]),
+        ),
+        "endpoint_blacklist_path_prefixes": sorted(ENDPOINT_BLACKLIST_PATH_PREFIXES),
+        "lprof_output_dir": str(paths.lprof_output_dir),
+        "lprof_results": lprof_results,
+        "requests": run_result["requests"],
+        "sample_schema_dir": str(SAMPLE_SCHEMA_DIR),
+        "sample_route_dir": str(SAMPLE_ROUTE_DIR),
+        "sample_schema_count": len(schema_samples),
+        "sample_route_count": len(route_samples),
+        "plot_path": str(paths.output_plot_path),
+        "plot_ms_labels": plot_ms_labels,
+        "run_output_dir": str(paths.run_output_dir),
+        "server_log": str(paths.server_log_path),
+    }
+
+
+def main() -> int:
+    """단일 프로파일링 실행 전체 흐름을 구성하고 결과를 저장"""
+    args = parse_args()
 
     apply_test_env_defaults_for_inprocess(args.port)
     backend_app = load_backend_app_from_main()
@@ -1346,45 +1520,22 @@ def main() -> int:
         for router_name, entries in router_endpoints.items()
     ]
     print_router_endpoint_inventory(router_endpoints)
-    if ENDPOINT_BLACKLIST or ENDPOINT_BLACKLIST_PATH_PREFIXES:
-        exact_text = ", ".join(sorted(f"[{method}] {path}" for method, path in ENDPOINT_BLACKLIST))
-        prefix_text = ", ".join(sorted(ENDPOINT_BLACKLIST_PATH_PREFIXES))
-        if exact_text:
-            print(f"Endpoint blacklist exact: {exact_text}")
-        if prefix_text:
-            print(f"Endpoint blacklist prefixes: {prefix_text}")
+    print_endpoint_blacklist()
     print(
         f"\nLoaded samples: schemas={len(schema_samples)} ({SAMPLE_SCHEMA_DIR}), "
         f"routes={len(route_samples)} ({SAMPLE_ROUTE_DIR})"
     )
 
+    run_started_at = datetime.datetime.now()
+    paths = resolve_run_output_paths(args, run_started_at)
     base_url = f"http://127.0.0.1:{args.port}"
-    server_log_path = Path(args.server_log)
-    output_path = Path(args.output_json)
-    output_plot_path = Path(args.output_plot)
-    lprof_output_dir = Path(args.lprof_dir)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    process = None
-    log_file = None
-    started_server = False
-
-    # 기존 서버 사용 여부 확인
-    try:
-        response = requests.get(f"{base_url}/health", timeout=1.2)
-        if response.status_code == 200:
-            print(f"Reusing existing server: {base_url}")
-        else:
-            raise requests.RequestException("health not 200")
-    except requests.RequestException:
-        process, log_file = start_test_server(
-            python_executable=args.python_exec,
-            port=args.port,
-            log_path=server_log_path,
-        )
-        started_server = True
-        wait_until_ready(base_url, process, timeout_sec=80)
-        print(f"Started test-mode server: {base_url}")
+    ensure_output_dirs(paths)
+    process, log_file, started_server = ensure_server_ready(
+        base_url=base_url,
+        python_exec=args.python_exec,
+        port=args.port,
+        server_log_path=paths.server_log_path,
+    )
 
     try:
         result = run_all_router_endpoints_once(
@@ -1393,17 +1544,21 @@ def main() -> int:
             route_matchers=route_matchers,
             schema_samples=schema_samples,
             route_samples=route_samples,
+            repeat_count=ENDPOINT_REPEAT_COUNT,
+            warmup_drop_count=ENDPOINT_WARMUP_DROPS,
         )
         endpoint_stats = aggregate_endpoint_stats(result["requests"], route_matchers)
         endpoint_coverage = build_endpoint_coverage(route_catalog, endpoint_stats)
         print_coverage_summary(endpoint_coverage)
 
-        executed_endpoints = [row for row in endpoint_coverage if row["hit"]]
-        executed_endpoints.sort(key=lambda x: x["avg_ms"], reverse=True)
         top_n = max(1, int(args.top_n))
-        endpoint_top_stats = executed_endpoints[:top_n]
-        lprof_top_n = max(1, int(args.lprof_top_n))
-        lprof_targets = executed_endpoints[:lprof_top_n]
+        requested_lprof_top_n = int(args.lprof_top_n)
+        executed_endpoints, endpoint_top_stats, lprof_targets = select_profile_targets(
+            endpoint_coverage=endpoint_coverage,
+            top_n=top_n,
+            requested_lprof_top_n=requested_lprof_top_n,
+        )
+        lprof_top_n = len(lprof_targets)
 
         print_route_sweep_summary(
             total_routes=result["route_sweep_count"],
@@ -1413,56 +1568,46 @@ def main() -> int:
         print_endpoint_table(endpoint_top_stats, title=f"Endpoint Latency Summary (Top {len(endpoint_top_stats)})")
         save_endpoint_graph_matplotlib(
             endpoint_top_stats,
-            output_plot_path,
+            paths.output_plot_path,
             show_ms_labels=bool(args.plot_ms_labels),
         )
+
+        # line_profiler 실행
         lprof_results = run_lprof_for_top_endpoints(
             backend_app=backend_app,
             client=result["client"],
             endpoint_rows=lprof_targets,
             replay_requests=result["replay_requests"],
             route_matchers=route_matchers,
-            output_dir=lprof_output_dir,
+            output_dir=paths.lprof_output_dir,
         )
 
-        payload = {
-            "base_url": base_url,
-            "run_id": args.run_id,
-            "generated_at_epoch": int(time.time()),
-            "route_sweep_count": result["route_sweep_count"],
-            "route_sweep_elapsed_ms": result["route_sweep_elapsed_ms"],
-            "endpoints": endpoint_top_stats,
-            "endpoint_stats_all": endpoint_stats,
-            "endpoint_coverage": endpoint_coverage,
-            "route_catalog": route_catalog,
-            "route_catalog_count": len(route_catalog),
-            "router_counts": router_counts,
-            "covered_endpoint_count": len(executed_endpoints),
-            "top_n": top_n,
-            "lprof_top_n": lprof_top_n,
-            "endpoint_blacklist_exact": sorted(
-                [{"method": method, "path": path} for method, path in ENDPOINT_BLACKLIST],
-                key=lambda x: (x["method"], x["path"]),
-            ),
-            "endpoint_blacklist_path_prefixes": sorted(ENDPOINT_BLACKLIST_PATH_PREFIXES),
-            "lprof_output_dir": str(lprof_output_dir),
-            "lprof_results": lprof_results,
-            "requests": result["requests"],
-            "sample_schema_dir": str(SAMPLE_SCHEMA_DIR),
-            "sample_route_dir": str(SAMPLE_ROUTE_DIR),
-            "sample_schema_count": len(schema_samples),
-            "sample_route_count": len(route_samples),
-            "plot_path": str(output_plot_path),
-            "plot_ms_labels": bool(args.plot_ms_labels),
-            "server_log": str(server_log_path),
-        }
-        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"\nSaved report: {output_path}")
+        payload = build_report_payload(
+            base_url=base_url,
+            run_id=args.run_id,
+            run_result=result,
+            endpoint_stats=endpoint_stats,
+            endpoint_coverage=endpoint_coverage,
+            endpoint_top_stats=endpoint_top_stats,
+            route_catalog=route_catalog,
+            router_counts=router_counts,
+            executed_endpoints=executed_endpoints,
+            top_n=top_n,
+            lprof_top_n=lprof_top_n,
+            requested_lprof_top_n=requested_lprof_top_n,
+            lprof_results=lprof_results,
+            paths=paths,
+            schema_samples=schema_samples,
+            route_samples=route_samples,
+            plot_ms_labels=bool(args.plot_ms_labels),
+        )
+        paths.output_json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\nSaved report: {paths.output_json_path}")
         return 0
     finally:
         if started_server and process is not None and log_file is not None:
             stop_server(process, log_file)
-            print(f"Stopped test server. log={server_log_path}")
+            print(f"Stopped test server. log={paths.server_log_path}")
 
 
 if __name__ == "__main__":

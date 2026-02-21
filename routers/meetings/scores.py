@@ -5,9 +5,13 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 import logging
 from math import ceil
 from typing import Optional
+
+# from sqlalchemy.dialects import mysql # 디버깅 쿼리출력용
+
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -314,56 +318,82 @@ async def get_scores(
 ):
     """스코어 목록 조회"""
     try:
-        query = db.query(Score).options(
-            joinedload(Score.participant).joinedload(MeetingParticipant.user),
-            joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+        # 1) current_user.id 기준으로 participant_id 조회
+        participant_query = db.query(MeetingParticipant.id).filter(
+            MeetingParticipant.user_id == current_user.id
         )
-        
-        # 필터링
-        if participant_id:
-            query = query.filter(Score.participant_id == participant_id)
-            
+
         if meeting_id:
-            query = query.join(MeetingParticipant).filter(
-                MeetingParticipant.meeting_id == meeting_id
-            )
-            
+            participant_query = participant_query.filter(MeetingParticipant.meeting_id == meeting_id)
+        if participant_id:
+            participant_query = participant_query.filter(MeetingParticipant.id == participant_id)
+
+        resolved_participant = participant_query.first()
+        if not resolved_participant:
+            return ScoreListResponse(scores=[], total=0, page=page, limit=limit, total_pages=0)
+
+        resolved_participant_id = resolved_participant[0]
+
+        # 2) ScoreResponse에 필요한 컬럼만 조회
+        query = db.query(
+            Score.id.label("id"),
+            Score.participant_id.label("participant_id"),
+            MeetingParticipant.user_id.label("user_id"),
+            User.realname.label("user_name"),
+            User.nickname.label("user_nickname"),
+            Meeting.id.label("meeting_id"),
+            Meeting.name.label("meeting_name"),
+            Score.hole_number.label("hole_number"),
+            Score.strokes.label("strokes"),
+            Score.par.label("par"),
+            Score.score_to_par.label("score_to_par"),
+            Score.created_at.label("created_at"),
+            Score.updated_at.label("updated_at"),
+        ).join(
+            MeetingParticipant, MeetingParticipant.id == Score.participant_id
+        ).join(
+            Meeting, Meeting.id == MeetingParticipant.meeting_id
+        ).outerjoin(
+            User, User.id == MeetingParticipant.user_id
+        ).filter(
+            Score.participant_id == resolved_participant_id
+        )
+
         if hole_number:
             query = query.filter(Score.hole_number == hole_number)
-        
-        # 권한 확인 (관리자는 모든 스코어 조회 가능)
-        from models import Admin
-        admin = db.query(Admin).filter(
-            Admin.id == current_user.id,
-            Admin.deleted_at.is_(None)
-        ).first()
-        
-        if not admin:
-            if participant_id:
-                if not check_score_permission(current_user.id, participant_id, db):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="스코어 조회 권한이 없습니다."
-                    )
-            else:
-                # participant_id가 없으면 본인의 스코어만 조회
-                user_participants = db.query(MeetingParticipant).filter(
-                    MeetingParticipant.user_id == current_user.id
-                ).all()
-                participant_ids = [p.id for p in user_participants]
-                if participant_ids:
-                    query = query.filter(Score.participant_id.in_(participant_ids))
-                else:
-                    # 참가한 모임이 없으면 빈 결과 반환
-                    return ScoreListResponse(scores=[], total=0, page=page, limit=limit, total_pages=0)
-        
-        # 총 개수 조회
-        total = query.count()
-        
-        # 페이징
+
+        # # 디버깅용 쿼리출력 =============================================================
+        # debug_query = query.order_by(Score.hole_number.asc())
+
+        # raw_sql = debug_query.statement.compile(
+        #     dialect=mysql.dialect(),
+        #     compile_kwargs={"literal_binds": True},
+        # )
+        # print(f"[RAW SQL] {raw_sql}")
+        # # 디버깅용 쿼리출력 =============================================================
+
+        # 3) hole_number 오름차순 정렬 후 페이지네이션
+        all_scores = query.order_by(Score.hole_number.asc()).all()
+        total = len(all_scores)
         offset = (page - 1) * limit
-        scores = query.order_by(Score.participant_id, Score.hole_number).offset(offset).limit(limit).all()
-        score_responses = [_build_score_response(score) for score in scores]
+        scores = all_scores[offset:offset + limit]
+        score_responses = [
+            ScoreResponse(
+                id=score.id,
+                participant_id=score.participant_id,
+                user_id=score.user_id or 0,
+                user_name=score.user_name or "",
+                user_nickname=score.user_nickname or "",
+                meeting_id=score.meeting_id,
+                meeting_name=score.meeting_name or "",
+                hole_number=score.hole_number,
+                strokes=score.strokes,
+                par=score.par,
+                score_to_par=score.score_to_par,
+                created_at=score.created_at,
+                updated_at=score.updated_at,
+            ) for score in scores
+        ]
         
         return ScoreListResponse(
             scores=score_responses,
@@ -619,7 +649,7 @@ async def get_participant_scores(
             joinedload(Score.participant).joinedload(MeetingParticipant.user),
             joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
         ).filter(Score.participant_id == participant.id)
-        total = scores_query.count()
+        total = scores_query.enable_eagerloads(False).order_by(None).with_entities(func.count(Score.id)).scalar() or 0
         scores = scores_query.order_by(Score.hole_number).offset(offset).limit(limit).all()
         score_responses = [_build_score_response(score, meeting=meeting) for score in scores]
         
