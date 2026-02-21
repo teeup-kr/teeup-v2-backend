@@ -46,7 +46,7 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
                          club_id: str = Query(..., description="클럽 ID"),
                          db: Session = Depends(get_db),
                          current_user: User = Depends(get_current_active_user)):
-    """모임 생성 (클럽 멤버만 가능)"""
+    """모임 생성 (클럽 리더/매니저만 가능)"""
     try:
         # 디버깅: 스키마 필드 확인
         print(f"DEBUG: RoundingMeetingCreate fields: {RoundingMeetingCreate.__fields__.keys()}")
@@ -70,24 +70,26 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
         if not club:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="클럽을 찾을 수 없습니다.")
 
-        # 클럽 멤버 권한 확인 (라운딩 모임은 관리자만 생성 가능)
-        membership = db.query(ClubMembership).filter(ClubMembership.club_id == club_id,
-                                                     ClubMembership.user_id == current_user.id).first()
+        # 클럽 멤버 권한 확인
+        membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+        ).first()
 
         if not membership:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="클럽 멤버만 모임을 생성할 수 있습니다.")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="해당 클럽의 활성 멤버가 아닙니다.")
 
-        # 라운딩 모임은 리더/매니저만 생성 가능, 이벤트는 일반 멤버도 가능
-        if meeting_data.meeting_type == MeetingType.ROUND and membership.role not in [
-                ClubRole.LEADER, ClubRole.MANAGER
-        ]:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="라운딩 모임은 클럽 리더/매니저만 생성할 수 있습니다.")
+        # 모임 생성은 리더/매니저만 가능
+        if membership.role not in [ClubRole.LEADER, ClubRole.MANAGER]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="클럽 리더/매니저만 모임을 생성할 수 있습니다.")
 
         # 모임 생성
         meeting = Meeting(            name=meeting_data.name,
             description=meeting_data.description,
             location=meeting_data.location,
             meeting_time=meeting_data.meeting_time,
+            application_deadline=meeting_data.application_deadline,
             tee_times=meeting_data.tee_times,
             max_participants=meeting_data.max_participants,
             meeting_type=ModelMeetingType(meeting_data.meeting_type.value),
@@ -100,7 +102,9 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
             course_name=meeting_data.course_name,
             hole_count=meeting_data.hole_count,
             reservation_name=meeting_data.reservation_name,
-            club_id=club_id,
+            team_formation_mode=meeting_data.team_formation_mode,
+            team_size=meeting_data.team_size,
+            club_id=club.id,
             created_by=current_user.id
         )
         
@@ -161,10 +165,13 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
             description=meeting.description,
             location=meeting.location,
             meeting_time=meeting.meeting_time,
+            application_deadline=meeting.application_deadline,
             tee_times=meeting.tee_times,
             max_participants=meeting.max_participants,
             meeting_type=meeting.meeting_type,
             meeting_subtype=meeting.meeting_subtype,
+            team_formation_mode=meeting.team_formation_mode,
+            team_size=meeting.team_size,
             total_cost=meeting.total_cost,
             green_fee=meeting.green_fee,
             caddy_fee=meeting.caddy_fee,
@@ -173,11 +180,14 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
             course_name=meeting.course_name,
             hole_count=meeting.hole_count,
             reservation_name=meeting.reservation_name,
+            venue_name=meeting.venue_name,
             status=meeting.status,
             cancel_reason=meeting.cancel_reason,
             club_id=meeting.club_id,
             club_name=club.name,
             participant_count=participant_count,
+            social_cost=meeting.social_cost,
+            social_notes=meeting.social_notes,
             team_formation_confirmed_at=meeting.team_formation_confirmed_at,
             rounding_started_at=meeting.rounding_started_at,
             rounding_completed_at=meeting.rounding_completed_at,
@@ -202,7 +212,10 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
     """라운딩 모임 목록 조회"""
     try:
         # 사용자가 속한 클럽들의 ID 조회
-        user_clubs = db.query(ClubMembership.club_id).filter(ClubMembership.user_id == current_user.id).all()
+        user_clubs = db.query(ClubMembership.club_id).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+        ).all()
 
         club_ids = [club.club_id for club in user_clubs]
 
@@ -217,6 +230,11 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
 
         # 사용자가 생성한 프라이빗 라운딩 ID 목록
         user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
+        manager_club_ids = db.query(ClubMembership.club_id).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+        ).subquery()
 
         query = db.query(Meeting).filter(
             Meeting.club_id.in_(club_ids),
@@ -226,7 +244,11 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
             or_(
                 Meeting.is_private == False,  # 일반 라운딩
                 and_(Meeting.is_private == True,
-                     or_(Meeting.id.in_(user_participant_meeting_ids), Meeting.id.in_(user_created_meeting_ids)))))
+                     or_(
+                         Meeting.id.in_(user_participant_meeting_ids),
+                         Meeting.id.in_(user_created_meeting_ids),
+                         Meeting.club_id.in_(manager_club_ids),
+                     ))))
 
         total = query.count()
 
@@ -448,13 +470,22 @@ async def get_meetings(club_id: Optional[int] = None,
 
         # 사용자가 생성한 프라이빗 라운딩 ID 목록
         user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
+        manager_club_ids = db.query(ClubMembership.club_id).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+        ).subquery()
 
-        # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자인 경우
+        # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자/클럽 리더·매니저인 경우
         meetings_query = meetings_query.filter(
             or_(
                 Meeting.is_private == False,  # 일반 라운딩
                 and_(Meeting.is_private == True,
-                     or_(Meeting.id.in_(user_participant_meeting_ids), Meeting.id.in_(user_created_meeting_ids)))))
+                     or_(
+                         Meeting.id.in_(user_participant_meeting_ids),
+                         Meeting.id.in_(user_created_meeting_ids),
+                         Meeting.club_id.in_(manager_club_ids),
+                     ))))
 
         # 검색 기능 추가
         if search:
@@ -479,8 +510,11 @@ async def get_meetings(club_id: Optional[int] = None,
                             Meeting.is_private == False,
                             and_(
                                 Meeting.is_private == True,
-                                or_(Meeting.id.in_(user_participant_meeting_ids),
-                                    Meeting.id.in_(user_created_meeting_ids))))).group_by(
+                                or_(
+                                    Meeting.id.in_(user_participant_meeting_ids),
+                                    Meeting.id.in_(user_created_meeting_ids),
+                                    Meeting.club_id.in_(manager_club_ids),
+                                )))).group_by(
                                         Meeting.id, Club.name).order_by(
                                             Meeting.meeting_time.desc()).offset(offset).limit(limit).all()
 
@@ -706,9 +740,16 @@ async def get_meeting(meeting_id: int,
                      MeetingParticipant.user_id == current_user.id)).first()
 
             is_creator = meeting.created_by == current_user.id
+            is_manager_or_leader = db.query(ClubMembership).filter(
+                ClubMembership.club_id == meeting.club_id,
+                ClubMembership.user_id == current_user.id,
+                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+                ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+            ).first()
 
-            if not is_participant and not is_creator:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="프라이빗 라운딩은 참가자 또는 생성자만 조회할 수 있습니다.")
+            if not is_participant and not is_creator and not is_manager_or_leader:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail="프라이빗 라운딩은 참가자/생성자/클럽 리더·매니저만 조회할 수 있습니다.")
         else:
             # 일반 라운딩: 클럽 멤버십 확인
             membership = db.query(ClubMembership).filter(
@@ -982,8 +1023,9 @@ async def cancel_meeting(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
-        # 모임 매니저 권한 확인 (모임 생성자 기준)
-        if meeting.created_by != current_user.id:
+        # 모임 매니저 권한 확인 (개설자 또는 클럽 리더/매니저)
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="모임 매니저만 모임을 취소할 수 있습니다.")
 
         # 이미 취소된 모임인지 확인
@@ -1162,8 +1204,9 @@ async def send_meeting_notification(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
-        # 모임 매니저 권한 확인 (모임 생성자 기준)
-        if meeting.created_by != current_user.id:
+        # 모임 매니저 권한 확인 (개설자 또는 클럽 리더/매니저)
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="모임 매니저만 알림을 전송할 수 있습니다.")
 
         # 알림을 받을 참가자들 조회
@@ -1241,8 +1284,9 @@ async def send_meeting_reminder(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
-        # 모임 매니저 권한 확인 (모임 생성자 기준)
-        if meeting.created_by != current_user.id:
+        # 모임 매니저 권한 확인 (개설자 또는 클럽 리더/매니저)
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="모임 매니저만 리마인더를 전송할 수 있습니다.")
 
         # 참가자들 조회

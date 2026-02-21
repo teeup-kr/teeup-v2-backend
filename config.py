@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     API_VERSION: str = ""
     # Database Configuration
     DATABASE_URL: str = ""
+    DB_POOL_SIZE: int = 40
+    DB_MAX_OVERFLOW: int = 80
+    DB_POOL_TIMEOUT: int = 60
+    DB_POOL_RECYCLE: int = 1800
+    DB_POOL_PRE_PING: bool = True
 
     # JWT Configuration
     JWT_SECRET_KEY: str = ""
@@ -36,6 +41,20 @@ class Settings(BaseSettings):
         return [
             origin.strip() for origin in self.CORS_ORIGINS.split(",")
             if origin.strip()
+        ]
+
+    # Loadtest Internal OAuth Mock
+    ENABLE_LOADTEST_AUTH_MOCK: bool = False
+    LOADTEST_AUTH_MOCK_ALLOWED_IPS: str = "127.0.0.1,::1"
+
+    @property
+    def loadtest_auth_mock_allowed_ips_list(self) -> List[str]:
+        """Convert loadtest oauth mock allowed IPs to list"""
+        if not self.LOADTEST_AUTH_MOCK_ALLOWED_IPS:
+            return []
+        return [
+            ip.strip() for ip in self.LOADTEST_AUTH_MOCK_ALLOWED_IPS.split(",")
+            if ip.strip()
         ]
 
     # File Upload

@@ -135,7 +135,7 @@ def can_manage_settlement(meeting_id: int, user_id: int, db: Session) -> bool:
     
     권한이 있는 경우:
     1. 주최자: meeting.created_by 사용자
-    2. 참가자이면서 클럽 리더/매니저: isParticipant && club_role ∈ {LEADER, MANAGER}
+    2. 클럽 리더/매니저: club_role ∈ {LEADER, MANAGER}
     
     Args:
         meeting_id: 모임 ID
@@ -155,23 +155,15 @@ def can_manage_settlement(meeting_id: int, user_id: int, db: Session) -> bool:
         if meeting.created_by == user_id:
             return True
         
-        # 2. 참가자 여부 확인
-        participant = db.query(MeetingParticipant).filter(
-            MeetingParticipant.meeting_id == meeting_id,
-            MeetingParticipant.user_id == user_id
+        # 클럽 리더/매니저 권한 확인
+        manager_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == meeting.club_id,
+            ClubMembership.user_id == user_id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
         ).first()
-        
-        is_participant = participant is not None
-        if not is_participant:
-            return False
-        
-        # 3. 클럽 리더/매니저 권한 확인
-        from .clubs import get_user_club_role
-        club_role = get_user_club_role(meeting.club_id, user_id, db)
-        is_club_leader_or_manager = club_role in ['LEADER', 'MANAGER']
-        
-        # 4. 최종 권한 확인: 참가자이면서 클럽 리더/매니저
-        return is_participant and is_club_leader_or_manager
+
+        return manager_membership is not None
         
     except Exception as e:
         logger.error(f"정산 권한 체크 중 오류: {str(e)}")
@@ -211,11 +203,11 @@ async def create_rounding_settlement(
                 detail="정산이 이미 확정되어 수정할 수 없습니다."
             )
         
-        # 정산 권한 확인: 주최자 또는 참가자이면서 클럽 리더/매니저
+        # 정산 권한 확인: 주최자 또는 클럽 리더/매니저
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산을 생성할 수 있습니다."
+                detail="모임 개설자 또는 클럽 리더/매니저만 정산을 생성할 수 있습니다."
             )
         
         # 정산 데이터 추출
@@ -563,11 +555,11 @@ async def create_social_settlement(
                 detail="정산이 이미 확정되어 수정할 수 없습니다."
             )
         
-        # 정산 권한 확인: 주최자 또는 참가자이면서 클럽 리더/매니저
+        # 정산 권한 확인: 주최자 또는 클럽 리더/매니저
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산을 생성할 수 있습니다."
+                detail="모임 개설자 또는 클럽 리더/매니저만 정산을 생성할 수 있습니다."
             )
         
         expense_items_data = settlement_data.get('expense_items', [])
@@ -901,11 +893,17 @@ async def get_meeting_settlement(
                 ).first()
                 
                 is_creator = meeting.created_by == current_user.id
+                is_manager_or_leader = db.query(ClubMembership).filter(
+                    ClubMembership.club_id == meeting.club_id,
+                    ClubMembership.user_id == current_user.id,
+                    ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+                    ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
+                ).first()
                 
-                if not is_participant and not is_creator:
+                if not is_participant and not is_creator and not is_manager_or_leader:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="프라이빗 라운딩의 정산 정보는 참가자 또는 생성자만 조회할 수 있습니다."
+                        detail="프라이빗 라운딩의 정산 정보는 참가자/생성자/클럽 리더·매니저만 조회할 수 있습니다."
                     )
         else:
             # 일반 라운딩: 관리자가 아닌 경우에만 클럽 멤버십 확인
@@ -1057,11 +1055,11 @@ async def get_available_participants(
                 detail="모임을 찾을 수 없습니다."
             )
         
-        # 정산 권한 확인: 주최자 또는 참가자이면서 클럽 리더/매니저
+        # 정산 권한 확인: 주최자 또는 클럽 리더/매니저
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="모임 개설자 또는 참가자인 클럽 리더/매니저만 정산 대상자를 조회할 수 있습니다."
+                detail="모임 개설자 또는 클럽 리더/매니저만 정산 대상자를 조회할 수 있습니다."
             )
         
         # 참가자 조회 (게스트 포함)
@@ -1107,8 +1105,6 @@ async def get_available_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="서버 내부 오류가 발생했습니다."
         )
-
-
 
 
 

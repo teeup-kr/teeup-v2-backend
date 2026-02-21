@@ -203,16 +203,11 @@ async def close_application_early(meeting_id: int,
             f"모임 조회 성공 - meeting_id: {meeting_id}, status: {meeting.status}, application_closed_early: {getattr(meeting, 'application_closed_early', False)}"
         )
 
-        # 클럽 멤버십 확인
-        membership = db.query(ClubMembership).filter(ClubMembership.user_id == current_user.id,
-                                                     ClubMembership.club_id == meeting.club_id,
-                                                     ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)).first()
-
-        if not membership:
-            logger.error(f"클럽 멤버십 없음 - user_id: {current_user.id}, club_id: {meeting.club_id}")
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="해당 클럽의 멤버가 아닙니다.")
-
-        logger.info(f"클럽 멤버십 확인 성공 - user_id: {current_user.id}, club_id: {meeting.club_id}")
+        # 매니저/리더 권한 확인 (개설자 또는 클럽 리더/매니저)
+        from utils.permissions import is_meeting_organizer_or_manager
+        if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
+            logger.error(f"모집 조기 마감 권한 없음 - user_id: {current_user.id}, meeting_id: {meeting_id}")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 모집을 조기 마감할 수 있습니다.")
 
         # 이미 조기 마감된 경우
         if meeting.application_closed_early:
@@ -841,7 +836,7 @@ async def confirm_settlement(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
-        # 매니저/리더 권한 확인 (주최자 또는 참가자이면서 클럽 리더/매니저)
+        # 매니저/리더 권한 확인 (주최자 또는 클럽 리더/매니저)
         from routers.meetings.settlement import can_manage_settlement
 
         if not can_manage_settlement(meeting_id, current_user.id, db):

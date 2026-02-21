@@ -60,6 +60,8 @@ DEFAULT_USER_COUNT = 100
 DEFAULT_MEMBERS_PER_CLUB = 20
 MEETING_MIN_PARTICIPANTS = 12
 MEETING_MAX_PARTICIPANTS = 20
+MEETING_CAPACITY_SPARE_MIN = 1
+MEETING_CAPACITY_SPARE_MAX = 3
 FIXED_LEADER_USER_ID = 1
 FIXED_LEADER_CLUB_INDEX = 0
 
@@ -345,6 +347,11 @@ def choose_participant_count(available: int, rng: random.Random) -> int:
     return rng.randint(MEETING_MIN_PARTICIPANTS, upper)
 
 
+def choose_max_participants(participant_count: int, rng: random.Random) -> int:
+    spare = rng.randint(MEETING_CAPACITY_SPARE_MIN, MEETING_CAPACITY_SPARE_MAX)
+    return participant_count + spare
+
+
 def upsert_meetings_and_participants(
     db: Session,
     clubs: list[Club],
@@ -398,11 +405,20 @@ def upsert_meetings_and_participants(
             participant_count = choose_participant_count(len(active_user_ids), rng)
             if participant_count < MEETING_MIN_PARTICIPANTS:
                 continue
+            target_max_participants = choose_max_participants(participant_count, rng)
 
             if existing:
                 meeting = existing
                 if meeting.created_by != leader_id:
                     meeting.created_by = leader_id
+                existing_count = (db.query(MeetingParticipant).filter(
+                    MeetingParticipant.meeting_id == meeting.id,
+                ).count())
+                minimum_capacity = max(existing_count, participant_count) + 1
+                if target_max_participants < minimum_capacity:
+                    target_max_participants = minimum_capacity
+                if meeting.max_participants is None or meeting.max_participants < target_max_participants:
+                    meeting.max_participants = target_max_participants
                 counters["meeting_skipped"] += 1
             else:
                 tee_count = max(1, (participant_count + 3) // 4)
@@ -415,7 +431,7 @@ def upsert_meetings_and_participants(
                     location=f"{club.name} course" if is_round else f"{club.name} lounge",
                     meeting_time=meeting_time,
                     tee_times=tee_times,
-                    max_participants=participant_count,
+                    max_participants=target_max_participants,
                     meeting_type=meeting_type,
                     meeting_subtype=MeetingSubtype.REGULAR if is_round else None,
                     total_cost=120000 if is_round else None,

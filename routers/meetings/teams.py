@@ -70,10 +70,11 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                                                  MeetingParticipant.user_id == user_id).first()
 
             is_creator = meeting.created_by == user_id
+            is_manager_or_leader = check_team_management_permission(user_id, meeting, db)
 
-            if not is_participant and not is_creator:
+            if not is_participant and not is_creator and not is_manager_or_leader:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                    detail="프라이빗 라운딩의 팀 정보는 참가자 또는 생성자만 조회할 수 있습니다.")
+                                    detail="프라이빗 라운딩의 팀 정보는 참가자/생성자/클럽 리더·매니저만 조회할 수 있습니다.")
 
         print(f"모임 정보 - id: {meeting.id}, name: {meeting.name}")
     except HTTPException:

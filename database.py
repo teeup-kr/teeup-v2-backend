@@ -11,13 +11,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create SQLAlchemy engine
-engine = create_engine(settings.database_url,
-                       poolclass=QueuePool,
-                       pool_size=10,
-                       max_overflow=20,
-                       pool_pre_ping=True
-                       # echo=settings.ENVIRONMENT == "development"
-                       )
+engine = create_engine(
+    settings.database_url,
+    poolclass=QueuePool,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT,
+    pool_recycle=settings.DB_POOL_RECYCLE,
+    pool_pre_ping=settings.DB_POOL_PRE_PING,
+    # echo=settings.ENVIRONMENT == "development"
+)
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
