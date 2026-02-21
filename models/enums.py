@@ -5,6 +5,17 @@ class UserRole(str, enum.Enum):
     USER = "USER"
     ADMIN = "ADMIN"
 
+
+class AdminRole(str, enum.Enum):
+    """백오피스 관리자 역할"""
+    SUPER_ADMIN = "SUPER_ADMIN"       # 전체 권한 (어드민 CRUD 포함)
+    CLUB_ADMIN = "CLUB_ADMIN"         # 클럽 관리
+    MEETING_ADMIN = "MEETING_ADMIN"   # 모임/라운딩 관리
+    USER_ADMIN = "USER_ADMIN"         # 사용자 관리
+    CONTENT_ADMIN = "CONTENT_ADMIN"   # 공지/FAQ/약관 관리
+    SUPPORT_ADMIN = "SUPPORT_ADMIN"   # 문의 관리
+
+
 class UserStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
     DEACTIVATED = "DEACTIVATED"
