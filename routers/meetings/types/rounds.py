@@ -20,6 +20,11 @@ from routers.auth import get_current_active_user, get_current_user, get_current_
 from fastapi.security import HTTPAuthorizationCredentials
 from utils.jwt_auth import security
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.notification_service import (
+    notify_organizer_participant_added_after_recruitment_closed,
+    notify_round_participants_status_changed,
+)
+from utils.handicap_calculator import calculate_handicap_from_average_score
 
 router = APIRouter(prefix="/rounds", tags=["라운딩 관리"])
 logger = logging.getLogger(__name__)
@@ -384,6 +389,8 @@ async def update_round(meeting_id: int,
     if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db) and not is_creator:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="라운딩 매니저만 수정할 수 있습니다.")
 
+    previous_status = meeting.status
+
     # is_private 변경 여부 확인
     was_private = meeting.is_private
     is_private_changing = False
@@ -418,6 +425,16 @@ async def update_round(meeting_id: int,
 
     db.commit()
     db.refresh(meeting)
+
+    try:
+        notify_round_participants_status_changed(
+            db=db,
+            meeting_id=meeting_id,
+            previous_status=previous_status,
+            current_status=meeting.status,
+        )
+    except Exception as e:
+        logger.error(f"라운딩 상태 변경 알림 전송 실패 - meeting_id: {meeting_id}, error: {str(e)}")
 
     # 프라이빗 → 공개 변경 시: 기존 참가자 유지, 클럽 전체 알림 전송하지 않음
     # 공개 → 프라이빗 변경 시: 기존 참가자 유지, 일반 멤버에게는 숨김 처리
@@ -524,6 +541,16 @@ async def join_round(meeting_id: int,
     db.add(participant)
     db.commit()
 
+    try:
+        notify_organizer_participant_added_after_recruitment_closed(
+            db=db,
+            meeting_id=meeting_id,
+            participant_user_id=current_user.id,
+        )
+    except Exception as e:
+        logger.error(
+            f"모집 완료 단계 organizer 알림 전송 실패 - meeting_id: {meeting_id}, user_id: {current_user.id}, error: {str(e)}")
+
     return {"message": "라운딩에 참가했습니다."}
 
 
@@ -605,8 +632,7 @@ async def get_round_participants(meeting_id: int,
             club_role = None
             if participant.user_id:
                 membership = db.query(ClubMembership).filter(
-                    and_(ClubMembership.user_id == participant.user_id,
-                         ClubMembership.club_id == meeting.club_id,
+                    and_(ClubMembership.user_id == participant.user_id, ClubMembership.club_id == meeting.club_id,
                          ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES))).first()
                 if membership and membership.role:
                     club_role = membership.role.value if hasattr(membership.role, 'value') else str(membership.role)
@@ -622,31 +648,58 @@ async def get_round_participants(meeting_id: int,
                 guest_birthdate = guest.birthdate if guest else None
 
                 participant_responses.append({
-                    "id": participant.id,
-                    "user_id": participant.user_id,
-                    "user_email": None,
-                    "guest_id": participant.guest_id,
-                    "user_name": guest_name,
-                    "user_nickname": guest_name,
-                    "name": guest_name,
-                    "handicap": float(guest_handicap) if guest_handicap else None,
-                    "average_score": None,
-                    "pace_preference": participant.pace_preference,
-                    "tee_preference": participant.tee_preference,
-                    "is_newbie": participant.is_newbie,
-                    "prefer_with": participant.prefer_with or [],
-                    "avoid_with": participant.avoid_with or [],
-                    "is_guest": True,
-                    "guest_name": guest_name,
-                    "guest_gender": guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else (str(guest_gender) if guest_gender else None),
-                    "guest_handicap": float(guest_handicap) if guest_handicap else None,
-                    "guest_birthdate": guest_birthdate.isoformat() if guest_birthdate else None,
-                    "gender": guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else (str(guest_gender) if guest_gender else None),
-                    "created_at": participant.created_at.isoformat() if participant.created_at else None,
-                    "role": "PARTICIPANT",
-                    "club_role": None,
-                    "membership_role": None,
-                    "status": "CONFIRMED",
+                    "id":
+                    participant.id,
+                    "user_id":
+                    participant.user_id,
+                    "user_email":
+                    None,
+                    "guest_id":
+                    participant.guest_id,
+                    "user_name":
+                    guest_name,
+                    "user_nickname":
+                    guest_name,
+                    "name":
+                    guest_name,
+                    "handicap":
+                    float(guest_handicap) if guest_handicap else None,
+                    "average_score":
+                    None,
+                    "pace_preference":
+                    participant.pace_preference,
+                    "tee_preference":
+                    participant.tee_preference,
+                    "is_newbie":
+                    participant.is_newbie,
+                    "prefer_with":
+                    participant.prefer_with or [],
+                    "avoid_with":
+                    participant.avoid_with or [],
+                    "is_guest":
+                    True,
+                    "guest_name":
+                    guest_name,
+                    "guest_gender":
+                    guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else
+                    (str(guest_gender) if guest_gender else None),
+                    "guest_handicap":
+                    float(guest_handicap) if guest_handicap else None,
+                    "guest_birthdate":
+                    guest_birthdate.isoformat() if guest_birthdate else None,
+                    "gender":
+                    guest_gender.value if guest_gender and hasattr(guest_gender, 'value') else
+                    (str(guest_gender) if guest_gender else None),
+                    "created_at":
+                    participant.created_at.isoformat() if participant.created_at else None,
+                    "role":
+                    "PARTICIPANT",
+                    "club_role":
+                    None,
+                    "membership_role":
+                    None,
+                    "status":
+                    "CONFIRMED",
                 })
             else:
                 # 일반 참가자인 경우 - user_id를 통해 User 모델에서 정보 조회
@@ -656,27 +709,49 @@ async def get_round_participants(meeting_id: int,
                         continue
 
                     participant_responses.append({
-                        "id": participant.id,
-                        "user_id": participant.user_id,
-                        "user_email": user.email,
-                        "guest_id": None,
-                        "user_name": user.realname or "이름 없음",
-                        "user_nickname": user.nickname or "닉네임 없음",
-                        "name": user.realname or "이름 없음",
-                        "handicap": user.handicap if user.handicap is not None else user.handicap_init,
-                        "average_score": user.average_score if user.average_score is not None else user.average_score,
-                        "pace_preference": participant.pace_preference,
-                        "tee_preference": participant.tee_preference,
-                        "is_newbie": participant.is_newbie,
-                        "prefer_with": participant.prefer_with or [],
-                        "avoid_with": participant.avoid_with or [],
-                        "is_guest": False,
-                        "gender": user.gender.value if user.gender and hasattr(user.gender, 'value') else (str(user.gender) if user.gender else None),
-                        "created_at": participant.created_at.isoformat() if participant.created_at else None,
-                        "role": role,
-                        "club_role": club_role,
-                        "membership_role": club_role,
-                        "status": status,
+                        "id":
+                        participant.id,
+                        "user_id":
+                        participant.user_id,
+                        "user_email":
+                        user.email,
+                        "guest_id":
+                        None,
+                        "user_name":
+                        user.realname or "이름 없음",
+                        "user_nickname":
+                        user.nickname or "닉네임 없음",
+                        "name":
+                        user.realname or "이름 없음",
+                        "handicap":
+                        user.handicap if user.handicap is not None else user.handicap_init,
+                        "average_score":
+                        user.average_score if user.average_score is not None else user.average_score,
+                        "pace_preference":
+                        participant.pace_preference,
+                        "tee_preference":
+                        participant.tee_preference,
+                        "is_newbie":
+                        participant.is_newbie,
+                        "prefer_with":
+                        participant.prefer_with or [],
+                        "avoid_with":
+                        participant.avoid_with or [],
+                        "is_guest":
+                        False,
+                        "gender":
+                        user.gender.value if user.gender and hasattr(user.gender, 'value') else
+                        (str(user.gender) if user.gender else None),
+                        "created_at":
+                        participant.created_at.isoformat() if participant.created_at else None,
+                        "role":
+                        role,
+                        "club_role":
+                        club_role,
+                        "membership_role":
+                        club_role,
+                        "status":
+                        status,
                     })
 
         return participant_responses
@@ -767,7 +842,7 @@ async def get_round_teams(meeting_id: int,
                                 user_nickname = user.nickname or "닉네임 없음"
                                 gender = user.gender.value if user.gender else None
 
-                                # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                                # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap_init → user.average_score(공통 계산 유틸)
                                 if participant.handicap is not None:
                                     handicap = participant.handicap
                                 elif user.handicap is not None:
@@ -777,7 +852,7 @@ async def get_round_teams(meeting_id: int,
                                 elif user.handicap_init is not None:
                                     handicap = int(user.handicap_init)
                                 elif user.average_score is not None:
-                                    handicap = max(0, int(user.average_score - 72))
+                                    handicap = calculate_handicap_from_average_score(user.average_score)
                                 else:
                                     handicap = None
 
@@ -944,7 +1019,7 @@ async def add_team_member(
                     user_nickname = user.nickname or "닉네임 없음"
                     gender = user.gender.value if user.gender else None
 
-                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap_init → user.average_score(공통 계산 유틸)
                     if participant.handicap is not None:
                         handicap = participant.handicap
                     elif user.handicap is not None:
@@ -954,7 +1029,7 @@ async def add_team_member(
                     elif user.handicap_init is not None:
                         handicap = int(user.handicap_init)
                     elif user.average_score is not None:
-                        handicap = max(0, int(user.average_score - 72))
+                        handicap = calculate_handicap_from_average_score(user.average_score)
 
                     # MeetingResult에서 실제 직전 대회 성적 조회
                     last_result = db.query(MeetingResult).filter(

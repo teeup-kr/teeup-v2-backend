@@ -19,6 +19,7 @@ from schemas import (TeamFormationMode, TeamStatus, ClubRole)
 from schemas import (TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, TeamFormationRequest,
                      TeamFormationResponse, MessageResponse)
 from utils.team_formation import TeamFormationEngine
+from utils.handicap_calculator import calculate_handicap_from_average_score
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -143,7 +144,7 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                     user_nickname = user.nickname or "닉네임 없음"
                                     gender = user.gender.value if user.gender else None
 
-                                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap → user.handicap_init → user.average_score - 72
+                                    # 핸디캡 우선순위: participant.handicap → user.handicap → user.handicap_init → user.average_score(공통 계산 유틸)
                                     if participant.handicap is not None:
                                         handicap = participant.handicap
                                     elif user.handicap is not None:
@@ -153,7 +154,7 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                     elif user.handicap_init is not None:
                                         handicap = int(user.handicap_init)
                                     elif user.average_score is not None:
-                                        handicap = max(0, int(user.average_score - 72))
+                                        handicap = calculate_handicap_from_average_score(user.average_score)
                                     else:
                                         handicap = None
 

@@ -5,14 +5,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import logging
 from database import get_db
 from models import MeetingParticipant, User, Meeting, Guest, ClubMembership
 from schemas import MessageResponse, GuestCreate
 from routers.auth import get_current_active_user, get_current_user_allow_both
 from utils.team_formation import add_guest_to_meeting
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.notification_service import notify_organizer_participant_added_after_recruitment_closed
 
 router = APIRouter(prefix="/meetings", tags=["모임 참가자 관리"])
+logger = logging.getLogger(__name__)
 
 
 def _normalize_birthdate(val: Optional[str]) -> Optional[str]:
@@ -125,6 +128,16 @@ def add_guest_to_meeting_api(
             db=db,
         )
         guest = db.query(Guest).filter(Guest.id == participant.guest_id).first()
+
+        try:
+            notify_organizer_participant_added_after_recruitment_closed(
+                db=db,
+                meeting_id=meeting_id,
+                participant_guest_name=guest.name if guest else guest_data.name,
+            )
+        except Exception as e:
+            logger.error(f"모집 완료 단계 organizer 알림 전송 실패 - meeting_id: {meeting_id}, guest_name: {guest_data.name}, error: {str(e)}")
+
         return {
             "message": "게스트가 추가되었습니다.",
             "participant_id": participant.id,

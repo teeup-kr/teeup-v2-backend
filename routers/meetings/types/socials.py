@@ -23,6 +23,7 @@ from schemas import (
 )
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.notification_service import notify_organizer_participant_added_after_recruitment_closed
 
 router = APIRouter(prefix="/socials", tags=["소셜 모임 관리"])
 logger = logging.getLogger(__name__)
@@ -593,6 +594,15 @@ async def join_social(
     
     db.add(participant)
     db.commit()
+
+    try:
+        notify_organizer_participant_added_after_recruitment_closed(
+            db=db,
+            meeting_id=meeting_id,
+            participant_user_id=current_user.id,
+        )
+    except Exception as e:
+        logger.error(f"모집 완료 단계 organizer 알림 전송 실패 - meeting_id: {meeting_id}, user_id: {current_user.id}, error: {str(e)}")
     
     return {"message": "소셜 모임에 참가했습니다."}
 

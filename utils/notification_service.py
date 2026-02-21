@@ -3,12 +3,142 @@
 다양한 이벤트에 대한 알림 생성 및 전송 기능
 """
 from sqlalchemy.orm import Session
-from models import Notification, NotificationType, NotificationStatus, User
+from typing import Optional
+from models import Notification, NotificationType, NotificationStatus, User, Meeting, MeetingParticipant
 from datetime import datetime
 import logging
 from services.push_delivery_service import send_push_to_user
 
 logger = logging.getLogger(__name__)
+
+
+def _is_meeting_recruitment_closed(meeting: Meeting) -> bool:
+    """모집 완료 단계(조기 마감 또는 신청 마감일 경과) 여부 확인"""
+    deadline_passed = meeting.application_deadline is not None and datetime.now() > meeting.application_deadline
+    return bool(meeting.application_closed_early or deadline_passed)
+
+
+def notify_organizer_participant_added_after_recruitment_closed(
+    db: Session,
+    meeting_id: int,
+    participant_user_id: Optional[int] = None,
+    participant_guest_name: Optional[str] = None,
+) -> Optional[Notification]:
+    """
+    모집 완료 단계에서 참가자가 추가되면 모임 organizer(created_by)에게 알림 전송
+    """
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        return None
+
+    if not _is_meeting_recruitment_closed(meeting):
+        return None
+
+    organizer_user_id = meeting.created_by
+    if organizer_user_id is None:
+        logger.info(f"organizer 알림 생략 - organizer(created_by) 없음, meeting_id: {meeting_id}")
+        return None
+
+    if participant_user_id is not None and participant_user_id == organizer_user_id:
+        return None
+
+    participant_label = "새 참가자"
+    if participant_user_id is not None:
+        participant_user = db.query(User).filter(User.id == participant_user_id).first()
+        if participant_user:
+            participant_label = participant_user.nickname or participant_user.realname or f"user_id={participant_user_id}"
+        else:
+            participant_label = f"user_id={participant_user_id}"
+    elif participant_guest_name:
+        participant_label = f"{participant_guest_name}(게스트)"
+
+    title = f"모집 마감 후 참가자 추가 - {meeting.name}"
+    content = f"모임 '{meeting.name}'에 모집 마감 이후 참가자 '{participant_label}'이(가) 추가되었습니다."
+
+    return create_notification(
+        db=db,
+        user_id=organizer_user_id,
+        notification_type=NotificationType.MEETING_REMINDER,
+        title=title,
+        content=content,
+        category="meeting",
+        target_id=meeting_id,
+    )
+
+
+def _status_to_label(status_value: Optional[str]) -> str:
+    if status_value == "SCHEDULED":
+        return "모집중"
+    if status_value == "IN_PROGRESS":
+        return "진행중"
+    if status_value == "COMPLETED":
+        return "완료"
+    if status_value == "CANCELED":
+        return "취소"
+    return status_value or "알 수 없음"
+
+
+def notify_round_participants_status_changed(
+    db: Session,
+    meeting_id: int,
+    previous_status: Optional[str],
+    current_status: Optional[str],
+) -> int:
+    """라운딩 상태 변경 시 참가자 전원에게 알림 전송"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        return 0
+
+    meeting_type_value = meeting.meeting_type.value if hasattr(meeting.meeting_type, "value") else str(meeting.meeting_type)
+    if meeting_type_value != "ROUND":
+        return 0
+
+    prev_status_value = previous_status.value if hasattr(previous_status, "value") else previous_status
+    curr_status_value = current_status.value if hasattr(current_status, "value") else current_status
+    if prev_status_value == curr_status_value:
+        return 0
+
+    participants = db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting_id,
+        MeetingParticipant.user_id.isnot(None),
+    ).all()
+    if not participants:
+        return 0
+
+    title = f"라운딩 상태 변경 - {meeting.name}"
+    content = (
+        f"라운딩 '{meeting.name}' 상태가 "
+        f"'{_status_to_label(prev_status_value)}'에서 '{_status_to_label(curr_status_value)}'(으)로 변경되었습니다."
+    )
+
+    sent_count = 0
+    for participant in participants:
+        try:
+            create_notification(
+                db=db,
+                user_id=participant.user_id,
+                notification_type=NotificationType.MEETING_REMINDER,
+                title=title,
+                content=content,
+                category="meeting",
+                target_id=meeting_id,
+                extra_data={
+                    "meeting_type": "round",
+                    "previous_status": prev_status_value or "",
+                    "current_status": curr_status_value or "",
+                },
+            )
+            sent_count += 1
+        except Exception as e:
+            logger.error(
+                f"라운딩 상태 변경 알림 전송 실패 - meeting_id: {meeting_id}, user_id: {participant.user_id}, error: {str(e)}"
+            )
+
+    logger.info(
+        f"라운딩 상태 변경 알림 전송 완료 - meeting_id: {meeting_id}, previous_status: {prev_status_value}, current_status: {curr_status_value}, sent_count: {sent_count}"
+    )
+    return sent_count
+
 
 def create_notification(
     db: Session,

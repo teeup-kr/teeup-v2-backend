@@ -14,7 +14,7 @@ from sqlalchemy import desc
 from models import MeetingParticipant, Team, TeamMember, User, Gender, MeetingResult, UserStatus, Guest
 from schemas import TeamFormationMode, TeamStatus
 from schemas import TeamFormationRequest, TeamFormationResponse, TeamResponse, TeamMemberResponse
-from utils.handicap_calculator import get_user_handicap_for_formation
+from utils.handicap_calculator import calculate_handicap_from_average_score, get_user_handicap_for_formation
 from utils.datetime_utils import get_kst_date
 from utils.cuid import generate_cuid
 
@@ -921,10 +921,7 @@ def calculate_guest_handicap(average_score: int) -> Decimal:
     Returns:
         계산된 핸디캡 (Decimal)
     """
-    handicap = float(average_score) - 72.0
-    # 0 ~ 72로 클램프
-    handicap = max(0.0, min(72.0, handicap))
-    return Decimal(str(round(handicap, 1)))
+    return calculate_handicap_from_average_score(average_score)
 
 
 def add_guest_to_meeting(meeting_id: int,

@@ -12,6 +12,34 @@ from models import (User, UserScoreHistory, Meeting, MeetingStatus, HandicapUpda
                     MeetingResult)
 
 
+def calculate_handicap_from_average_score(average_score: float) -> Decimal:
+    """
+    평균 타수 기반 핸디캡 계산 공통 함수
+
+    Args:
+        average_score: 평균 타수
+
+    Returns:
+        핸디캡 (0~72 범위로 클램프, 소수점 첫째 자리까지)
+    """
+    handicap = float(average_score) - 72.0
+    handicap = max(0.0, min(72.0, handicap))
+    return Decimal(str(round(handicap, 1)))
+
+
+# def calculate_handicap_from_average_score(average_score: float) -> int:
+#     """
+#     평균 타수 기반 핸디캡 인덱스(int) 계산
+
+#     Args:
+#         average_score: 평균 타수
+
+#     Returns:
+#         핸디캡 인덱스 (정수)
+#     """
+#     return int(calculate_handicap_from_average_score(average_score))
+
+
 def get_recent_scores(db: Session, user_id: int, count: int = 10) -> List[UserScoreHistory]:
     """
     최근 N경기 스코어 조회
@@ -55,49 +83,6 @@ def calculate_moving_average(scores: List[UserScoreHistory], count: int = 5) -> 
     average = total_score / len(recent_scores)
 
     return round(average, 1)
-
-
-def calculate_handicap(average_score: float) -> Decimal:
-    """
-    핸디캡 계산: (평균 타수 - 72)
-    
-    Args:
-        average_score: 평균 타수
-    
-    Returns:
-        핸디캡 (0~72 범위로 클램프, 소수점 첫째 자리까지)
-    """
-    # 핸디캡 계산: 평균 타수 - 72
-    handicap = average_score - 72
-
-    # 0~72 범위로 클램프
-    handicap = max(0, min(72, handicap))
-
-    # 소수점 첫째 자리까지 반올림
-    return Decimal(str(round(handicap, 1)))
-
-
-def calculate_initial_handicap_from_average(average_score: int) -> Optional[Decimal]:
-    """
-    평균 타수로부터 초기 핸디캡 계산
-    
-    Args:
-        average_score: 평균 타수 (55~144)
-    
-    Returns:
-        초기 핸디캡 (0~72 범위, Decimal) 또는 None
-    """
-    if average_score is None:
-        return None
-
-    # 핸디캡 계산: 평균 타수 - 72
-    handicap = float(average_score) - 72.0
-
-    # 0~72 범위로 클램프
-    handicap = max(0.0, min(72.0, handicap))
-
-    # 소수점 첫째 자리까지 반올림
-    return Decimal(str(round(handicap, 1)))
 
 
 def get_user_handicap_for_formation(db: Session, user_id: int) -> Optional[Decimal]:
@@ -186,13 +171,15 @@ def update_user_handicap(db: Session,
         return None
 
     # 핸디캡 계산
-    calculated_handicap = calculate_handicap(average_score)
+    calculated_handicap = calculate_handicap_from_average_score(average_score)
 
     # 유효성 검사
     if not validate_handicap(float(calculated_handicap)):
         return None
 
     # 사용자 정보 업데이트
+    # 최근 score_count 경기 기준 평균 타수를 사용자 프로필에 반영
+    user.average_score = int(round(average_score))
     user.handicap = calculated_handicap
     # 실제로 평균 계산에 사용된 경기 수 저장
     actual_count = min(len(recent_scores), score_count)
@@ -373,9 +360,7 @@ def process_meeting_completion(db: Session, meeting_id: int, score_count: int = 
         return {"error": "모임을 찾을 수 없습니다."}
 
     # 참가자 조회
-    participants = db.query(MeetingParticipant).filter(
-        MeetingParticipant.meeting_id == meeting_id
-    ).all()
+    participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).all()
 
     if not participants:
         return {"processed": 0, "updated": 0}
@@ -443,9 +428,7 @@ def create_meeting_results(db: Session, meeting_id: int) -> int:
         return existing_results
 
     # 참가자 조회
-    participants = db.query(MeetingParticipant).filter(
-        MeetingParticipant.meeting_id == meeting_id
-    ).all()
+    participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).all()
 
     if not participants:
         logger.warning(f"참가자가 없습니다: {meeting_id}")
