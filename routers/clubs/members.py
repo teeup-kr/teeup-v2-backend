@@ -30,6 +30,17 @@ def _is_active_membership(membership: Optional[ClubMembership]) -> bool:
     return status_value in {"ACTIVE", "APPROVED"}
 
 
+def _raise_profile_not_completed(message: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "PROFILE_NOT_COMPLETED",
+            "message": message,
+            "redirect": "/mypage/edit",
+        },
+    )
+
+
 @router.get("/members/search", response_model=ClubMemberSearchResponse)
 async def search_members_in_my_clubs(
     name: Optional[str] = Query(None, description="이름 검색어 (실명/닉네임 부분 일치, 비우면 전체)"),
@@ -349,28 +360,16 @@ async def join_club(
     try:
         # 프로필 완성도 검증: 실명, 전화번호, 생년월일, 성별 필수
         if not current_user.realname:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="클럽 가입을 위해서는 실명이 필요합니다. 프로필을 먼저 완성해주세요."
-            )
+            _raise_profile_not_completed("클럽 가입을 위해서는 실명이 필요합니다. 프로필을 먼저 완성해주세요.")
         
         if not current_user.phone_number:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="클럽 가입을 위해서는 전화번호가 필요합니다. 프로필을 먼저 완성해주세요."
-            )
+            _raise_profile_not_completed("클럽 가입을 위해서는 전화번호가 필요합니다. 프로필을 먼저 완성해주세요.")
         
         if not current_user.birthdate:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="클럽 가입을 위해서는 생년월일이 필요합니다. 프로필을 먼저 완성해주세요."
-            )
+            _raise_profile_not_completed("클럽 가입을 위해서는 생년월일이 필요합니다. 프로필을 먼저 완성해주세요.")
         
         if not current_user.gender:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="클럽 가입을 위해서는 성별 정보가 필요합니다. 프로필을 먼저 완성해주세요."
-            )
+            _raise_profile_not_completed("클럽 가입을 위해서는 성별 정보가 필요합니다. 프로필을 먼저 완성해주세요.")
         
         # 클럽 조회 (display_id로 먼저 조회)
         club = db.query(Club).filter(
