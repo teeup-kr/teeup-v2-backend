@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 120
+    JWT_WEB_REFRESH_EXPIRE_DAYS: int = 7
+    JWT_APP_REFRESH_EXPIRE_DAYS: int = 365
 
     # Environment
     ENVIRONMENT: str = "development"

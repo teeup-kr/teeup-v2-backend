@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional, Union, Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils.datetime_utils import get_kst_now, get_kst_date
 import hashlib
 import re
@@ -15,6 +15,7 @@ from schemas import MessageResponse
 from services.push_token_service import deactivate_user_push_tokens, sync_user_push_token
 from utils.jwt_auth import jwt_auth
 from utils.csrf_protection import generate_csrf_token, get_middleware_instance
+from config import settings
 import jwt
 
 router = APIRouter(prefix="/auth", tags=["인증"])
@@ -24,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 # 인증 관련 유틸리티 함수들
 security = HTTPBearer()
+
+APP_CLIENT_TYPES = {"android", "ios"}
+
+
+def is_app_client_type(client_type: Optional[str]) -> bool:
+    return client_type in APP_CLIENT_TYPES
+
+
+def get_refresh_expire_delta(client_type: Optional[str]) -> timedelta:
+    if is_app_client_type(client_type):
+        return timedelta(days=settings.JWT_APP_REFRESH_EXPIRE_DAYS)
+    return timedelta(days=settings.JWT_WEB_REFRESH_EXPIRE_DAYS)
 
 
 def get_user_role_from_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
@@ -282,6 +295,7 @@ class PushTokenSyncRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     push_token: Optional[str] = None
+    refresh_token: Optional[str] = None
 
 
 @router.get("/me")
@@ -461,6 +475,19 @@ async def logout(payload: Optional[LogoutRequest] = Body(default=None),
                  db: Session = Depends(get_db)):
     """로그아웃 (토큰 무효화)"""
     try:
+        if payload and payload.refresh_token:
+            refresh_payload = jwt_auth.verify_token(payload.refresh_token, "refresh", db=db)
+            refresh_user_id = int(refresh_payload["id"])
+            if refresh_user_id != int(current_user.id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="다른 사용자의 리프레시 토큰입니다.")
+
+            refresh_expires_at = datetime.fromtimestamp(refresh_payload["exp"], tz=timezone.utc).astimezone(get_kst_now().tzinfo)
+            revoke_refresh_token(token_jti=refresh_payload["jti"],
+                                 user_id=int(current_user.id),
+                                 reason=TokenRevokeReason.LOGOUT,
+                                 expires_at=refresh_expires_at,
+                                 db=db)
+
         if payload and payload.push_token:
             deactivate_user_push_tokens(db=db, user_id=current_user.id, push_token=payload.push_token)
         else:
@@ -468,6 +495,8 @@ async def logout(payload: Optional[LogoutRequest] = Body(default=None),
 
         return {"message": "로그아웃이 완료되었습니다.", "success": True}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
 
@@ -499,6 +528,9 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int = 3600  # 1시간
+    refresh_expires_in: Optional[int] = None
+    session_policy: Optional[str] = None
+    client_type: Optional[str] = None
     user: dict
 
 
@@ -511,8 +543,14 @@ async def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(g
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="리프레시 토큰이 필요합니다.")
 
         # JWT 리프레시 토큰 검증
-        payload = jwt_auth.verify_token(token_data.refresh_token, "refresh")
+        payload = jwt_auth.verify_token(token_data.refresh_token, "refresh", db=db)
         user_id = payload.get("id")
+        client_type = payload.get("client_type")
+        if client_type is None:
+            # 구버전 토큰은 client_type 클레임이 없으므로 웹 정책으로 처리
+            client_type = "web"
+        session_policy = "app_persistent" if is_app_client_type(client_type) else "web_default"
+        refresh_expire_delta = get_refresh_expire_delta(client_type)
 
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 리프레시 토큰입니다.")
@@ -525,15 +563,33 @@ async def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(g
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="사용자를 찾을 수 없습니다.")
 
         # 새로운 액세스 토큰과 리프레시 토큰 생성
-        user_data = {"id": user.id, "email": user.email, "nickname": user.nickname, "type": "user"}
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "nickname": user.nickname,
+            "type": "user",
+            "role": "USER",
+            "provider": user.provider.value if user.provider else None,
+            "client_type": client_type,
+            "session_policy": session_policy,
+        }
 
         new_access_token = jwt_auth.create_access_token(user_data)
-        new_refresh_token = jwt_auth.create_refresh_token(user_data)
+        new_refresh_token = jwt_auth.create_refresh_token(user_data, expires_delta=refresh_expire_delta)
+        used_refresh_expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc).astimezone(get_kst_now().tzinfo)
+        revoke_refresh_token(token_jti=payload["jti"],
+                             user_id=int(user.id),
+                             reason=TokenRevokeReason.LOGOUT,
+                             expires_at=used_refresh_expires_at,
+                             db=db)
 
         return TokenResponse(
             access_token=new_access_token,
             refresh_token=new_refresh_token,
-            expires_in=7200,  # 2시간
+            expires_in=jwt_auth.expire_minutes * 60,
+            refresh_expires_in=int(refresh_expire_delta.total_seconds()),
+            session_policy=session_policy,
+            client_type=client_type,
             user={
                 "id": user.id,
                 "email": user.email,

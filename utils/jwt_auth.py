@@ -56,14 +56,15 @@ class JWTAuth:
                 detail="토큰 생성에 실패했습니다"
             )
     
-    def create_refresh_token(self, data: Dict[str, Any]) -> str:
-        """리프레시 토큰 생성 (7일 유효)"""
+    def create_refresh_token(self, data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+        """리프레시 토큰 생성"""
         try:
             import secrets
             import string
             
             to_encode = data.copy()
-            expire = get_kst_now() + timedelta(days=7)  # 7일 유효
+            refresh_delta = expires_delta or timedelta(days=settings.JWT_WEB_REFRESH_EXPIRE_DAYS)
+            expire = get_kst_now() + refresh_delta
             
             # JTI (JWT ID) 생성 - 토큰 무효화를 위한 고유 식별자
             jti = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
@@ -140,6 +141,8 @@ class JWTAuth:
             logger.info(f"토큰 검증 성공 - user_id: {payload.get('id')}")
             return payload
             
+        except HTTPException:
+            raise
         except jwt.ExpiredSignatureError:
             logger.warning("만료된 토큰으로 접근 시도")
             raise HTTPException(

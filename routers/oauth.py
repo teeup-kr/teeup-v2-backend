@@ -7,7 +7,7 @@ import logging
 import json
 from urllib.parse import urlencode
 from typing import Dict, Any, cast
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
@@ -47,6 +47,16 @@ def _detect_client_type(request: Request, redirect_uri: str | None) -> str:
         return "web"
 
     return "android"
+
+
+def _is_app_client(client_type: str) -> bool:
+    return client_type in ("android", "ios")
+
+
+def _get_refresh_expire_delta(client_type: str) -> timedelta:
+    if _is_app_client(client_type):
+        return timedelta(days=settings.JWT_APP_REFRESH_EXPIRE_DAYS)
+    return timedelta(days=settings.JWT_WEB_REFRESH_EXPIRE_DAYS)
 
 
 @router.get("/google")
@@ -211,7 +221,14 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
                 detail="OAuth redirect_uri 설정이 없습니다",
             )
 
-        logger.info(f"Google OAuth callback using redirect_uri: {redirect_uri}")
+        client_type = _detect_client_type(http_request, redirect_uri)
+        session_policy = "app_persistent" if _is_app_client(client_type) else "web_default"
+        refresh_expire_delta = _get_refresh_expire_delta(client_type)
+
+        logger.info(
+            f"Google OAuth callback using redirect_uri: {redirect_uri}, "
+            f"client_type={client_type}, session_policy={session_policy}"
+        )
 
         logger.info(f"Google OAuth callback: "
                     f"code={authorizationCode[:10]}..., "
@@ -286,11 +303,13 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
             "email": user.email,
             "nickname": user.nickname,
             "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
-            "provider": user.provider.value if user.provider else None
+            "provider": user.provider.value if user.provider else None,
+            "client_type": client_type,
+            "session_policy": session_policy,
         }
 
         access_token = jwt_auth.create_access_token(jwt_payload)
-        refresh_token = jwt_auth.create_refresh_token(jwt_payload)
+        refresh_token = jwt_auth.create_refresh_token(jwt_payload, expires_delta=refresh_expire_delta)
 
         logger.info(f"Google OAuth 로그인 성공: {user.email}")
 
@@ -306,6 +325,9 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
             "refresh_token": refresh_token,
             "token_type": "bearer",
             "expires_in": jwt_auth.expire_minutes * 60,
+            "refresh_expires_in": int(refresh_expire_delta.total_seconds()),
+            "session_policy": session_policy,
+            "client_type": client_type,
             "user": {
                 "id": user.id,
                 "email": user.email,
