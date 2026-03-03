@@ -48,10 +48,11 @@ async def get_admin_users(
         if status_filter:
             query = query.filter(User.status == status_filter)
         total_count = query.count()
+        # id만으로 정렬 (유일값이라 페이지네이션 안정적, id 오름차순=오래된순/내림차순=최신순)
         if sort_order == "oldest":
-            query = query.order_by(User.created_at.asc())
+            query = query.order_by(User.id.asc())
         else:
-            query = query.order_by(User.created_at.desc())
+            query = query.order_by(User.id.desc())
         users = query.offset(offset).limit(limit).all()
 
         user_responses = []
@@ -84,6 +85,13 @@ async def get_admin_users(
                     created_at=user.created_at,
                     updated_at=user.updated_at,
                 ))
+        # 응답 내 유저 ID 중복 검증 (백오피스 중복 출력 원인 파악용)
+        ids = [u.id for u in user_responses]
+        if len(ids) != len(set(ids)):
+            dup = [x for x in ids if ids.count(x) > 1]
+            logger.error("get_admin_users 중복 user id 감지: count=%s ids=%s 중복=%s", len(ids), ids, list(set(dup)))
+            assert False, f"duplicate user ids in response: {list(set(dup))}"
+        logger.info("get_admin_users 검증 OK: count=%s page=%s ids_sample=%s", len(ids), page, ids[:20])
         return {
             "data": user_responses,
             "total": total_count,
@@ -379,8 +387,8 @@ async def get_user_handicap_history(
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다")
         handicap_info = schemas.HandicapInfo(
-            initial_handicap=float(user.initial_handicap) if user.initial_handicap else None,
-            calculated_handicap=float(user.calculated_handicap) if user.calculated_handicap else None,
+            initial_handicap=float(user.handicap_init) if user.handicap_init is not None else None,
+            calculated_handicap=float(user.handicap) if user.handicap is not None else None,
             handicap_update_method=user.handicap_update_method.value if user.handicap_update_method else None,
             handicap_calculation_count=user.handicap_calculation_count,
             last_updated_at=user.updated_at,

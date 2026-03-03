@@ -223,14 +223,15 @@ async def create_club_notice(
         author = db.query(User).filter(User.id == notice.author_id).first()
         
         return {
-            "id": notice.id,            "club_id": notice.club_id,
+            "id": notice.id,
+            "club_id": notice.club_id,
             "title": notice.title,
             "content": notice.content,
             "is_important": notice.is_important,
             "is_private": notice.is_private,
             "author_id": notice.author_id,
             "author_name": author.nickname if author else "Unknown",
-            "views": notice.view_count,
+            "view_count": notice.view_count,
             "created_at": notice.created_at,
             "updated_at": notice.updated_at
         }
