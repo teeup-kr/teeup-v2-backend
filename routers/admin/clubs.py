@@ -1,8 +1,9 @@
 """
 백오피스 클럽 API
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Optional
 import logging
 from datetime import datetime
@@ -1040,10 +1041,15 @@ async def get_admin_club_pending_members(club_id: str,
 
 
 @router.get("/clubs/{club_id}/members")
-async def get_admin_club_members(club_id: str,
-                                 db: Session = Depends(get_db),
-                                 current_user: dict = Depends(get_admin_user)):
-    """관리자용 클럽 멤버 목록 조회"""
+async def get_admin_club_members(
+    club_id: str,
+    search: Optional[str] = Query(None, description="닉네임/이메일/실명/전화번호 검색"),
+    role_filter: Optional[str] = Query(None, description="역할 필터: LEADER, MANAGER, MEMBER"),
+    status_filter: Optional[str] = Query(None, description="상태 필터: ACTIVE, PENDING 등"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """관리자용 클럽 멤버 목록 조회 (검색·역할·상태 필터 지원)"""
     try:
         from models import Club, ClubMembership, ClubRole, User
 
@@ -1069,6 +1075,28 @@ async def get_admin_club_members(club_id: str,
             ~User.email.like('%@guest.local'),  # 게스트 이메일 제외
             ~User.nickname.like('guest_%')  # 게스트 닉네임 제외
         )
+
+        # 검색 필터 (닉네임, 이메일, 실명, 전화번호)
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    User.nickname.ilike(term),
+                    User.email.ilike(term),
+                    User.realname.ilike(term),
+                    User.phone_number.ilike(term),
+                )
+            )
+        # 역할 필터
+        if role_filter and role_filter.upper() in ("LEADER", "MANAGER", "MEMBER"):
+            query = query.filter(ClubMembership.role == ClubRole[role_filter.upper()])
+        # 상태 필터
+        if status_filter:
+            try:
+                status_enum = MembershipStatus(status_filter)
+                query = query.filter(ClubMembership.status == status_enum)
+            except (ValueError, KeyError):
+                pass
 
         results = query.all()
 

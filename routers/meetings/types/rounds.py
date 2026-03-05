@@ -427,14 +427,14 @@ async def update_round(meeting_id: int,
         if field == "settlement_method":
             val_str = value.value if hasattr(value, "value") else value
             try:
-                setattr(meeting, field, ModelSettlementMethod(val_str))
+                setattr(meeting, field, SettlementMethod(val_str))
             except (ValueError, TypeError):
                 setattr(meeting, field, value)
             continue
         if field == "meeting_subtype":
             val_str = value.value if hasattr(value, "value") else value
             try:
-                setattr(meeting, field, ModelMeetingSubtype(val_str))
+                setattr(meeting, field, MeetingSubtype(val_str))
             except (ValueError, TypeError):
                 setattr(meeting, field, value)
             continue
