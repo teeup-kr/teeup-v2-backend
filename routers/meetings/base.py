@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, or_, and_, select
 from typing import List, Optional
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from utils.datetime_utils import get_kst_now
 import logging
 
@@ -639,8 +639,10 @@ async def get_my_meetings(page: int = 1,
 @router.get("/my/participating", response_model=PaginatedResponse)
 async def get_my_participating_meetings(page: int = 1,
                                         limit: int = 10,
-                                        status_filter: Optional[MeetingStatus] = None,
-                                        meeting_type_filter: Optional[MeetingType] = None,
+                                        status_group: Optional[str] = None,
+                                        search: Optional[str] = None,
+                                        start_date: Optional[date] = None,
+                                        end_date: Optional[date] = None,
                                         db: Session = Depends(get_db),
                                         current_user: User = Depends(get_current_active_user)):
     """내가 참여중인(참가자) 모임 목록 조회"""
@@ -656,11 +658,34 @@ async def get_my_participating_meetings(page: int = 1,
 
         my_meetings_query = db.query(Meeting).filter(Meeting.id.in_(participant_meetings))
 
-        if status_filter:
-            my_meetings_query = my_meetings_query.filter(Meeting.status == status_filter)
+        if status_group == "active":
+            my_meetings_query = my_meetings_query.filter(
+                Meeting.status.in_([MeetingStatus.SCHEDULED, MeetingStatus.IN_PROGRESS])
+            )
+        elif status_group == "completed":
+            my_meetings_query = my_meetings_query.filter(
+                Meeting.status.in_([MeetingStatus.COMPLETED, MeetingStatus.CANCELED])
+            )
 
-        if meeting_type_filter:
-            my_meetings_query = my_meetings_query.filter(Meeting.meeting_type == meeting_type_filter)
+        if search:
+            search_term = f"%{search}%"
+            my_meetings_query = my_meetings_query.filter(
+                or_(
+                    Meeting.name.ilike(search_term),
+                    Meeting.description.ilike(search_term),
+                    Meeting.location.ilike(search_term),
+                    Meeting.course_name.ilike(search_term),
+                    Meeting.venue_name.ilike(search_term),
+                )
+            )
+        if start_date:
+            my_meetings_query = my_meetings_query.filter(
+                Meeting.meeting_time >= datetime.combine(start_date, time.min)
+            )
+        if end_date:
+            my_meetings_query = my_meetings_query.filter(
+                Meeting.meeting_time <= datetime.combine(end_date, time.max)
+            )
 
         # 총 개수
         total_count = my_meetings_query.count()

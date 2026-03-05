@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_, case
 from typing import List, Optional
-from datetime import datetime, time
+from datetime import date, datetime, time
 from utils.datetime_utils import get_kst_now
 import logging
 
@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 @router.get("/", response_model=PaginatedResponse[MeetingResponse])
 async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
                      limit: int = Query(10, ge=1, le=100, description="페이지당 항목 수"),
-                     status: Optional[MeetingStatus] = Query(None, description="모임 상태 필터"),
+                     status_group: Optional[str] = Query(None, description="상태 그룹(active|completed)"),
                      search: Optional[str] = Query(None, description="검색어"),
+                     start_date: Optional[date] = Query(None, description="시작일(YYYY-MM-DD)"),
+                     end_date: Optional[date] = Query(None, description="종료일(YYYY-MM-DD)"),
                      current_user: User = Depends(get_current_active_user),
                      db: Session = Depends(get_db)):
     """라운딩 목록 조회"""
@@ -79,14 +81,20 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
                  ))))
 
     # 상태 필터
-    if status:
-        query = query.filter(Meeting.status == status)
+    if status_group == "active":
+        query = query.filter(Meeting.status.in_([MeetingStatus.SCHEDULED, MeetingStatus.IN_PROGRESS]))
+    elif status_group == "completed":
+        query = query.filter(Meeting.status.in_([MeetingStatus.COMPLETED, MeetingStatus.CANCELED]))
 
     # 검색 필터
     if search:
         search_filter = or_(Meeting.name.contains(search), Meeting.course_name.contains(search),
                             Meeting.location.contains(search))
         query = query.filter(search_filter)
+    if start_date:
+        query = query.filter(Meeting.meeting_time >= datetime.combine(start_date, time.min))
+    if end_date:
+        query = query.filter(Meeting.meeting_time <= datetime.combine(end_date, time.max))
 
     # 총 개수
     total = query.count()
