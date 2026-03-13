@@ -52,6 +52,29 @@ def is_application_deadline_passed(application_deadline):
     return datetime.now() > application_deadline
 
 
+def close_meetings_with_passed_deadline(db: Session) -> int:
+    """
+    모집 마감일이 지난 모임 중 status가 SCHEDULED인 것을 IN_PROGRESS로 변경.
+    application_closed_early=True 로 설정.
+    라운딩/소셜 목록 조회(GET /rounds/, GET /socials/) 시 호출되어, 
+    목록을 열 때마다 마감일 경과 건이 자동 반영된다.
+    """
+    from utils.datetime_utils import get_kst_now
+    now = get_kst_now()
+    meetings = db.query(Meeting).filter(
+        Meeting.application_deadline.isnot(None),
+        Meeting.application_deadline < now,
+        Meeting.status == "SCHEDULED",
+    ).all()
+    for meeting in meetings:
+        meeting.application_closed_early = True
+        meeting.status = MeetingStatus.IN_PROGRESS
+    if meetings:
+        db.commit()
+        logger.info(f"모집 마감일 경과 자동 처리: {len(meetings)}건 (meeting_ids={[m.id for m in meetings]})")
+    return len(meetings)
+
+
 # =============================================================================
 # 참가 신청 관리 API
 # =============================================================================
@@ -89,6 +112,8 @@ async def apply_to_meeting(meeting_id: int,
             if not meeting.application_closed_early:
                 await send_application_closed_notification(meeting_id, db, is_early=False)
                 meeting.application_closed_early = True  # 알림 전송 표시
+                if str(getattr(meeting.status, "value", meeting.status)) == "SCHEDULED":
+                    meeting.status = MeetingStatus.IN_PROGRESS
                 db.commit()
 
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="참가 신청 마감되었습니다.")
@@ -216,6 +241,8 @@ async def close_application_early(meeting_id: int,
 
         # 조기 마감 처리
         meeting.application_closed_early = True
+        if str(getattr(meeting.status, "value", meeting.status)) == "SCHEDULED":
+            meeting.status = MeetingStatus.IN_PROGRESS
         logger.info(f"조기 마감 플래그 설정 - meeting_id: {meeting_id}")
 
         try:

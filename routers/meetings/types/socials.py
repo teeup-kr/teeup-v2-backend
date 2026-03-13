@@ -24,6 +24,7 @@ from schemas import (
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 from utils.notification_service import notify_organizer_participant_added_after_recruitment_closed
+from routers.meetings.workflow import close_meetings_with_passed_deadline
 
 router = APIRouter(prefix="/socials", tags=["소셜 모임 관리"])
 logger = logging.getLogger(__name__)
@@ -44,20 +45,44 @@ async def get_socials(
     current_user: User = Depends(get_current_user_allow_both),
     db: Session = Depends(get_db)
 ):
-    """소셜 모임 목록 조회"""
-    
-    # 사용자가 속한 클럽만 조회
-    user_club_ids = db.query(ClubMembership.club_id).filter(
+    """소셜 모임 목록 조회 - 모든 소셜 노출(완료/취소 포함). 프라이빗은 참가한 모임에서만 노출."""
+
+    # 마감일 지난 모임을 IN_PROGRESS로 갱신 (크론 없이 목록 조회 시 반영)
+    try:
+        close_meetings_with_passed_deadline(db)
+    except Exception as e:
+        logger.warning(f"마감일 경과 자동 갱신 스킵: {e}")
+
+    # 프라이빗 소셜: 목록에는 참가자/생성자/클럽 리더·매니저만 노출
+    user_participant_meeting_ids = db.query(
+        MeetingParticipant.meeting_id
+    ).filter(MeetingParticipant.user_id == current_user.id).subquery()
+    user_created_meeting_ids = db.query(Meeting.id).filter(
+        Meeting.created_by == current_user.id
+    ).subquery()
+    manager_club_ids = db.query(ClubMembership.club_id).filter(
         and_(
             ClubMembership.user_id == current_user.id,
-            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES)
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
         )
     ).subquery()
-    
+
+    # 모든 소셜(클럽 무관) 중: 일반 소셜이거나, 프라이빗이면 참가/생성/매니저인 경우만
     query = db.query(Meeting).join(Club).filter(
         and_(
             Meeting.meeting_type == MeetingType.SOCIAL,
-            Meeting.club_id.in_(user_club_ids)
+            or_(
+                Meeting.is_private == False,
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids),
+                        Meeting.club_id.in_(manager_club_ids),
+                    ),
+                ),
+            ),
         )
     )
     
