@@ -25,6 +25,7 @@ from utils.notification_service import (
     notify_round_participants_status_changed,
 )
 from utils.handicap_calculator import calculate_handicap_from_average_score
+from routers.meetings.workflow import close_meetings_with_passed_deadline
 
 router = APIRouter(prefix="/rounds", tags=["라운딩 관리"])
 logger = logging.getLogger(__name__)
@@ -43,22 +44,17 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
                      end_date: Optional[date] = Query(None, description="종료일(YYYY-MM-DD)"),
                      current_user: User = Depends(get_current_active_user),
                      db: Session = Depends(get_db)):
-    """라운딩 목록 조회"""
+    """라운딩 목록 조회 - 모든 라운딩 노출(완료/취소 포함). 프라이빗은 참가한 모임에서만 노출."""
 
-    # 사용자가 속한 클럽만 조회
-    user_club_ids = db.query(ClubMembership.club_id).filter(
-        and_(ClubMembership.user_id == current_user.id,
-             ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES))).subquery()
+    # 마감일 지난 모임을 IN_PROGRESS로 갱신 (크론 없이 목록 조회 시 반영)
+    try:
+        close_meetings_with_passed_deadline(db)
+    except Exception as e:
+        logger.warning(f"마감일 경과 자동 갱신 스킵: {e}")
 
-    query = db.query(Meeting).join(Club).filter(
-        and_(Meeting.meeting_type == MeetingType.ROUND, Meeting.club_id.in_(user_club_ids)))
-
-    # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
-    # 사용자가 참가한 프라이빗 라운딩 ID 목록
+    # 프라이빗 라운딩: 목록에는 참가자/생성자/클럽 리더·매니저만 노출
     user_participant_meeting_ids = db.query(
         MeetingParticipant.meeting_id).filter(MeetingParticipant.user_id == current_user.id).subquery()
-
-    # 사용자가 생성한 프라이빗 라운딩 ID 목록
     user_created_meeting_ids = db.query(Meeting.id).filter(Meeting.created_by == current_user.id).subquery()
     manager_club_ids = db.query(ClubMembership.club_id).filter(
         and_(
@@ -68,17 +64,23 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
         )
     ).subquery()
 
-    # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중
-    # 참가자/생성자/클럽 리더·매니저인 경우
-    query = query.filter(
-        or_(
-            Meeting.is_private == False,  # 일반 라운딩
-            and_(Meeting.is_private == True,
-                 or_(
-                     Meeting.id.in_(user_participant_meeting_ids),
-                     Meeting.id.in_(user_created_meeting_ids),
-                     Meeting.club_id.in_(manager_club_ids),
-                 ))))
+    # 모든 라운딩(클럽 무관) 중: 일반 라운딩이거나, 프라이빗이면 참가/생성/매니저인 경우만
+    query = db.query(Meeting).join(Club).filter(
+        and_(
+            Meeting.meeting_type == MeetingType.ROUND,
+            or_(
+                Meeting.is_private == False,
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids),
+                        Meeting.club_id.in_(manager_club_ids),
+                    ),
+                ),
+            ),
+        )
+    )
 
     # 상태 필터
     if status_group == "active":
@@ -673,7 +675,7 @@ async def get_round_participants(meeting_id: int,
                          ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES))).first()
                 if membership and membership.role:
                     club_role = membership.role.value if hasattr(membership.role, 'value') else str(membership.role)
-            status = "CONFIRMED"  # 라운딩 참가자는 기본 확정
+            participant_status = "CONFIRMED"  # 라운딩 참가자는 기본 확정 (로컬명으로 FastAPI status 가리지 않음)
             # 게스트인 경우와 일반 참가자인 경우 구분
             if participant.guest_id:
                 # 게스트인 경우 - guest_id를 통해 Guest 모델에서 정보 조회
@@ -788,7 +790,7 @@ async def get_round_participants(meeting_id: int,
                         "membership_role":
                         club_role,
                         "status":
-                        status,
+                        participant_status,
                     })
 
         return participant_responses
