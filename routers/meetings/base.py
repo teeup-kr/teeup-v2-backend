@@ -444,33 +444,63 @@ async def get_meetings(club_id: Optional[int] = None,
                        limit: int = 10,
                        status_filter: Optional[MeetingStatus] = None,
                        meeting_type_filter: Optional[MeetingType] = None,
+                       status_group: Optional[str] = None,
                        search: Optional[str] = None,
+                       start_date: Optional[date] = None,
+                       end_date: Optional[date] = None,
+                       list_type: Optional[str] = Query(None, description="목록 타입(rounding|social|participating)"),
                        db: Session = Depends(get_db),
                        current_user: User = Depends(get_current_active_user)):
-    """모임 목록 조회"""
+    """모임 목록 조회 (내 클럽 기본 + 타입 분기)"""
     try:
-        # 페이지네이션 계산
         offset = (page - 1) * limit
 
-        # 모임 조회 쿼리
-        meetings_query = db.query(Meeting)
+        user_clubs = db.query(ClubMembership.club_id).filter(
+            ClubMembership.user_id == current_user.id,
+            ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+        ).all()
+        club_ids = [club.club_id for club in user_clubs]
+
+        if not club_ids:
+            return {"data": [], "total": 0, "page": page, "limit": limit, "total_pages": 0}
+
+        meetings_query = db.query(Meeting).filter(Meeting.club_id.in_(club_ids))
 
         if club_id:
             meetings_query = meetings_query.filter(Meeting.club_id == club_id)
 
-        if status_filter:
-            meetings_query = meetings_query.filter(Meeting.status == status_filter)
+        list_type_value = (list_type or "").lower()
+        if list_type_value == "rounding":
+            meetings_query = meetings_query.filter(Meeting.meeting_type == MeetingType.ROUND)
+        elif list_type_value == "social":
+            meetings_query = meetings_query.filter(Meeting.meeting_type == MeetingType.SOCIAL)
+        elif list_type_value == "participating":
+            participant_meeting_ids = select(MeetingParticipant.meeting_id).where(
+                MeetingParticipant.user_id == current_user.id,
+                MeetingParticipant.status == MeetingParticipantStatus.CONFIRMED,
+            )
+            meetings_query = meetings_query.filter(
+                Meeting.id.in_(participant_meeting_ids),
+                Meeting.meeting_type.in_([MeetingType.ROUND, MeetingType.SOCIAL]),
+            )
+        elif list_type_value not in ("",):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="list_type은 rounding, social, participating 중 하나여야 합니다.")
 
         if meeting_type_filter:
             meetings_query = meetings_query.filter(Meeting.meeting_type == meeting_type_filter)
 
-        # 프라이빗 라운딩 필터링: 참가자이거나 생성자인 경우만 표시
-        # 사용자가 참가한 프라이빗 라운딩 ID 목록
+        if status_filter:
+            meetings_query = meetings_query.filter(Meeting.status == status_filter)
+
+        if status_group == "active":
+            meetings_query = meetings_query.filter(Meeting.status.in_([MeetingStatus.SCHEDULED, MeetingStatus.IN_PROGRESS]))
+        elif status_group == "completed":
+            meetings_query = meetings_query.filter(Meeting.status.in_([MeetingStatus.COMPLETED, MeetingStatus.CANCELED]))
+
         user_participant_meeting_ids = select(MeetingParticipant.meeting_id).where(
             MeetingParticipant.user_id == current_user.id
         )
-
-        # 사용자가 생성한 프라이빗 라운딩 ID 목록
         user_created_meeting_ids = select(Meeting.id).where(Meeting.created_by == current_user.id)
         manager_club_ids = select(ClubMembership.club_id).where(
             ClubMembership.user_id == current_user.id,
@@ -478,77 +508,84 @@ async def get_meetings(club_id: Optional[int] = None,
             ClubMembership.role.in_([ClubRole.LEADER, ClubRole.MANAGER]),
         )
 
-        # 프라이빗 라운딩 필터: 일반 라운딩이거나, 프라이빗 라운딩 중 참가자/생성자/클럽 리더·매니저인 경우
         meetings_query = meetings_query.filter(
             or_(
-                Meeting.is_private == False,  # 일반 라운딩
-                and_(Meeting.is_private == True,
-                     or_(
-                         Meeting.id.in_(user_participant_meeting_ids),
-                         Meeting.id.in_(user_created_meeting_ids),
-                         Meeting.club_id.in_(manager_club_ids),
-                     ))))
+                Meeting.is_private == False,
+                and_(
+                    Meeting.is_private == True,
+                    or_(
+                        Meeting.id.in_(user_participant_meeting_ids),
+                        Meeting.id.in_(user_created_meeting_ids),
+                        Meeting.club_id.in_(manager_club_ids),
+                    ),
+                ),
+            )
+        )
 
-        # 검색 기능 추가
         if search:
             search_term = f"%{search}%"
-            meetings_query = meetings_query.filter((Meeting.name.ilike(search_term))
-                                                   | (Meeting.description.ilike(search_term))
-                                                   | (Meeting.location.ilike(search_term))
-                                                   | (Meeting.course_name.ilike(search_term)))
+            meetings_query = meetings_query.filter(
+                or_(
+                    Meeting.name.ilike(search_term),
+                    Meeting.description.ilike(search_term),
+                    Meeting.location.ilike(search_term),
+                    Meeting.course_name.ilike(search_term),
+                    Meeting.venue_name.ilike(search_term),
+                )
+            )
+
+        if start_date:
+            meetings_query = meetings_query.filter(Meeting.meeting_time >= datetime.combine(start_date, time.min))
+        if end_date:
+            meetings_query = meetings_query.filter(Meeting.meeting_time <= datetime.combine(end_date, time.max))
 
         total = meetings_query.count()
+        meetings = meetings_query.order_by(Meeting.meeting_time.desc()).offset(offset).limit(limit).all()
 
-        # JOIN을 사용한 최적화된 쿼리
-        from sqlalchemy import func
-
-        meetings_with_data = db.query(
-            Meeting, Club.name.label('club_name'),
-            func.count(MeetingParticipant.id).label('participant_count')).outerjoin(
-                Club, Meeting.club_id == Club.id).outerjoin(
-                    MeetingParticipant, MeetingParticipant.meeting_id == Meeting.id).filter(
-                        # 프라이빗 라운딩 필터링 재적용
-                        or_(
-                            Meeting.is_private == False,
-                            and_(
-                                Meeting.is_private == True,
-                                or_(
-                                    Meeting.id.in_(user_participant_meeting_ids),
-                                    Meeting.id.in_(user_created_meeting_ids),
-                                    Meeting.club_id.in_(manager_club_ids),
-                                )))).group_by(
-                                        Meeting.id, Club.name).order_by(
-                                            Meeting.meeting_time.desc()).offset(offset).limit(limit).all()
-
-        # 응답 데이터 구성
         meeting_data = []
-        for meeting, club_name, participant_count in meetings_with_data:
+        for meeting in meetings:
+            club = db.query(Club).filter(Club.id == meeting.club_id).first()
+            participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
+
             meeting_data.append({
                 "id": meeting.id,
                 "name": meeting.name,
                 "description": meeting.description,
                 "location": meeting.location,
                 "meeting_time": meeting.meeting_time,
+                "application_deadline": meeting.application_deadline,
                 "max_participants": meeting.max_participants,
                 "meeting_type": meeting.meeting_type.value if meeting.meeting_type else None,
+                "meeting_subtype": meeting.meeting_subtype.value if meeting.meeting_subtype else None,
                 "course_name": meeting.course_name,
                 "hole_count": meeting.hole_count,
-                "status": meeting.status,
+                "venue_name": meeting.venue_name,
+                "total_cost": meeting.total_cost,
+                "social_cost": meeting.social_cost,
+                "status": meeting.status.value if meeting.status else None,
                 "cancel_reason": meeting.cancel_reason,
                 "club_id": meeting.club_id,
-                "club_name": club_name,
+                "club_name": club.name if club else "알 수 없는 클럽",
                 "participant_count": participant_count,
+                "application_closed_early": meeting.application_closed_early,
+                "team_formation_confirmed_at": meeting.team_formation_confirmed_at,
+                "rounding_started_at": meeting.rounding_started_at,
+                "rounding_completed_at": meeting.rounding_completed_at,
+                "settlement_confirmed": meeting.settlement_confirmed,
+                "is_completed": meeting.is_completed,
+                "is_private": meeting.is_private,
+                "created_by": meeting.created_by,
                 "created_at": meeting.created_at,
                 "updated_at": meeting.updated_at
             })
 
         total_pages = (total + limit - 1) // limit
-
         return {"data": meeting_data, "total": total, "page": page, "limit": limit, "total_pages": total_pages}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"미팅 생성 중 오류 발생: {str(e)}")
-        print(f"ERROR: {str(e)}")
+        logger.error(f"모임 목록 조회 중 오류 발생: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"서버 내부 오류가 발생했습니다: {str(e)}")
 
 
