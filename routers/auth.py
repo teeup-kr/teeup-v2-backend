@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 APP_CLIENT_TYPES = {"android", "ios"}
+CLIENT_TYPES = {"web", *APP_CLIENT_TYPES}
 
 
 def is_app_client_type(client_type: Optional[str]) -> bool:
@@ -45,6 +46,17 @@ def _auth_cookie_domain() -> Optional[str]:
 
 def _auth_cookie_samesite() -> str:
     return settings.AUTH_COOKIE_SAMESITE.lower()
+
+
+def _get_client_type(request: Request | None) -> str:
+    if request is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="X-Client-Type 헤더가 필요합니다.")
+
+    client_type = request.headers.get("x-client-type")
+    if client_type not in CLIENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 X-Client-Type 헤더입니다.")
+
+    return client_type
 
 
 def _delete_auth_cookie_variants(response: Response, key: str):
@@ -73,7 +85,6 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
                         httponly=True,
                         secure=settings.auth_cookie_secure,
                         samesite=_auth_cookie_samesite(),
-                        domain=_auth_cookie_domain(),
                         path="/")
     response.set_cookie(key=settings.AUTH_REFRESH_COOKIE_NAME,
                         value=refresh_token,
@@ -81,7 +92,6 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
                         httponly=True,
                         secure=settings.auth_cookie_secure,
                         samesite=_auth_cookie_samesite(),
-                        domain=_auth_cookie_domain(),
                         path="/")
 
 
@@ -91,22 +101,28 @@ def clear_auth_cookies(response: Response):
 
 
 def _get_access_token(credentials: Optional[HTTPAuthorizationCredentials], request: Request | None) -> str:
-    if credentials and credentials.credentials:
-        return credentials.credentials
-    if request is not None:
+    client_type = _get_client_type(request)
+
+    if client_type == "web":
         token = request.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
         if token:
             return token
+    elif credentials and credentials.credentials:
+        return credentials.credentials
+
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
 def _get_refresh_token(token_data: Optional["TokenRefreshRequest"], request: Request | None) -> str:
-    if token_data and token_data.refresh_token:
-        return token_data.refresh_token
-    if request is not None:
+    client_type = _get_client_type(request)
+
+    if client_type == "web":
         refresh_token = request.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
         if refresh_token:
             return refresh_token
+    elif token_data and token_data.refresh_token:
+        return token_data.refresh_token
+
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="리프레시 토큰이 필요합니다.")
 
 
@@ -552,11 +568,12 @@ async def logout(payload: Optional[LogoutRequest] = Body(default=None),
                  db: Session = Depends(get_db)):
     """로그아웃 (토큰 무효화)"""
     try:
+        client_type = _get_client_type(request)
         refresh_token = None
-        if payload and payload.refresh_token:
-            refresh_token = payload.refresh_token
-        elif request is not None:
+        if client_type == "web":
             refresh_token = request.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        elif payload and payload.refresh_token:
+            refresh_token = payload.refresh_token
 
         if refresh_token:
             refresh_payload = jwt_auth.verify_token(refresh_token, "refresh", db=db)
@@ -608,9 +625,9 @@ class TokenRefreshRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    token_type: Optional[str] = None
     expires_in: int = 3600  # 1시간
     refresh_expires_in: Optional[int] = None
     session_policy: Optional[str] = None
@@ -625,6 +642,7 @@ async def refresh_token(token_data: Optional[TokenRefreshRequest] = Body(default
                         db: Session = Depends(get_db)):
     """토큰 갱신 (자동 로그인용)"""
     try:
+        request_client_type = _get_client_type(request)
         refresh_token_value = _get_refresh_token(token_data, request)
 
         # JWT 리프레시 토큰 검증
@@ -632,8 +650,9 @@ async def refresh_token(token_data: Optional[TokenRefreshRequest] = Body(default
         user_id = payload.get("id")
         client_type = payload.get("client_type")
         if client_type is None:
-            # 구버전 토큰은 client_type 클레임이 없으므로 웹 정책으로 처리
-            client_type = "web"
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰의 클라이언트 타입이 없습니다.")
+        if client_type != request_client_type:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰의 클라이언트 타입이 요청과 일치하지 않습니다.")
         session_policy = "app_persistent" if is_app_client_type(client_type) else "web_default"
         refresh_expire_delta = get_refresh_expire_delta(client_type)
 
@@ -675,8 +694,9 @@ async def refresh_token(token_data: Optional[TokenRefreshRequest] = Body(default
                              refresh_max_age=int(refresh_expire_delta.total_seconds()))
 
         return TokenResponse(
-            access_token=new_access_token,
-            refresh_token=new_refresh_token,
+            access_token=None if client_type == "web" else new_access_token,
+            refresh_token=None if client_type == "web" else new_refresh_token,
+            token_type=None if client_type == "web" else "bearer",
             expires_in=jwt_auth.expire_minutes * 60,
             refresh_expires_in=int(refresh_expire_delta.total_seconds()),
             session_policy=session_policy,

@@ -26,29 +26,24 @@ from routers.auth import set_auth_cookies
 
 router = APIRouter(prefix="/auth/oauth", tags=["OAuth"])
 logger = logging.getLogger(__name__)
+CLIENT_TYPES = {"web", "android", "ios"}
 
 
 def _detect_client_type(request: Request, redirect_uri: str | None) -> str:
-    if request.method == "GET":
-        return "web"
+    client_type = request.headers.get("x-client-type")
+    if client_type not in CLIENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 X-Client-Type 헤더입니다.")
 
-    if redirect_uri:
-        if redirect_uri == settings.GOOGLE_WEB_REDIRECT_URI:
-            return "web"
-        if redirect_uri == settings.GOOGLE_ANDROID_REDIRECT_URI:
-            return "android"
-        if redirect_uri == settings.GOOGLE_IOS_REDIRECT_URI:
-            return "ios"
+    expected_redirect_uri = {
+        "web": settings.GOOGLE_WEB_REDIRECT_URI,
+        "android": settings.GOOGLE_ANDROID_REDIRECT_URI,
+        "ios": settings.GOOGLE_IOS_REDIRECT_URI,
+    }[client_type]
 
-    user_agent = (request.headers.get("user-agent") or "").lower()
-    if "android" in user_agent:
-        return "android"
-    if any(token in user_agent for token in ("iphone", "ipad", "ios")):
-        return "ios"
-    if any(token in user_agent for token in ("mozilla", "chrome", "safari", "edge")):
-        return "web"
+    if redirect_uri != expected_redirect_uri:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="클라이언트 타입과 redirectUri가 일치하지 않습니다.")
 
-    return "android"
+    return client_type
 
 
 def _is_app_client(client_type: str) -> bool:
@@ -203,24 +198,11 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
         authorizationCode = request.authorizationCode
         codeVerifier = request.codeVerifier
 
-        # 프론트엔드에서 전달한 redirectUri를 우선 사용
         redirect_uri = request.redirectUri
-
-        # redirectUri가 없으면 클라이언트 타입을 감지하여 settings에서 가져옴
-        if not redirect_uri:
-            client_type = _detect_client_type(http_request, None)
-            logger.info(f"Google OAuth client type detected: {client_type}")
-            if client_type == "web":
-                redirect_uri = settings.GOOGLE_WEB_REDIRECT_URI
-            elif client_type == "ios":
-                redirect_uri = settings.GOOGLE_IOS_REDIRECT_URI
-            else:
-                redirect_uri = settings.GOOGLE_ANDROID_REDIRECT_URI
-
         if not redirect_uri:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth redirect_uri 설정이 없습니다",
+                detail="OAuth redirectUri가 필요합니다",
             )
 
         client_type = _detect_client_type(http_request, redirect_uri)
@@ -327,6 +309,31 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
                              access_token=access_token,
                              refresh_token=refresh_token,
                              refresh_max_age=int(refresh_expire_delta.total_seconds()))
+            return {
+                "expires_in": jwt_auth.expire_minutes * 60,
+                "refresh_expires_in": int(refresh_expire_delta.total_seconds()),
+                "session_policy": session_policy,
+                "client_type": client_type,
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "nickname": user.nickname,
+                    "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
+                    "status": user.status.value if user.status else "ACTIVE",
+                    "provider": user.provider.value,
+                    "created_at": (user.created_at.isoformat() if user.created_at is not None else None),
+                    "updated_at": (user.updated_at.isoformat() if user.updated_at is not None else None),
+                    "profile_image": user.profile_image,
+                    "phone": user.phone_number,
+                    "needs_terms_agreement":
+                    user.needs_terms_agreement if hasattr(user, 'needs_terms_agreement') else False,
+                    "terms_agreement": user.terms_agreement if hasattr(user, 'terms_agreement') else False,
+                    "privacy_policy": user.privacy_policy if hasattr(user, 'privacy_policy') else False,
+                    "privacy_collection": user.privacy_collection if hasattr(user, 'privacy_collection') else False,
+                    "marketing_consent": user.marketing_consent if hasattr(user, 'marketing_consent') else False,
+                },
+                "is_new_user": is_new_user,
+            }
 
         return {
             "access_token": access_token,
