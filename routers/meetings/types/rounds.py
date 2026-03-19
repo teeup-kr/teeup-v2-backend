@@ -2,7 +2,7 @@
 라운딩 관리 API - ROUND 타입 전용
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_, case
 from typing import List, Optional
@@ -618,6 +618,7 @@ async def leave_round(meeting_id: int,
 async def get_round_participants(meeting_id: int,
                                  current_user: User = Depends(get_current_active_user),
                                  credentials: HTTPAuthorizationCredentials = Depends(security),
+                                 request: Request = None,
                                  db: Session = Depends(get_db)):
     """라운딩 참가자 목록 조회"""
     try:
@@ -629,7 +630,7 @@ async def get_round_participants(meeting_id: int,
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
         # 프라이빗 라운딩인 경우 권한 체크
-        user_role = get_user_role_from_token(credentials)
+        user_role = get_user_role_from_token(credentials, request)
         if meeting.is_private:
             # 관리자는 접근 가능
             if user_role != "ADMIN":
@@ -805,6 +806,7 @@ async def get_round_participants(meeting_id: int,
 async def get_round_teams(meeting_id: int,
                           current_user: User = Depends(get_current_user_allow_both),
                           credentials: HTTPAuthorizationCredentials = Depends(security),
+                          request: Request = None,
                           db: Session = Depends(get_db)):
     """라운딩의 팀 목록 조회"""
     try:
@@ -816,7 +818,7 @@ async def get_round_teams(meeting_id: int,
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
         # 클럽 멤버십 확인 (관리자는 제외)
-        user_role = get_user_role_from_token(credentials)
+        user_role = get_user_role_from_token(credentials, request)
         if user_role != "ADMIN":
             membership = db.query(ClubMembership).filter(
                 and_(ClubMembership.user_id == current_user.id, ClubMembership.club_id == meeting.club_id,

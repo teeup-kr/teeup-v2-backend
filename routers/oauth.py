@@ -8,7 +8,7 @@ import json
 from urllib.parse import urlencode
 from typing import Dict, Any, cast
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from database import get_db
@@ -21,6 +21,8 @@ from config import settings
 from utils.jwt_auth import jwt_auth
 from utils.cuid import generate_cuid
 import hashlib
+
+from routers.auth import set_auth_cookies
 
 router = APIRouter(prefix="/auth/oauth", tags=["OAuth"])
 logger = logging.getLogger(__name__)
@@ -195,7 +197,7 @@ async def drive_token_callback(code: str, state: str):
 
 
 @router.post("/google/callback")
-async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Request, db: Session = Depends(get_db)):
+async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Request, response: Response, db: Session = Depends(get_db)):
     """Google OAuth 콜백 처리 (POST)"""
     try:
         authorizationCode = request.authorizationCode
@@ -319,6 +321,12 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
                                  push_token=request.push_token,
                                  token_type=request.token_type or "FCM",
                                  enabled=request.enabled if request.enabled is not None else True)
+
+        if not _is_app_client(client_type):
+            set_auth_cookies(response,
+                             access_token=access_token,
+                             refresh_token=refresh_token,
+                             refresh_max_age=int(refresh_expire_delta.total_seconds()))
 
         return {
             "access_token": access_token,

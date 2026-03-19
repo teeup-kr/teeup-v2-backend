@@ -3,7 +3,7 @@
 
 골프 라운딩 스코어 입력 및 관리 기능
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 import logging
@@ -464,7 +464,8 @@ async def update_score(
     score_data: ScoreUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None
 ):
     """스코어 수정"""
     try:
@@ -478,7 +479,7 @@ async def update_score(
         
         # 권한 확인 (관리자는 모든 스코어 수정 가능)
         # JWT 토큰에서 role 확인
-        user_role = get_user_role_from_token(credentials)
+        user_role = get_user_role_from_token(credentials, request)
         if user_role != "ADMIN":
             if not check_score_permission(current_user.id, score.participant_id, db):
                 raise HTTPException(
@@ -541,7 +542,8 @@ async def delete_score(
     score_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None
 ):
     """스코어 삭제"""
     try:
@@ -554,7 +556,7 @@ async def delete_score(
             )
         
         # 권한 확인 (관리자는 모든 스코어 삭제 가능)
-        user_role = get_user_role_from_token(credentials)
+        user_role = get_user_role_from_token(credentials, request)
         if user_role != "ADMIN":
             if not check_score_permission(current_user.id, score.participant_id, db):
                 raise HTTPException(

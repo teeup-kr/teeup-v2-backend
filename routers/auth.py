@@ -1,5 +1,5 @@
 # 인증 관련 API들
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional, Union, Literal
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/auth", tags=["인증"])
 logger = logging.getLogger(__name__)
 
 # 인증 관련 유틸리티 함수들
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 APP_CLIENT_TYPES = {"android", "ios"}
 
@@ -39,10 +39,73 @@ def get_refresh_expire_delta(client_type: Optional[str]) -> timedelta:
     return timedelta(days=settings.JWT_WEB_REFRESH_EXPIRE_DAYS)
 
 
-def get_user_role_from_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+def _auth_cookie_domain() -> Optional[str]:
+    return settings.AUTH_COOKIE_DOMAIN or None
+
+
+def _auth_cookie_samesite() -> str:
+    return settings.AUTH_COOKIE_SAMESITE.lower()
+
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str, refresh_max_age: int):
+    response.set_cookie(key=settings.AUTH_ACCESS_COOKIE_NAME,
+                        value=access_token,
+                        max_age=jwt_auth.expire_minutes * 60,
+                        httponly=True,
+                        secure=settings.auth_cookie_secure,
+                        samesite=_auth_cookie_samesite(),
+                        domain=_auth_cookie_domain(),
+                        path="/")
+    response.set_cookie(key=settings.AUTH_REFRESH_COOKIE_NAME,
+                        value=refresh_token,
+                        max_age=refresh_max_age,
+                        httponly=True,
+                        secure=settings.auth_cookie_secure,
+                        samesite=_auth_cookie_samesite(),
+                        domain=_auth_cookie_domain(),
+                        path="/")
+
+
+def clear_auth_cookies(response: Response):
+    response.delete_cookie(key=settings.AUTH_ACCESS_COOKIE_NAME,
+                           domain=_auth_cookie_domain(),
+                           path="/",
+                           secure=settings.auth_cookie_secure,
+                           httponly=True,
+                           samesite=_auth_cookie_samesite())
+    response.delete_cookie(key=settings.AUTH_REFRESH_COOKIE_NAME,
+                           domain=_auth_cookie_domain(),
+                           path="/",
+                           secure=settings.auth_cookie_secure,
+                           httponly=True,
+                           samesite=_auth_cookie_samesite())
+
+
+def _get_access_token(credentials: Optional[HTTPAuthorizationCredentials], request: Request | None) -> str:
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    if request is not None:
+        token = request.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
+        if token:
+            return token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+def _get_refresh_token(token_data: Optional["TokenRefreshRequest"], request: Request | None) -> str:
+    if token_data and token_data.refresh_token:
+        return token_data.refresh_token
+    if request is not None:
+        refresh_token = request.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        if refresh_token:
+            return refresh_token
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="리프레시 토큰이 필요합니다.")
+
+
+def get_user_role_from_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+                             request: Request = None) -> str:
     """JWT 토큰에서 사용자 역할(role) 추출"""
     try:
-        token = credentials.credentials
+        token = _get_access_token(credentials, request)
         payload = jwt_auth.verify_token(token, "access")
         # role 또는 type 필드에서 역할 확인
         role = payload.get("role", "USER")
@@ -56,10 +119,11 @@ def get_user_role_from_token(credentials: HTTPAuthorizationCredentials = Depends
         return "USER"  # 기본값
 
 
-def is_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
+def is_admin_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+                  request: Request = None) -> bool:
     """현재 사용자가 관리자인지 확인"""
     try:
-        role = get_user_role_from_token(credentials)
+        role = get_user_role_from_token(credentials, request)
         return role == "ADMIN"
     except Exception:
         return False
@@ -149,7 +213,8 @@ def validate_birthdate(birthdate: str) -> dict:
         return result
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security),
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+                     request: Request = None,
                      db: Session = Depends(get_db),
                      required_type: Optional[Literal["user", "admin"]] = "user",
                      check_status: bool = True,
@@ -167,7 +232,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     """
     try:
         # JWT 토큰 검증
-        token = credentials.credentials
+        token = _get_access_token(credentials, request)
         logger.info(f"토큰 검증 시작: {token[:20] if token else 'None'}...")
         payload = jwt_auth.verify_token(token, "access")
 
@@ -249,11 +314,12 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 
 def get_current_user_allow_both(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    request: Request = None,
     db: Session = Depends(get_db),
 ) -> Union[User, Admin]:
     """User 또는 Admin 토큰 모두 허용 (required_type=None) - 라운딩/정산 등 공통 API용"""
-    return get_current_user(credentials, db, required_type=None, check_status=True)
+    return get_current_user(credentials=credentials, request=request, db=db, required_type=None, check_status=True)
 
 
 def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
@@ -471,12 +537,20 @@ async def withdraw_user(current_user: User = Depends(get_current_active_user), d
 
 @router.post("/logout")
 async def logout(payload: Optional[LogoutRequest] = Body(default=None),
+                 request: Request = None,
+                 response: Response = None,
                  current_user: User = Depends(get_current_active_user),
                  db: Session = Depends(get_db)):
     """로그아웃 (토큰 무효화)"""
     try:
+        refresh_token = None
         if payload and payload.refresh_token:
-            refresh_payload = jwt_auth.verify_token(payload.refresh_token, "refresh", db=db)
+            refresh_token = payload.refresh_token
+        elif request is not None:
+            refresh_token = request.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+
+        if refresh_token:
+            refresh_payload = jwt_auth.verify_token(refresh_token, "refresh", db=db)
             refresh_user_id = int(refresh_payload["id"])
             if refresh_user_id != int(current_user.id):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="다른 사용자의 리프레시 토큰입니다.")
@@ -493,6 +567,7 @@ async def logout(payload: Optional[LogoutRequest] = Body(default=None),
         else:
             deactivate_user_push_tokens(db=db, user_id=current_user.id)
 
+        clear_auth_cookies(response)
         return {"message": "로그아웃이 완료되었습니다.", "success": True}
 
     except HTTPException:
@@ -535,15 +610,16 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(get_db)):
+async def refresh_token(token_data: Optional[TokenRefreshRequest] = Body(default=None),
+                        request: Request = None,
+                        response: Response = None,
+                        db: Session = Depends(get_db)):
     """토큰 갱신 (자동 로그인용)"""
     try:
-        # 리프레시 토큰 검증
-        if not token_data.refresh_token:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="리프레시 토큰이 필요합니다.")
+        refresh_token_value = _get_refresh_token(token_data, request)
 
         # JWT 리프레시 토큰 검증
-        payload = jwt_auth.verify_token(token_data.refresh_token, "refresh", db=db)
+        payload = jwt_auth.verify_token(refresh_token_value, "refresh", db=db)
         user_id = payload.get("id")
         client_type = payload.get("client_type")
         if client_type is None:
@@ -582,6 +658,12 @@ async def refresh_token(token_data: TokenRefreshRequest, db: Session = Depends(g
                              reason=TokenRevokeReason.LOGOUT,
                              expires_at=used_refresh_expires_at,
                              db=db)
+
+        if not is_app_client_type(client_type):
+            set_auth_cookies(response,
+                             access_token=new_access_token,
+                             refresh_token=new_refresh_token,
+                             refresh_max_age=int(refresh_expire_delta.total_seconds()))
 
         return TokenResponse(
             access_token=new_access_token,

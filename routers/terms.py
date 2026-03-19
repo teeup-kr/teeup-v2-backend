@@ -4,7 +4,7 @@
 - 서비스이용약관, 개인정보처리방침, 개인정보 수집 및 활용동의, 마케팅정보수신동의 관리
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -22,7 +22,7 @@ from schemas import (TermsCreate, TermsUpdate, TermsResponse, TermsListResponse,
 from routers.auth import get_current_user
 
 # 인증 관련
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,12 @@ router = APIRouter(prefix="/terms", tags=["terms"])
 
 
 # 약관 동의 API용 인증 함수 (약관 동의 체크 제외)
-def get_current_user_for_terms_agreement(credentials: HTTPAuthorizationCredentials = Depends(security),
+def get_current_user_for_terms_agreement(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+                                         request: Request = None,
                                          db: Session = Depends(get_db)):
     """약관 동의 API용 인증 함수 (약관 동의 체크 제외)"""
     return get_current_user(credentials=credentials,
+                            request=request,
                             db=db,
                             required_type="user",
                             check_status=True,

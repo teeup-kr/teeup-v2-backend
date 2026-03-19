@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: str = ""
 
+    # Auth Cookies
+    AUTH_ACCESS_COOKIE_NAME: str = "teeup_access_token"
+    AUTH_REFRESH_COOKIE_NAME: str = "teeup_refresh_token"
+    AUTH_COOKIE_DOMAIN: str = ""
+    AUTH_COOKIE_SAMESITE: str = "lax"
+    AUTH_COOKIE_SECURE: Optional[bool] = None
+
     @property
     def cors_origins_list(self) -> List[str]:
         """Convert CORS origins string to list"""
@@ -48,6 +55,12 @@ class Settings(BaseSettings):
     # Loadtest Internal OAuth Mock
     ENABLE_LOADTEST_AUTH_MOCK: bool = False
     LOADTEST_AUTH_MOCK_ALLOWED_IPS: str = "127.0.0.1,::1"
+
+    @property
+    def auth_cookie_secure(self) -> bool:
+        if self.AUTH_COOKIE_SECURE is not None:
+            return self.AUTH_COOKIE_SECURE
+        return self.ENVIRONMENT.lower() != "development"
 
     @property
     def loadtest_auth_mock_allowed_ips_list(self) -> List[str]:

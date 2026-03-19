@@ -14,7 +14,7 @@ from database import get_db
 from models import RefreshTokenBlacklist
 
 # HTTP Bearer 보안 스키마
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 
