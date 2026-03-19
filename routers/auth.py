@@ -47,7 +47,26 @@ def _auth_cookie_samesite() -> str:
     return settings.AUTH_COOKIE_SAMESITE.lower()
 
 
+def _delete_auth_cookie_variants(response: Response, key: str):
+    response.delete_cookie(key=key,
+                           path="/",
+                           secure=settings.auth_cookie_secure,
+                           httponly=True,
+                           samesite=_auth_cookie_samesite())
+
+    if _auth_cookie_domain():
+        response.delete_cookie(key=key,
+                               domain=_auth_cookie_domain(),
+                               path="/",
+                               secure=settings.auth_cookie_secure,
+                               httponly=True,
+                               samesite=_auth_cookie_samesite())
+
+
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str, refresh_max_age: int):
+    _delete_auth_cookie_variants(response, settings.AUTH_ACCESS_COOKIE_NAME)
+    _delete_auth_cookie_variants(response, settings.AUTH_REFRESH_COOKIE_NAME)
+
     response.set_cookie(key=settings.AUTH_ACCESS_COOKIE_NAME,
                         value=access_token,
                         max_age=jwt_auth.expire_minutes * 60,
@@ -67,18 +86,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
 
 
 def clear_auth_cookies(response: Response):
-    response.delete_cookie(key=settings.AUTH_ACCESS_COOKIE_NAME,
-                           domain=_auth_cookie_domain(),
-                           path="/",
-                           secure=settings.auth_cookie_secure,
-                           httponly=True,
-                           samesite=_auth_cookie_samesite())
-    response.delete_cookie(key=settings.AUTH_REFRESH_COOKIE_NAME,
-                           domain=_auth_cookie_domain(),
-                           path="/",
-                           secure=settings.auth_cookie_secure,
-                           httponly=True,
-                           samesite=_auth_cookie_samesite())
+    _delete_auth_cookie_variants(response, settings.AUTH_ACCESS_COOKIE_NAME)
+    _delete_auth_cookie_variants(response, settings.AUTH_REFRESH_COOKIE_NAME)
 
 
 def _get_access_token(credentials: Optional[HTTPAuthorizationCredentials], request: Request | None) -> str:
