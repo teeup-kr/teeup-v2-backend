@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     # Server Configuration
-    BACKEND_PORT: str = "8200"  # 백엔드 서버 포트 (환경 변수 필수)
+    BACKEND_PORT: str = ""  # 백엔드 서버 포트 (환경 변수 필수)
 
     # Database Auto Creation
     AUTO_CREATE_TABLES: Optional[bool] = (
