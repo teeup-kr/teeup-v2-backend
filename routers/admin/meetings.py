@@ -169,8 +169,8 @@ async def admin_get_rounding_meetings(page: int = Query(1, ge=1, description="�
         # 총 개수 조회
         total = query.count()
 
-        # 페이지네이션
-        meetings = query.offset((page - 1) * limit).limit(limit).all()
+        # 페이지네이션 (최신순)
+        meetings = query.order_by(desc(Meeting.created_at)).offset((page - 1) * limit).limit(limit).all()
 
         # 응답 데이터 구성
         meeting_data = []
@@ -285,8 +285,8 @@ async def admin_get_event_meetings(page: int = Query(1, ge=1, description="페�
         # 총 개수 조회
         total = query.count()
 
-        # 페이지네이션
-        meetings = query.offset((page - 1) * limit).limit(limit).all()
+        # 페이지네이션 (최신순)
+        meetings = query.order_by(desc(Meeting.created_at)).offset((page - 1) * limit).limit(limit).all()
 
         # 응답 데이터 구성
         meeting_data = []
@@ -1116,6 +1116,8 @@ async def create_admin_rounding_settlement(
             all_settlement_targets.update(caddy_fee_participants)
         if not all_covered_by_fee:
             for item in other_expense_items:
+                if bool(item.get("covered_by_fee")):
+                    continue
                 for pid in (item.get('participants') or []):
                     if pid and pid != 'UNSETTLED':
                         all_settlement_targets.add(pid)
@@ -1132,6 +1134,8 @@ async def create_admin_rounding_settlement(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="캐디피의 정산 대상자를 선택해주세요.")
         if not all_covered_by_fee:
             for idx, item in enumerate(other_expense_items):
+                if bool(item.get("covered_by_fee")):
+                    continue
                 if not (item.get('participants') or []):
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"기타 비용 항목 {idx + 1}의 정산 대상자를 선택해주세요.")
 
@@ -1227,6 +1231,8 @@ async def create_admin_rounding_settlement(
         if not cart_fee_covered_by_fee and cart_fee > 0:
             _item_amounts.append(cart_fee)
         for oi in (other_expense_items or []):
+            if bool(oi.get("covered_by_fee")):
+                continue
             am = Decimal(str(oi.get('amount', 0)))
             if am > 0:
                 _item_amounts.append(am)
@@ -1342,16 +1348,20 @@ async def create_admin_rounding_settlement(
             participants = oi.get('participants') or []
             resolved = _resolve_participant_ids(participant_ids, participants) if participant_ids or participants else []
             title = oi.get('title') or oi.get('name') or '기타 비용'
+            other_covered = bool(oi.get("covered_by_fee"))
             other_item = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.OTHER,
                 title=title,
                 amount=amt,
-                covered_by_fee=False,
+                covered_by_fee=other_covered,
                 order_index=order_idx,
             )
             db.add(other_item)
             db.flush()
+            if other_covered:
+                order_idx += 1
+                continue
             if participant_amounts:
                 _add_item_participants_with_amounts(other_item, participant_amounts, [])
             elif resolved:
@@ -1487,10 +1497,13 @@ async def create_admin_social_settlement(
             if amt <= 0:
                 continue
             title = item.get("title") or item.get("name") or item.get("description") or f"항목 {idx + 1}"
+            _m = item.get("memo")
+            _m_str = (str(_m).strip() if _m is not None else "") or None
             ei = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.SOCIAL_ITEM,
                 title=title,
+                memo=_m_str,
                 amount=amt,
                 covered_by_fee=False,
                 order_index=idx,

@@ -771,6 +771,15 @@ def form_teams_by_mode(participants: List[MeetingParticipant],
         # 성별로 분리
         gender_groups = separate_by_gender(participants, db)
 
+        # 1인 팀 방지: "other"가 1명뿐이면 남/여 그룹 중 하나에 합쳐서 4+4 등 균등 편성
+        other_list = gender_groups["other"] or []
+        if len(other_list) == 1:
+            if gender_groups["male"]:
+                gender_groups["male"] = gender_groups["male"] + other_list
+            elif gender_groups["female"]:
+                gender_groups["female"] = gender_groups["female"] + other_list
+            gender_groups["other"] = []
+
         # 남성 그룹 편성
         if gender_groups["male"]:
             male_teams = _form_teams_by_criteria(gender_groups["male"], formation_mode, db, max_team_size)
@@ -781,7 +790,7 @@ def form_teams_by_mode(participants: List[MeetingParticipant],
             female_teams = _form_teams_by_criteria(gender_groups["female"], formation_mode, db, max_team_size)
             all_teams.extend(female_teams)
 
-        # 기타 그룹 편성 (게스트 등)
+        # 기타 그룹 편성 (2명 이상일 때만 별도 팀 생성)
         if gender_groups["other"]:
             other_teams = _form_teams_by_criteria(gender_groups["other"], formation_mode, db, max_team_size)
             all_teams.extend(other_teams)

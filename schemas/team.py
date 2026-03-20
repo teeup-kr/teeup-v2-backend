@@ -51,6 +51,8 @@ class TeamMemberResponse(BaseModel):
     id: int
     team_id: int
     user_id: Optional[int] = None
+    guest_id: Optional[int] = Field(None, description="게스트 ID")
+    participant_id: Optional[int] = Field(None, description="MeetingParticipant.id (정산/매칭용)")
     user_name: str
     user_nickname: str
     order: Optional[int]

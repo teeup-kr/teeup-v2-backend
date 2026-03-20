@@ -309,7 +309,11 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
                              access_token=access_token,
                              refresh_token=refresh_token,
                              refresh_max_age=int(refresh_expire_delta.total_seconds()))
+            # 웹 SPA도 Bearer 토큰으로 API 호출할 수 있도록 본문에 토큰 포함
             return {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "bearer",
                 "expires_in": jwt_auth.expire_minutes * 60,
                 "refresh_expires_in": int(refresh_expire_delta.total_seconds()),
                 "session_policy": session_policy,
