@@ -53,7 +53,11 @@ class MeetingUpdate(BaseModel):
     meeting_time: Optional[datetime] = Field(None, description="모임 시간")
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
     tee_times: Optional[List[str]] = Field(None, description="티타임 목록")
-    max_participants: Optional[int] = Field(None, ge=1, description="최대 참가자 수")
+    max_participants: Optional[int] = Field(
+        None,
+        ge=0,
+        description="최대 참가자 수 (0이면 제한 없음, 소셜 생성 스키마와 동일)",
+    )
     # meeting_type은 수정할 수 없음 (보안상 이유)
     meeting_subtype: Optional[MeetingSubtype] = Field(None, description="모임 하위 타입")
     status: Optional[MeetingStatus] = Field(None, description="모임 상태")

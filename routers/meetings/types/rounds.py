@@ -827,8 +827,8 @@ async def get_round_teams(meeting_id: int,
             if not membership:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="해당 클럽의 멤버가 아닙니다.")
 
-        # 팀 목록 조회
-        teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
+        # 팀 목록 조회 (id 순으로 고정하여 4+4 등 편성 순서 유지)
+        teams = db.query(Team).filter(Team.meeting_id == meeting_id).order_by(Team.id).all()
 
         team_responses = []
         for team in teams:
@@ -919,6 +919,8 @@ async def get_round_teams(meeting_id: int,
                         id=team_member.id,
                         team_id=team_member.team_id,
                         user_id=team_member.user_id,
+                        guest_id=team_member.guest_id,
+                        participant_id=participant.id if participant else None,
                         user_name=user_name,
                         user_nickname=user_nickname,
                         order=team_member.order,

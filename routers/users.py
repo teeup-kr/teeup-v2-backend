@@ -1677,6 +1677,7 @@ class RoundingMeetingItem(BaseModel):
     has_hole_scores: bool
     gross_score: Optional[int] = None
     net_score: Optional[float] = None
+    handicap_used: Optional[float] = None  # 해당 경기에서 사용된 핸디캡 (그때의 기록)
 
 
 class RoundingMeetingsResponse(BaseModel):
@@ -1886,6 +1887,9 @@ async def get_my_rounding_meetings(
         meetings_data = []
         for participant, meeting, club in results:
             score_history = score_map.get(meeting.id)
+            handicap_used_val = None
+            if score_history and score_history.handicap_used is not None:
+                handicap_used_val = float(score_history.handicap_used)
             meetings_data.append(
                 RoundingMeetingItem(
                     meeting_id=meeting.id,
@@ -1897,6 +1901,7 @@ async def get_my_rounding_meetings(
                     has_hole_scores=bool(participant.has_hole_scores),
                     gross_score=score_history.gross_score if score_history else None,
                     net_score=(float(score_history.net_score) if score_history and score_history.net_score else None),
+                    handicap_used=handicap_used_val,
                 ))
 
         # 총 페이지 수 계산

@@ -248,6 +248,8 @@ async def create_rounding_settlement(
             all_settlement_targets.update(caddy_fee_participants)
         if not all_covered_by_fee:
             for item in other_expense_items:
+                if bool(item.get("covered_by_fee")):
+                    continue
                 for pid in (item.get('participants') or []):
                     if pid and pid != 'UNSETTLED':
                         all_settlement_targets.add(pid)
@@ -264,6 +266,8 @@ async def create_rounding_settlement(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="캐디피의 정산 대상자를 선택해주세요.")
         if not all_covered_by_fee:
             for idx, item in enumerate(other_expense_items):
+                if bool(item.get("covered_by_fee")):
+                    continue
                 if not (item.get('participants') or []):
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"기타 비용 항목 {idx + 1}의 정산 대상자를 선택해주세요.")
 
@@ -338,6 +342,8 @@ async def create_rounding_settlement(
         if not cart_fee_covered_by_fee and cart_fee > 0:
             _item_amounts.append(cart_fee)
         for oi in (other_expense_items or []):
+            if bool(oi.get("covered_by_fee")):
+                continue
             am = Decimal(str(oi.get('amount', 0)))
             if am > 0:
                 _item_amounts.append(am)
@@ -440,17 +446,21 @@ async def create_rounding_settlement(
                 continue
             participants = oi.get('participants') or []
             title = oi.get('title') or oi.get('name') or '기타 비용'
+            om = oi.get("memo")
+            om_str = (str(om).strip() if om is not None else "") or None
+            other_covered = bool(oi.get("covered_by_fee"))
             other_item = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.OTHER,
                 title=title,
+                memo=om_str,
                 amount=amt,
-                covered_by_fee=False,
+                covered_by_fee=other_covered,
                 order_index=order_idx,
             )
             db.add(other_item)
             db.flush()
-            if participants:
+            if participants and not other_covered:
                 if _exact_allocations and _alloc_idx < len(_exact_allocations) and set(participants) == set(settlement_targets):
                     alloc_row = _exact_allocations[_alloc_idx]
                     amount_list = [alloc_row[settlement_targets.index(pid)] for pid in participants]
@@ -575,11 +585,34 @@ async def create_social_settlement(
         else:
             total_cost = Decimal(str(total_cost))
 
-        target_count = len(settlement_targets)
-        if not exclude_remaining_amount and target_count == 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자를 선택해주세요.")
+        # settlement_targets 미지정이면 "전체 인원 N분의1"로 자동 처리
+        # - 대상자 식별은 MeetingParticipant.id 사용 (user_id/guest_id 충돌 방지)
+        target_count = len(settlement_targets or [])
+        if target_count == 0:
+            from models.enums import ParticipantStatus
+            all_participants = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.status != ParticipantStatus.CANCELED,
+            ).all()
+            settlement_targets = [p.id for p in all_participants if p and p.id is not None]
+            target_count = len(settlement_targets)
 
-        amount_per_person = Decimal('0') if (exclude_remaining_amount or target_count == 0) else total_cost / target_count
+        if target_count == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자가 없습니다.")
+
+        # 나머지 10원 단위는 기본적으로 개설자(없으면 첫 번째 대상자)가 부담
+        organizer_pid = None
+        try:
+            organizer = db.query(MeetingParticipant).filter(
+                MeetingParticipant.meeting_id == meeting_id,
+                MeetingParticipant.user_id == meeting.created_by,
+            ).first()
+            organizer_pid = organizer.id if organizer else None
+        except Exception:
+            organizer_pid = None
+        default_extra_payer_id = default_extra_payer_id or organizer_pid or (settlement_targets[0] if settlement_targets else None)
+
+        amount_per_person = Decimal('0') if exclude_remaining_amount else total_cost / target_count
 
         def _add_social_participants(expense_item, participant_ids, amount_list):
             """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액"""
@@ -626,10 +659,13 @@ async def create_social_settlement(
             if amt <= 0:
                 continue
             title = item.get('title') or item.get('name') or f"항목 {idx + 1}"
+            memo_val = item.get("memo")
+            memo_str = (str(memo_val).strip() if memo_val is not None else "") or None
             ei = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.SOCIAL_ITEM,
                 title=title,
+                memo=memo_str,
                 amount=amt,
                 covered_by_fee=False,
                 order_index=idx,
@@ -639,6 +675,8 @@ async def create_social_settlement(
             if settlement_targets and target_count > 0:
                 extra_payer_id = item.get('extra_payer_id', default_extra_payer_id)
                 extra_idx = _resolve_extra_payer_index(settlement_targets, extra_payer_id)
+                if extra_idx is None:
+                    extra_idx = 0
                 amount_list = split_amount_10won(
                     amt, target_count,
                     extra_recipient_indices=[extra_idx] if extra_idx is not None else None
@@ -788,6 +826,7 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
                     pids.append(eip.guest_id)
             expense_items_api.append({
                 "id": item.id, "title": item.title or "항목", "amount": float(item.amount or 0),
+                "memo": (getattr(item, "memo", None) or "").strip() or None,
                 "participants": pids,
             })
         settlement_data["expense_items"] = expense_items_api
@@ -822,7 +861,13 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
                 cart_fee_participants = pids
                 cart_covered = bool(item.covered_by_fee)
             elif t == "OTHER":
-                other_expense_items.append({"title": item.title or "기타", "amount": amt, "participants": pids})
+                other_expense_items.append({
+                    "title": item.title or "기타",
+                    "amount": amt,
+                    "memo": (getattr(item, "memo", None) or "").strip() or None,
+                    "covered_by_fee": bool(getattr(item, "covered_by_fee", False)),
+                    "participants": pids,
+                })
                 other_fee += Decimal(str(amt))
         settlement_data["green_fee"] = green_fee
         settlement_data["caddy_fee"] = caddy_fee

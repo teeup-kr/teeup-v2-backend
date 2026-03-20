@@ -185,6 +185,7 @@ class ExpenseItem(Base):
 
     type = Column(Enum(ExpenseItemType), nullable=False, comment="GREEN_FEE/CADDY_FEE/CART_FEE/OTHER/SOCIAL_ITEM")
     title = Column(String(255), nullable=True, comment="OTHER 타입 시 항목명 (예: 점심비)")
+    memo = Column(String(2000), nullable=True, comment="항목별 메모 (소셜/기타 비용)")
     amount = Column(DECIMAL(10, 2), nullable=False)
     covered_by_fee = Column(Boolean, default=False, comment="회비에서 처리 여부")
     order_index = Column(Integer, default=0, comment="표시 순서")
