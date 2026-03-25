@@ -11,7 +11,7 @@ from utils.datetime_utils import get_kst_now
 import logging
 
 from database import get_db
-from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, Guest,
+from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Team, TeamMember, MeetingResult, UserScoreHistory, Guest,
                     ParticipantType, Gender)
 from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ClubRole, TeamFormationMode)
 from schemas import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
@@ -20,6 +20,7 @@ from routers.auth import get_current_active_user, get_current_user, get_current_
 from fastapi.security import HTTPAuthorizationCredentials
 from utils.jwt_auth import security
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.club_flags import club_settlement_enabled
 from utils.notification_service import (
     notify_organizer_participant_added_after_recruitment_closed,
     notify_round_participants_status_changed,
@@ -150,7 +151,8 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
                             club_name=meeting.club.name,
                             participant_count=participant_count,
                             created_by_name=created_by_name,
-                            tee_time=tee_time))
+                            tee_time=tee_time,
+                            settlement_enabled=club_settlement_enabled(meeting.club)))
 
     calculated_total_pages = (total + limit - 1) // limit
     logger.info(
@@ -188,15 +190,19 @@ async def create_round(meeting_data: RoundingMeetingCreate,
     if membership.role not in [ClubRole.LEADER, ClubRole.MANAGER]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="라운딩은 클럽 리더/매니저만 생성할 수 있습니다.")
 
-    # 프라이빗 라운딩인 경우 참가자 선택 검증
+    # 프라이빗 라운딩인 경우 참가자·게스트 검증 (앱과 동일: 멤버 또는 게스트 중 최소 1명)
     is_private = meeting_data.is_private or False
-    if is_private:
-        if not meeting_data.selected_participants or len(meeting_data.selected_participants) == 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="프라이빗 라운딩은 최소 1명 이상의 참가자를 선택해야 합니다.")
+    guest_models = []
+    if is_private and meeting_data.selected_guests:
+        guest_models = [g for g in meeting_data.selected_guests if g.name and str(g.name).strip()]
 
-    if meeting_data.selected_guests:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="게스트는 라운딩 생성 후 /api/v1/meetings/{meeting_id}/guests로 추가해주세요.")
+    if is_private:
+        sel_users = meeting_data.selected_participants or []
+        if len(sel_users) == 0 and len(guest_models) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="프라이빗 라운딩은 클럽 멤버 1명 이상 또는 게스트 1명 이상을 선택해야 합니다.",
+            )
 
     # 모임 생성
     meeting = Meeting(name=meeting_data.name,
@@ -234,7 +240,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
         # 선택된 참가자들을 참가자로 추가
         if meeting_data.selected_participants:
             # 참가자 검증: 모두 해당 클럽의 활성 멤버인지 확인
-            for user_id in meeting_data.selected_participants:
+            for user_id in (meeting_data.selected_participants or []):
                 member_check = db.query(ClubMembership).filter(
                     and_(ClubMembership.user_id == user_id, ClubMembership.club_id == club_id,
                          ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES))).first()
@@ -255,6 +261,28 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                     participant_count += 1
 
         db.commit()
+
+        if guest_models:
+            from decimal import Decimal
+            from utils.team_formation import add_guest_to_meeting
+
+            for g in guest_models:
+                gh = Decimal(str(g.handicap)) if g.handicap is not None else None
+                gen = Gender(g.gender) if g.gender else None
+                try:
+                    add_guest_to_meeting(
+                        meeting_id=meeting.id,
+                        guest_name=str(g.name).strip(),
+                        guest_handicap=gh,
+                        average_score=g.average_score,
+                        guest_birthdate=g.birthdate,
+                        guest_gender=gen,
+                        db=db,
+                        auto_commit=True,
+                    )
+                    participant_count += 1
+                except ValueError as ve:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
 
         # 선택된 참가자들에게 프라이빗 라운딩 초대 알림 전송
         if meeting_data.selected_participants:
@@ -315,7 +343,8 @@ async def create_round(meeting_data: RoundingMeetingCreate,
                            club_name=club.name,
                            participant_count=participant_count,
                            created_by_name=created_by_name,
-                           tee_time=tee_time)
+                           tee_time=tee_time,
+                           settlement_enabled=club_settlement_enabled(club))
 
 
 # =============================================================================
@@ -391,7 +420,8 @@ async def get_round(meeting_id: int,
     return MeetingResponse(**meeting_dict,
                            club_name=meeting.club.name,
                            participant_count=participant_count,
-                           created_by_name=created_by_name)
+                           created_by_name=created_by_name,
+                           settlement_enabled=club_settlement_enabled(meeting.club))
 
 
 # =============================================================================
@@ -491,7 +521,8 @@ async def update_round(meeting_id: int,
     return MeetingResponse(**meeting_dict,
                            club_name=club.name,
                            participant_count=participant_count,
-                           created_by_name=created_by_name)
+                           created_by_name=created_by_name,
+                           settlement_enabled=club_settlement_enabled(club))
 
 
 # =============================================================================
@@ -897,7 +928,7 @@ async def get_round_teams(meeting_id: int,
                                 else:
                                     handicap = None
 
-                                # MeetingResult에서 실제 직전 대회 성적 조회
+                                # MeetingResult의 직전 경기 id를 찾은 뒤 UserScoreHistory.gross_score 조회
                                 average_score = None
                                 last_result = db.query(MeetingResult).filter(
                                     MeetingResult.user_id == participant.user_id,
@@ -905,7 +936,12 @@ async def get_round_teams(meeting_id: int,
                                 ).order_by(MeetingResult.completed_at.desc()).first()
 
                                 if last_result:
-                                    average_score = last_result.gross_score
+                                    last_score = db.query(UserScoreHistory).filter(
+                                        UserScoreHistory.user_id == participant.user_id,
+                                        UserScoreHistory.meeting_id == last_result.meeting_id
+                                    ).order_by(UserScoreHistory.played_at.desc()).first()
+                                    if last_score:
+                                        average_score = last_score.gross_score
 
                                 # 디버깅: 핸디캡과 직전대회성적 확인
                                 logger.debug(f"팀 멤버 정보 - user_id: {participant.user_id}, name: {user_name}, "
@@ -1074,14 +1110,19 @@ async def add_team_member(
                     elif user.average_score is not None:
                         handicap = calculate_handicap_from_average_score(user.average_score)
 
-                    # MeetingResult에서 실제 직전 대회 성적 조회
+                    # MeetingResult의 직전 경기 id를 찾은 뒤 UserScoreHistory.gross_score 조회
                     last_result = db.query(MeetingResult).filter(
                         MeetingResult.user_id == participant.user_id,
                         MeetingResult.meeting_id != meeting_id  # 현재 모임 제외
                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                     if last_result:
-                        average_score = last_result.gross_score
+                        last_score = db.query(UserScoreHistory).filter(
+                            UserScoreHistory.user_id == participant.user_id,
+                            UserScoreHistory.meeting_id == last_result.meeting_id
+                        ).order_by(UserScoreHistory.played_at.desc()).first()
+                        if last_score:
+                            average_score = last_score.gross_score
                 else:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자 정보를 찾을 수 없습니다.")
             else:

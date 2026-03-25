@@ -313,6 +313,19 @@ def save_score_to_history(db: Session, user_id: int, meeting_id: int, gross_scor
     return score_history
 
 
+def set_handicap_after_round_on_history(
+    db: Session,
+    score_history: Optional[UserScoreHistory],
+    updated_handicap: Optional[Decimal],
+) -> None:
+    """이 경기 반영 후 자동 재계산된 핸디캡을 기록에 저장 (기록 내역 표시용)."""
+    if score_history is None or updated_handicap is None:
+        return
+    score_history.handicap_after_round = updated_handicap
+    db.commit()
+    db.refresh(score_history)
+
+
 def process_participant_score(db: Session,
                               participant_id: int,
                               meeting_id: int,
@@ -369,6 +382,7 @@ def process_participant_score(db: Session,
 
     # 핸디캡 자동 업데이트
     updated_handicap = update_user_handicap(db=db, user_id=user_id, score_count=score_count, use_realtime=True)
+    set_handicap_after_round_on_history(db, score_history, updated_handicap)
 
     return updated_handicap
 

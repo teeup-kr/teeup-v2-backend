@@ -22,6 +22,8 @@ class Club(Base):
     additional_info = Column(Text)
     profile_image = Column(String(255))
     status = Column(Enum(ClubStatus), default=ClubStatus.ACTIVE)
+    # 모임 정산 기능 (클럽 단위). False면 정산 탭/API 비활성, 기존 DB 행은 True로 간주
+    settlement_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
 
     # 타임스탬프 필드
     created_at = Column(DateTime, default=func.now())

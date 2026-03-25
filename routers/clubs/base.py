@@ -337,7 +337,8 @@ async def get_my_clubs(page: int = 1,
                 "joined_at": membership.created_at,
                 "created_at": club.created_at,  # 클럽 개설일 추가
                 "profile_image": club.profile_image,
-                "created_by": created_by  # 클럽 리더(개설자) ID 추가
+                "created_by": created_by,  # 클럽 리더(개설자) ID 추가
+                "settlement_enabled": getattr(club, "settlement_enabled", True),
             }
             clubs.append(club_data)
 
@@ -535,6 +536,8 @@ async def update_club(club_id: str,
             club.additional_info = club_data.additional_info
         if club_data.application_deadline is not None:
             club.application_deadline = club_data.application_deadline
+        if club_data.settlement_enabled is not None:
+            club.settlement_enabled = bool(club_data.settlement_enabled)
 
         if club_data.gungu_codes is not None:
             target_sido_code = club_data.sido_code if club_data.sido_code is not None else club.sido_code

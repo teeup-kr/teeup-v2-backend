@@ -25,7 +25,7 @@ from .club import (ClubCreate, ClubUpdate, ClubResponse, ClubMembersResponse, Cl
                    ClubNoticeResponse, RegulationCreate, RegulationUpdate, RegulationResponse, RegulationListResponse,
                    RegulationCategoryCreate, RegulationCategoryUpdate, RegulationCategoryResponse,
                    RegulationCategoryWithRegulations, ClubRegulationsResponse, ClubRegulationResponse,
-                   ClubRegulationCreate, ClubRegulationUpdate)
+                   ClubRegulationCreate, ClubRegulationUpdate, ClubMemberRecordSummaryResponse)
 
 # 모임 관련 스키마
 from .meeting import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
@@ -103,6 +103,7 @@ __all__ = [
     "ClubResponse",
     "ClubMembersResponse",
     "ClubMembershipResponse",
+    "ClubMemberRecordSummaryResponse",
     "ClubMemberAddRequest",
     "ClubMemberRoleUpdateRequest",
     "ClubMemberSearchItem",

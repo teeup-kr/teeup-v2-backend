@@ -32,6 +32,7 @@ from schemas import (
 from routers.auth import get_current_user, get_current_active_user
 # admin_auth는 JWT 기반으로 변경됨
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.club_flags import club_settlement_enabled
 from utils.cuid import generate_cuid
 from utils.handicap_calculator import (check_all_holes_completed, process_participant_score,
                                        get_user_handicap_for_formation, save_score_to_history, update_user_handicap,
@@ -192,6 +193,7 @@ async def create_meeting(meeting_data: RoundingMeetingCreate,
             rounding_started_at=meeting.rounding_started_at,
             rounding_completed_at=meeting.rounding_completed_at,
             settlement_confirmed=meeting.settlement_confirmed,
+            settlement_enabled=club_settlement_enabled(club),
             created_at=meeting.created_at,
             updated_at=meeting.updated_at
         )
@@ -322,6 +324,7 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
                 team_formation_confirmed_at=meeting.team_formation_confirmed_at,
                 rounding_started_at=meeting.rounding_started_at,
                 rounding_completed_at=meeting.rounding_completed_at,
+                settlement_enabled=club_settlement_enabled(club),
                 created_at=meeting.created_at,
                 updated_at=meeting.updated_at
             ))
@@ -905,6 +908,7 @@ async def get_meeting(meeting_id: int,
             rounding_started_at=meeting.rounding_started_at,
             rounding_completed_at=meeting.rounding_completed_at,
             settlement_confirmed=meeting.settlement_confirmed,
+            settlement_enabled=club_settlement_enabled(club),
             created_at=meeting.created_at,
             updated_at=meeting.updated_at
         )
@@ -1009,6 +1013,7 @@ async def update_meeting(meeting_id: int,
             rounding_started_at=meeting.rounding_started_at,
             rounding_completed_at=meeting.rounding_completed_at,
             settlement_confirmed=meeting.settlement_confirmed,
+            settlement_enabled=club_settlement_enabled(club),
             created_at=meeting.created_at,
             updated_at=meeting.updated_at
         )

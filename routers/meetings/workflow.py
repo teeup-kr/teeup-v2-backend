@@ -19,7 +19,7 @@ from database import get_db
 from models import (
     User, Club, ClubMembership, Meeting, MeetingParticipant,
     Team, TeamMember, Expense,
-    Notification, MeetingResult, Guest, ParticipantType, Gender
+    Notification, MeetingResult, UserScoreHistory, Guest, ParticipantType, Gender
 )
 from schemas import (
     MeetingType, MeetingSubtype, SettlementMethod,
@@ -268,28 +268,22 @@ async def close_application_early(meeting_id: int,
                     "participant_count": participant_count
                 }
 
-            # 참가자가 부족하면 모임 자동 취소
-            logger.info(f"모임 자동 취소 처리 시작 - meeting_id: {meeting_id}, participant_count: {participant_count}")
-            meeting.status = MeetingStatus.CANCELED
-            meeting.cancel_reason = "참가 인원 미달로 모임이 자동 취소되었습니다."
-            meeting.updated_at = datetime.now()
+            # 참가 인원 미달이어도 자동 취소하지 않음 (모집만 마감 처리)
             db.commit()
-            logger.info(f"모임 상태 취소로 변경 완료 - meeting_id: {meeting_id}")
-
             try:
-                await send_application_closed_notification(meeting_id,
-                                                           db,
-                                                           is_early=True,
-                                                           outcome="AUTO_CANCELED",
-                                                           participant_count=participant_count)
-                logger.info(f"알림 전송 완료 - meeting_id: {meeting_id}")
+                await send_application_closed_notification(
+                    meeting_id,
+                    db,
+                    is_early=True,
+                    outcome="CLOSED_INSUFFICIENT",
+                    participant_count=participant_count,
+                )
             except Exception as notif_error:
-                logger.error(f"알림 전송 실패 (자동 취소): {notif_error}", exc_info=True)
-                # 알림 전송 실패해도 취소는 이미 완료되었으므로 계속 진행
+                logger.error(f"알림 전송 실패 (모집 마감): {notif_error}", exc_info=True)
 
             return {
-                "message": "참가 인원이 부족하여 \n 모임이 자동 취소되었습니다.",
-                "outcome": "AUTO_CANCELED",
+                "message": "참가 신청이 조기 마감되었습니다.",
+                "outcome": "CLOSED_INSUFFICIENT",
                 "participant_count": participant_count
             }
         except Exception as inner_error:
@@ -499,7 +493,7 @@ async def auto_form_teams(meeting_id: int,
                     gender = user.gender.value if user.gender else None
                     handicap = participant.handicap
 
-                    # MeetingResult에서 실제 직전 대회 성적 조회
+                    # MeetingResult의 직전 경기 id를 찾은 뒤 UserScoreHistory.gross_score 조회
                     average_score = None
                     if participant.user_id:
                         last_result = db.query(MeetingResult).filter(
@@ -508,7 +502,12 @@ async def auto_form_teams(meeting_id: int,
                         ).order_by(MeetingResult.completed_at.desc()).first()
 
                         if last_result:
-                            average_score = last_result.gross_score
+                            last_score = db.query(UserScoreHistory).filter(
+                                UserScoreHistory.user_id == participant.user_id,
+                                UserScoreHistory.meeting_id == last_result.meeting_id
+                            ).order_by(UserScoreHistory.played_at.desc()).first()
+                            if last_score:
+                                average_score = last_score.gross_score
 
                 members.append(
                     TeamMemberResponse(id=team_member.id,
@@ -864,7 +863,9 @@ async def confirm_settlement(meeting_id: int,
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
 
         # 매니저/리더 권한 확인 (주최자 또는 클럽 리더/매니저)
-        from routers.meetings.settlement import can_manage_settlement
+        from routers.meetings.settlement import can_manage_settlement, assert_club_settlement_api_allowed
+
+        assert_club_settlement_api_allowed(meeting, db)
 
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 정산을 확정할 수 있습니다.")

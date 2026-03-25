@@ -3,7 +3,7 @@
 """
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
@@ -11,6 +11,7 @@ from typing import Optional, List
 import logging
 
 from database import get_db
+from schemas import MeetingParticipantScoreCreate, ScoreUpdate
 from utils.datetime_utils import get_kst_now
 from utils.amount_split import split_amount_10won, allocate_by_total, allocate_items_to_exact_totals
 from utils.notification_service import notify_round_participants_status_changed
@@ -30,6 +31,202 @@ def _resolve_extra_payer_index(effective_ids: list, extra_payer_id) -> Optional[
     except (TypeError, ValueError):
         pass
     return None
+
+
+def _admin_sync_private_round_participants(db: Session, meeting, club_id: int, meeting_data: dict) -> None:
+    """프라이빗 라운딩(예정): 클럽 멤버·게스트 참가자를 요청 본문과 동기화."""
+    from decimal import Decimal
+    from sqlalchemy import and_
+    from models import MeetingParticipant, ClubMembership, Guest, ParticipantType, Gender as ModelGender
+    from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+    from utils.team_formation import add_guest_to_meeting, calculate_guest_handicap
+
+    raw_sel = meeting_data.get("selected_participants")
+    if raw_sel is None:
+        raw_sel = []
+    if isinstance(raw_sel, str):
+        raw_sel = [int(x.strip()) for x in raw_sel.replace(",", " ").split() if x.strip().isdigit()]
+    if not isinstance(raw_sel, list):
+        raw_sel = []
+    norm_uid = []
+    for x in raw_sel:
+        try:
+            norm_uid.append(int(x))
+        except (TypeError, ValueError):
+            continue
+
+    raw_guests = meeting_data.get("selected_guests") or []
+    guest_payloads = []
+    if isinstance(raw_guests, list):
+        for item in raw_guests:
+            if not isinstance(item, dict):
+                continue
+            nm = (item.get("name") or "").strip()
+            if not nm:
+                continue
+            gid = item.get("guest_id")
+            if gid is not None:
+                try:
+                    gid = int(gid)
+                except (TypeError, ValueError):
+                    gid = None
+            guest_payloads.append({
+                "guest_id": gid,
+                "name": nm,
+                "birthdate": item.get("birthdate") or None,
+                "gender": item.get("gender"),
+                "average_score": item.get("average_score"),
+                "handicap": item.get("handicap"),
+            })
+
+    if not norm_uid and not guest_payloads:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="프라이빗 라운딩은 클럽 멤버 1명 이상 또는 게스트 1명 이상을 지정해주세요.",
+        )
+
+    for uid in norm_uid:
+        member_check = db.query(ClubMembership).filter(
+            and_(
+                ClubMembership.user_id == uid,
+                ClubMembership.club_id == club_id,
+                ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+            )
+        ).first()
+        if not member_check:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"user_id {uid}는 해당 클럽의 활성 멤버가 아닙니다.",
+            )
+
+    uid_set = set(norm_uid)
+    for p in db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting.id,
+        MeetingParticipant.user_id.isnot(None),
+    ).all():
+        if p.user_id not in uid_set:
+            db.delete(p)
+
+    for uid in norm_uid:
+        ex = db.query(MeetingParticipant).filter(
+            and_(MeetingParticipant.meeting_id == meeting.id, MeetingParticipant.user_id == uid)
+        ).first()
+        if not ex:
+            db.add(
+                MeetingParticipant(
+                    meeting_id=meeting.id,
+                    user_id=uid,
+                    participant_type=ParticipantType.USER,
+                )
+            )
+
+    target_gids = set()
+
+    for gd in guest_payloads:
+        gid = gd.get("guest_id")
+        if gid:
+            g_row = db.query(Guest).filter(Guest.id == gid).first()
+            if not g_row:
+                continue
+            g_row.name = gd["name"]
+            if gd.get("birthdate"):
+                try:
+                    birth_date = datetime.strptime(str(gd["birthdate"])[:10], "%Y-%m-%d").date()
+                    g_row.birthdate = datetime.combine(birth_date, datetime.min.time())
+                except ValueError:
+                    pass
+            gen = gd.get("gender")
+            if gen in ("MALE", "FEMALE"):
+                g_row.gender = ModelGender[gen]
+            gh = gd.get("handicap")
+            av = gd.get("average_score")
+            gh_dec = None
+            if gh is not None and str(gh).strip() != "":
+                try:
+                    gh_dec = Decimal(str(gh))
+                except Exception:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"게스트 '{gd['name']}'의 핸디캡 형식이 올바르지 않습니다.",
+                    )
+            if gh_dec is None and av is not None and str(av).strip() != "":
+                try:
+                    gh_dec = calculate_guest_handicap(int(av))
+                except Exception:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"게스트 '{gd['name']}'의 평균 타수가 올바르지 않습니다.",
+                    )
+            if gh_dec is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"게스트 '{gd['name']}'의 핸디캡 또는 평균 타수가 필요합니다.",
+                )
+            g_row.handicap = gh_dec
+            mp = db.query(MeetingParticipant).filter(
+                and_(MeetingParticipant.meeting_id == meeting.id, MeetingParticipant.guest_id == gid)
+            ).first()
+            if not mp:
+                db.add(
+                    MeetingParticipant(
+                        meeting_id=meeting.id,
+                        guest_id=int(gid),
+                        participant_type=ParticipantType.GUEST,
+                    )
+                )
+            target_gids.add(int(gid))
+        else:
+            gh_dec = None
+            if gd.get("handicap") is not None and str(gd.get("handicap")).strip() != "":
+                try:
+                    gh_dec = Decimal(str(gd.get("handicap")))
+                except Exception:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="게스트 핸디캡 형식이 올바르지 않습니다.",
+                    )
+            av_int = None
+            if gd.get("average_score") is not None and str(gd.get("average_score")).strip() != "":
+                try:
+                    av_int = int(gd.get("average_score"))
+                except (TypeError, ValueError):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="게스트 평균 타수 형식이 올바르지 않습니다.",
+                    )
+            gen2 = None
+            if gd.get("gender") in ("MALE", "FEMALE"):
+                gen2 = ModelGender[gd["gender"]]
+            try:
+                part = add_guest_to_meeting(
+                    meeting_id=meeting.id,
+                    guest_name=gd["name"],
+                    guest_handicap=gh_dec,
+                    average_score=av_int,
+                    guest_birthdate=gd.get("birthdate"),
+                    guest_gender=gen2,
+                    db=db,
+                    auto_commit=False,
+                )
+                if part.guest_id:
+                    target_gids.add(int(part.guest_id))
+            except ValueError as ve:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+    for p in db.query(MeetingParticipant).filter(
+        MeetingParticipant.meeting_id == meeting.id,
+        MeetingParticipant.guest_id.isnot(None),
+    ).all():
+        if p.guest_id not in target_gids:
+            gid = p.guest_id
+            db.delete(p)
+            db.flush()
+            remaining = db.query(MeetingParticipant).filter(MeetingParticipant.guest_id == gid).count()
+            if remaining == 0:
+                og = db.query(Guest).filter(Guest.id == gid).first()
+                if og:
+                    db.delete(og)
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin-meetings"])
@@ -617,12 +814,20 @@ async def get_admin_meeting_participants(
             if p.guest_id:
                 guest = db.query(Guest).filter(Guest.id == p.guest_id).first()
                 name = guest.name if guest else "게스트"
+                ggender = guest.gender.value if guest and guest.gender and hasattr(guest.gender, 'value') else (
+                    str(guest.gender) if guest and guest.gender else None)
                 result.append({
                     "id": p.id, "user_id": p.user_id, "guest_id": p.guest_id,
                     "user_name": name, "user_nickname": name, "name": name,
                     "status": status_val,
                     "role": role_val,
-                    "is_guest": True, "created_at": p.created_at.isoformat() if p.created_at else None,
+                    "is_guest": True,
+                    "guest_birthdate":
+                    (guest.birthdate.date().isoformat() if guest and guest.birthdate and hasattr(guest.birthdate, 'date')
+                     else (str(guest.birthdate)[:10] if guest and guest.birthdate else None)),
+                    "guest_gender": ggender,
+                    "guest_handicap": float(guest.handicap) if guest and guest.handicap is not None else None,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
                 })
             else:
                 user = db.query(User).filter(User.id == p.user_id).first() if p.user_id else None
@@ -641,6 +846,426 @@ async def get_admin_meeting_participants(
         raise
     except Exception as e:
         logger.error(f"관리자 참가자 목록 조회 중 오류: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/meetings/{meeting_id}/scores")
+async def get_admin_meeting_scores(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """라운딩 모임 참가자별 총타(간단 스코어)·홀별 합산 조회 (백오피스 점수 관리)"""
+    try:
+        from models import Meeting, MeetingParticipant, UserScoreHistory
+        from schemas import MeetingType
+        from utils.handicap_calculator import calculate_gross_score
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        _mt = getattr(meeting.meeting_type, "value", meeting.meeting_type)
+        if _mt != MeetingType.ROUND.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임만 점수를 조회할 수 있습니다.")
+
+        participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).all()
+        scores = []
+        for p in participants:
+            score_val = None
+            if p.user_id:
+                hist = (
+                    db.query(UserScoreHistory)
+                    .filter(
+                        UserScoreHistory.user_id == p.user_id,
+                        UserScoreHistory.meeting_id == meeting_id,
+                    )
+                    .first()
+                )
+                if hist:
+                    score_val = hist.gross_score
+            if score_val is None:
+                gross = calculate_gross_score(db, p.id)
+                if gross is not None:
+                    score_val = gross
+            scores.append(
+                {
+                    "participant_id": p.id,
+                    "user_id": p.user_id,
+                    "score": score_val,
+                }
+            )
+        return {"scores": scores}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 모임 점수 목록 조회 중 오류: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+class AdminParticipantScoreBody(BaseModel):
+    score: int = Field(..., ge=55, le=144, description="라운딩 총타(Gross)")
+
+
+@router.put("/meetings/{meeting_id}/scores/{participant_id}")
+async def put_admin_meeting_participant_score(
+    meeting_id: int,
+    participant_id: int,
+    data: AdminParticipantScoreBody = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """참가자 라운딩 총타 저장·수정 (UserScoreHistory, 회원만)"""
+    try:
+        from decimal import Decimal
+
+        from models import Meeting, MeetingParticipant, UserScoreHistory
+        from schemas import MeetingType
+        from utils.handicap_calculator import get_user_handicap_for_formation, update_user_handicap
+
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
+        _mt = getattr(meeting.meeting_type, "value", meeting.meeting_type)
+        if _mt != MeetingType.ROUND.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임만 점수를 저장할 수 있습니다.")
+
+        p = (
+            db.query(MeetingParticipant)
+            .filter(
+                MeetingParticipant.id == participant_id,
+                MeetingParticipant.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if not p:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가자를 찾을 수 없습니다.")
+        if not p.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="게스트 참가자는 총타를 등록할 수 없습니다.",
+            )
+
+        gross = int(data.score)
+        handicap_used = get_user_handicap_for_formation(db, p.user_id)
+        if handicap_used is None:
+            handicap_used = Decimal("0")
+        played_at = meeting.meeting_time or get_kst_now()
+        net_score = Decimal(str(gross)) - handicap_used
+
+        existing = (
+            db.query(UserScoreHistory)
+            .filter(
+                UserScoreHistory.user_id == p.user_id,
+                UserScoreHistory.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if existing:
+            existing.gross_score = gross
+            existing.net_score = net_score
+            existing.handicap_used = handicap_used
+        else:
+            db.add(
+                UserScoreHistory(
+                    user_id=p.user_id,
+                    meeting_id=meeting_id,
+                    gross_score=gross,
+                    net_score=net_score,
+                    handicap_used=handicap_used,
+                    played_at=played_at,
+                )
+            )
+        db.commit()
+
+        try:
+            update_user_handicap(db=db, user_id=p.user_id, score_count=5)
+        except Exception as ex:
+            logger.warning(f"관리자 점수 저장 후 핸디캡 갱신 실패: {ex}")
+
+        return {"success": True, "participant_id": participant_id, "score": gross}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 모임 점수 저장 중 오류: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/meetings/{meeting_id}/participants/{participant_id}/hole-scores", response_model=None)
+async def get_admin_participant_hole_scores(
+    meeting_id: int,
+    participant_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """참가자 홀별 스코어 전체 조회 (백오피스)"""
+    try:
+        from sqlalchemy import func
+        from sqlalchemy.orm import joinedload
+
+        from models import MeetingParticipant, Score
+        from schemas import ScoreListResponse
+        from routers.meetings.scores import (
+            _build_score_response,
+            _calc_total_pages,
+            _ensure_round_meeting,
+        )
+
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = (
+            db.query(MeetingParticipant)
+            .filter(
+                MeetingParticipant.id == participant_id,
+                MeetingParticipant.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if not participant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가자를 찾을 수 없습니다.")
+
+        scores_query = (
+            db.query(Score)
+            .options(
+                joinedload(Score.participant).joinedload(MeetingParticipant.user),
+                joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+            )
+            .filter(Score.participant_id == participant.id)
+        )
+        total = (
+            scores_query.enable_eagerloads(False).order_by(None).with_entities(func.count(Score.id)).scalar() or 0
+        )
+        scores = scores_query.order_by(Score.hole_number).all()
+        score_responses = [_build_score_response(s, meeting=meeting) for s in scores]
+        limit = max(total, 1)
+        return ScoreListResponse(
+            scores=score_responses,
+            total=total,
+            page=1,
+            limit=limit,
+            total_pages=_calc_total_pages(total, limit) if limit else 0,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관리자 홀별 스코어 조회 오류: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/meetings/{meeting_id}/participants/{participant_id}/hole-scores", response_model=None)
+async def admin_create_participant_hole_score(
+    meeting_id: int,
+    participant_id: int,
+    score_data: MeetingParticipantScoreCreate = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """홀별 스코어 등록 (백오피스)"""
+    try:
+        from sqlalchemy.orm import joinedload
+
+        from models import MeetingParticipant, Score
+        from routers.meetings.scores import (
+            _build_score_response,
+            _ensure_round_meeting,
+            _set_participant_hole_score_flag,
+        )
+
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = (
+            db.query(MeetingParticipant)
+            .filter(
+                MeetingParticipant.id == participant_id,
+                MeetingParticipant.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if not participant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가자를 찾을 수 없습니다.")
+
+        existing_score = (
+            db.query(Score)
+            .filter(
+                Score.participant_id == participant.id,
+                Score.hole_number == score_data.hole_number,
+            )
+            .first()
+        )
+        if existing_score:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"홀 {score_data.hole_number}번의 스코어가 이미 있습니다. 수정하거나 삭제 후 다시 등록하세요.",
+            )
+
+        score = Score(
+            participant_id=participant.id,
+            hole_number=score_data.hole_number,
+            strokes=score_data.strokes,
+            par=score_data.par,
+            score_to_par=score_data.score_to_par,
+        )
+        db.add(score)
+        _set_participant_hole_score_flag(db, participant.id, True)
+        db.commit()
+        db.refresh(score)
+
+        score = (
+            db.query(Score)
+            .options(
+                joinedload(Score.participant).joinedload(MeetingParticipant.user),
+                joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+            )
+            .filter(Score.id == score.id)
+            .first()
+        )
+        return _build_score_response(score, meeting=meeting)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 홀별 스코어 등록 오류: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.put("/meetings/{meeting_id}/participants/{participant_id}/hole-scores/{score_id}", response_model=None)
+async def admin_update_participant_hole_score(
+    meeting_id: int,
+    participant_id: int,
+    score_id: int,
+    score_data: ScoreUpdate = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """홀별 스코어 수정 (백오피스)"""
+    try:
+        from sqlalchemy.orm import joinedload
+
+        from models import MeetingParticipant, Score
+        from routers.meetings.scores import _build_score_response, _ensure_round_meeting
+
+        meeting = _ensure_round_meeting(db, meeting_id)
+        participant = (
+            db.query(MeetingParticipant)
+            .filter(
+                MeetingParticipant.id == participant_id,
+                MeetingParticipant.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if not participant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가자를 찾을 수 없습니다.")
+
+        score = (
+            db.query(Score)
+            .filter(
+                Score.id == score_id,
+                Score.participant_id == participant.id,
+            )
+            .first()
+        )
+        if not score:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="스코어를 찾을 수 없습니다.")
+
+        update_data = score_data.model_dump(exclude_unset=True)
+
+        if "strokes" in update_data or "par" in update_data:
+            next_strokes = update_data.get("strokes", score.strokes)
+            next_par = update_data.get("par", score.par)
+            computed_score_to_par = next_strokes - next_par
+            if "score_to_par" in update_data and update_data["score_to_par"] != computed_score_to_par:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="score_to_par는 strokes - par 값과 같아야 합니다.",
+                )
+            update_data["score_to_par"] = computed_score_to_par
+
+        next_hole_number = update_data.get("hole_number")
+        if next_hole_number and next_hole_number != score.hole_number:
+            existing_score = (
+                db.query(Score)
+                .filter(
+                    Score.participant_id == participant.id,
+                    Score.hole_number == next_hole_number,
+                    Score.id != score_id,
+                )
+                .first()
+            )
+            if existing_score:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"홀 {next_hole_number}번의 스코어가 이미 등록되어 있습니다.",
+                )
+
+        for field, value in update_data.items():
+            setattr(score, field, value)
+
+        db.commit()
+        db.refresh(score)
+
+        score = (
+            db.query(Score)
+            .options(
+                joinedload(Score.participant).joinedload(MeetingParticipant.user),
+                joinedload(Score.participant).joinedload(MeetingParticipant.meeting),
+            )
+            .filter(Score.id == score.id)
+            .first()
+        )
+        return _build_score_response(score, meeting=meeting)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 홀별 스코어 수정 오류: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/meetings/{meeting_id}/participants/{participant_id}/hole-scores/{score_id}", response_model=None)
+async def admin_delete_participant_hole_score(
+    meeting_id: int,
+    participant_id: int,
+    score_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """홀별 스코어 삭제 (백오피스)"""
+    try:
+        from models import MeetingParticipant, Score
+        from schemas import MessageResponse
+        from routers.meetings.scores import _ensure_round_meeting, _sync_participant_hole_score_flag
+
+        _ensure_round_meeting(db, meeting_id)
+        participant = (
+            db.query(MeetingParticipant)
+            .filter(
+                MeetingParticipant.id == participant_id,
+                MeetingParticipant.meeting_id == meeting_id,
+            )
+            .first()
+        )
+        if not participant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="참가자를 찾을 수 없습니다.")
+
+        score = (
+            db.query(Score)
+            .filter(
+                Score.id == score_id,
+                Score.participant_id == participant.id,
+            )
+            .first()
+        )
+        if not score:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="스코어를 찾을 수 없습니다.")
+
+        db.delete(score)
+        db.flush()
+        _sync_participant_hole_score_flag(db, participant.id)
+        db.commit()
+        return MessageResponse(success=True, message="스코어가 삭제되었습니다.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"관리자 홀별 스코어 삭제 오류: {str(e)}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -1348,11 +1973,14 @@ async def create_admin_rounding_settlement(
             participants = oi.get('participants') or []
             resolved = _resolve_participant_ids(participant_ids, participants) if participant_ids or participants else []
             title = oi.get('title') or oi.get('name') or '기타 비용'
+            _om = oi.get("memo")
+            _om_str = (str(_om).strip() if _om is not None else "") or None
             other_covered = bool(oi.get("covered_by_fee"))
             other_item = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.OTHER,
                 title=title,
+                memo=_om_str,
                 amount=amt,
                 covered_by_fee=other_covered,
                 order_index=order_idx,
@@ -1438,7 +2066,16 @@ async def create_admin_social_settlement(
         if not exclude_remaining_amount and target_count == 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산 대상자를 선택해주세요.")
 
-        amount_per_person = Decimal("0") if (exclude_remaining_amount or target_count == 0) else total_cost / target_count
+        cost_to_split = sum(
+            Decimal(str(x.get("amount", 0)))
+            for x in (expense_items_data or [])
+            if Decimal(str(x.get("amount", 0))) > 0 and not bool(x.get("covered_by_fee"))
+        )
+        amount_per_person = (
+            Decimal("0")
+            if (exclude_remaining_amount or target_count == 0)
+            else cost_to_split / target_count
+        )
 
         def _add_social_participants(expense_item, participant_ids, amount_list):
             """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액"""
@@ -1499,18 +2136,24 @@ async def create_admin_social_settlement(
             title = item.get("title") or item.get("name") or item.get("description") or f"항목 {idx + 1}"
             _m = item.get("memo")
             _m_str = (str(_m).strip() if _m is not None else "") or None
+            item_covered = bool(item.get("covered_by_fee"))
             ei = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.SOCIAL_ITEM,
                 title=title,
                 memo=_m_str,
                 amount=amt,
-                covered_by_fee=False,
+                covered_by_fee=item_covered,
                 order_index=idx,
             )
             db.add(ei)
             db.flush()
-            if settlement_targets and target_count > 0:
+            if (
+                not item_covered
+                and not exclude_remaining_amount
+                and settlement_targets
+                and target_count > 0
+            ):
                 extra_payer_id = item.get("extra_payer_id", default_extra_payer_id)
                 extra_idx = _resolve_extra_payer_index(settlement_targets, extra_payer_id)
                 amount_list = split_amount_10won(
@@ -1562,6 +2205,19 @@ async def get_admin_meeting(meeting_id: int,
             MeetingParticipant.meeting_id == meeting.id
         ).count()
 
+        st = meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status)
+        sm = meeting.settlement_method.value if meeting.settlement_method and hasattr(
+            meeting.settlement_method, 'value') else (
+                str(meeting.settlement_method) if meeting.settlement_method else None)
+
+        def _dec_str(d):
+            if d is None:
+                return None
+            try:
+                return float(d)
+            except Exception:
+                return None
+
         return {
             "id":
             meeting.id,
@@ -1580,14 +2236,38 @@ async def get_admin_meeting(meeting_id: int,
             meeting.course_name,
             "venue_name":
             meeting.venue_name,
+            "tee_times":
+            meeting.tee_times or [],
             "tee_time":
             meeting.tee_times[0] if meeting.tee_times and len(meeting.tee_times) > 0 else None,
             "meeting_time":
             meeting.meeting_time.isoformat() if meeting.meeting_time else None,
+            "application_deadline":
+            meeting.application_deadline.isoformat() if meeting.application_deadline else None,
+            "reservation_name":
+            meeting.reservation_name,
+            "hole_count":
+            meeting.hole_count,
+            "team_size":
+            meeting.team_size,
+            "team_formation_mode":
+            meeting.team_formation_mode,
+            "green_fee":
+            _dec_str(meeting.green_fee),
+            "caddy_fee":
+            _dec_str(meeting.caddy_fee),
+            "cart_fee":
+            _dec_str(meeting.cart_fee),
+            "total_cost":
+            _dec_str(meeting.total_cost),
+            "settlement_method":
+            sm,
+            "is_private":
+            bool(getattr(meeting, "is_private", False)),
             "max_participants":
             meeting.max_participants,
             "status":
-            meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status),
+            st,
             "club_id":
             meeting.club_id,
             "club_name":
@@ -1597,7 +2277,9 @@ async def get_admin_meeting(meeting_id: int,
             "created_at":
             meeting.created_at.isoformat() if meeting.created_at else None,
             "updated_at":
-            meeting.updated_at.isoformat() if meeting.updated_at else None
+            meeting.updated_at.isoformat() if meeting.updated_at else None,
+            "social_notes":
+            getattr(meeting, "social_notes", None) or None,
         }
 
     except HTTPException:
@@ -1612,91 +2294,292 @@ async def get_admin_meeting(meeting_id: int,
 async def create_admin_rounding_meeting(meeting_data: dict,
                                         db: Session = Depends(get_db),
                                         current_user: dict = Depends(get_admin_user)):
-    """관리자용 라운딩 모임 생성"""
+    """관리자용 라운딩 모임 생성 — 클라이언트 POST /rounds 와 동일 필드 구조 (멤버십 역할 검증 없음)."""
     try:
-        from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
-        from utils import generate_id
-        from datetime import datetime
+        from decimal import Decimal
+        from sqlalchemy import and_
+        from models import Meeting, Club, ClubMembership, MeetingParticipant, MeetingType, ParticipantType
+        from models.enums import MeetingSubtype, SettlementMethod, MeetingStatus
+        from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
 
-        # 클럽 존재 확인
-        club = db.query(Club).filter(Club.id == meeting_data.get('club_id')).first()
+        club_id = meeting_data.get('club_id')
+        if not club_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="클럽을 선택해주세요.")
+        club = db.query(Club).filter(Club.id == club_id).first()
         if not club:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="클럽을 찾을 수 없습니다.")
 
-        # 모임 생성
-        meeting = Meeting(name=meeting_data.get('name'),
-                          description=meeting_data.get('description'),
-                          location=meeting_data.get('location'),
-                          meeting_time=datetime.fromisoformat(meeting_data.get('meeting_time').replace('Z', '+00:00'))
-                          if meeting_data.get('meeting_time') else None,
-                          tee_time=datetime.strptime(meeting_data.get('tee_time'), '%H:%M').time()
-                          if meeting_data.get('tee_time') and ':' in meeting_data.get('tee_time') else None,
-                          max_participants=meeting_data.get('max_participants', 4),
-                          meeting_type=MeetingType.ROUND,
-                          meeting_subtype=meeting_data.get('meeting_subtype'),
-                          total_cost=meeting_data.get('total_cost'),
-                          green_fee=meeting_data.get('green_fee'),
-                          caddy_fee=meeting_data.get('caddy_fee'),
-                          cart_fee=meeting_data.get('cart_fee'),
-                          settlement_method=meeting_data.get('settlement_method'),
-                          course_name=meeting_data.get('course_name'),
-                          hole_count=meeting_data.get('hole_count'),
-                          reservation_name=meeting_data.get('reservation_name'),
-                          club_id=meeting_data.get('club_id'),
-                          status=MeetingStatus.SCHEDULED,
-                          created_by=current_user['id'])
+        admin_uid = current_user.get('id')
+
+        def _parse_dt(v):
+            if v is None or v == '':
+                return None
+            if isinstance(v, datetime):
+                return v.replace(tzinfo=None) if v.tzinfo else v
+            s = str(v).strip().replace('Z', '+00:00')
+            try:
+                dt = datetime.fromisoformat(s)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="날짜/시간 형식이 올바르지 않습니다.")
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
+        meeting_time = _parse_dt(meeting_data.get('meeting_time'))
+        if not meeting_time:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="모임 시간을 입력해주세요.")
+
+        application_deadline = _parse_dt(meeting_data.get('application_deadline'))
+        if not application_deadline:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="신청 마감일시를 입력해주세요.")
+        if meeting_time < application_deadline:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="모임 시간은 신청 마감일시 이후여야 합니다.",
+            )
+
+        tee_times = meeting_data.get('tee_times')
+        if isinstance(tee_times, str):
+            tee_times = [x.strip() for x in tee_times.replace(',', ' ').split() if x.strip()]
+        if not isinstance(tee_times, list):
+            tee_times = []
+        tee_times = [str(t).strip() for t in tee_times if str(t).strip()]
+        if not tee_times:
+            legacy = meeting_data.get('tee_time')
+            if legacy and isinstance(legacy, str) and ':' in legacy:
+                tee_times = [legacy.strip()]
+        if not tee_times:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티타임을 1개 이상 입력해주세요.")
+
+        try:
+            ms_raw = meeting_data.get('meeting_subtype') or 'REGULAR'
+            meeting_subtype = MeetingSubtype(ms_raw) if isinstance(ms_raw, str) else ms_raw
+        except ValueError:
+            meeting_subtype = MeetingSubtype.REGULAR
+
+        try:
+            sm_raw = meeting_data.get('settlement_method') or 'EQUAL_SPLIT'
+            settlement_method = SettlementMethod(sm_raw) if isinstance(sm_raw, str) else sm_raw
+        except ValueError:
+            settlement_method = SettlementMethod.EQUAL_SPLIT
+
+        is_private = bool(meeting_data.get('is_private'))
+
+        try:
+            max_participants = int(meeting_data.get('max_participants', 4))
+        except (TypeError, ValueError):
+            max_participants = 4
+
+        try:
+            team_size = int(meeting_data.get('team_size') or 4)
+        except (TypeError, ValueError):
+            team_size = 4
+
+        def _dec(x, default=None):
+            if x is None or x == '':
+                return default
+            try:
+                return Decimal(str(x))
+            except Exception:
+                return default
+
+        gf = _dec(meeting_data.get('green_fee'), Decimal('0')) or Decimal('0')
+        cf = _dec(meeting_data.get('caddy_fee'), Decimal('0')) or Decimal('0')
+        caf = _dec(meeting_data.get('cart_fee'), Decimal('0')) or Decimal('0')
+        total_from_payload = meeting_data.get('total_cost')
+        if total_from_payload is not None and total_from_payload != '':
+            total_cost = _dec(total_from_payload, gf + cf + caf) or (gf + cf + caf)
+        else:
+            total_cost = gf + cf + caf
+
+        try:
+            hole_count = int(meeting_data.get('hole_count') or 18)
+        except (TypeError, ValueError):
+            hole_count = 18
+
+        selected_participants = meeting_data.get('selected_participants') or []
+        if isinstance(selected_participants, str):
+            selected_participants = [
+                int(x.strip())
+                for x in selected_participants.replace(',', ' ').split()
+                if x.strip().isdigit()
+            ]
+        if not isinstance(selected_participants, list):
+            selected_participants = []
+        norm_uid = []
+        for x in selected_participants:
+            try:
+                norm_uid.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        selected_participants = norm_uid
+
+        raw_guests = meeting_data.get('selected_guests') or []
+        if not isinstance(raw_guests, list):
+            raw_guests = []
+        guest_payloads = []
+        for item in raw_guests:
+            if not isinstance(item, dict):
+                continue
+            nm = (item.get('name') or '').strip()
+            if not nm:
+                continue
+            guest_payloads.append({
+                "name": nm,
+                "birthdate": item.get('birthdate') or None,
+                "gender": item.get("gender"),
+                "average_score": item.get("average_score"),
+                "handicap": item.get("handicap"),
+            })
+
+        if is_private:
+            if not selected_participants and not guest_payloads:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="프라이빗 라운딩은 클럽 멤버 1명 이상 또는 게스트 1명 이상을 지정해주세요.",
+                )
+            for uid in selected_participants:
+                member_check = db.query(ClubMembership).filter(
+                    and_(
+                        ClubMembership.user_id == uid,
+                        ClubMembership.club_id == club_id,
+                        ClubMembership.status.in_(MEMBERSHIP_ACTIVE_STATUSES),
+                    )
+                ).first()
+                if not member_check:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"user_id {uid}는 해당 클럽의 활성 멤버가 아닙니다.",
+                    )
+        else:
+            selected_participants = []
+            guest_payloads = []
+
+        meeting = Meeting(
+            name=meeting_data.get('name'),
+            description=meeting_data.get('description'),
+            location=meeting_data.get('location'),
+            meeting_time=meeting_time,
+            tee_times=tee_times,
+            max_participants=max_participants,
+            meeting_type=MeetingType.ROUND,
+            meeting_subtype=meeting_subtype,
+            total_cost=total_cost,
+            green_fee=gf,
+            caddy_fee=cf,
+            cart_fee=caf,
+            settlement_method=settlement_method,
+            course_name=meeting_data.get('course_name'),
+            hole_count=hole_count,
+            reservation_name=meeting_data.get('reservation_name'),
+            application_deadline=application_deadline,
+            team_formation_mode=meeting_data.get('team_formation_mode'),
+            team_size=team_size,
+            club_id=club_id,
+            status=MeetingStatus.SCHEDULED,
+            is_private=is_private,
+            created_by=admin_uid,
+        )
 
         db.add(meeting)
         db.commit()
         db.refresh(meeting)
 
-        # 관리자를 참가자로 자동 추가
-        participant = MeetingParticipant(
-            meeting_id=meeting.id,
-            user_id=current_user['id'],
-            participant_type=ParticipantType.USER
-        )
-        db.add(participant)
-        db.commit()
+        participant_count = 0
+
+        if is_private:
+            for uid in selected_participants:
+                existing = db.query(MeetingParticipant).filter(
+                    and_(MeetingParticipant.meeting_id == meeting.id, MeetingParticipant.user_id == uid)
+                ).first()
+                if not existing:
+                    db.add(
+                        MeetingParticipant(
+                            meeting_id=meeting.id,
+                            user_id=uid,
+                            participant_type=ParticipantType.USER,
+                        )
+                    )
+                    participant_count += 1
+            db.commit()
+
+            if guest_payloads:
+                from utils.team_formation import add_guest_to_meeting
+                from models import Gender as ModelGender
+
+                for gd in guest_payloads:
+                    gh_dec = None
+                    if gd.get("handicap") is not None and str(gd.get("handicap")).strip() != "":
+                        try:
+                            gh_dec = Decimal(str(gd.get("handicap")))
+                        except Exception:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"게스트 '{gd['name']}'의 핸디캡 형식이 올바르지 않습니다.",
+                            )
+                    av_int = None
+                    if gd.get("average_score") is not None and str(gd.get("average_score")).strip() != "":
+                        try:
+                            av_int = int(gd.get("average_score"))
+                        except (TypeError, ValueError):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"게스트 '{gd['name']}'의 평균 타수 형식이 올바르지 않습니다.",
+                            )
+                    gen = None
+                    g = gd.get("gender")
+                    if g in ("MALE", "FEMALE"):
+                        gen = ModelGender[g]
+                    try:
+                        add_guest_to_meeting(
+                            meeting_id=meeting.id,
+                            guest_name=gd["name"],
+                            guest_handicap=gh_dec,
+                            average_score=av_int,
+                            guest_birthdate=gd.get("birthdate"),
+                            guest_gender=gen,
+                            db=db,
+                            auto_commit=True,
+                        )
+                        participant_count += 1
+                    except ValueError as ve:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        else:
+            participant = MeetingParticipant(
+                meeting_id=meeting.id,
+                user_id=admin_uid,
+                participant_type=ParticipantType.USER,
+            )
+            db.add(participant)
+            db.commit()
+            participant_count = 1
 
         return {
-            "id":
-            meeting.id,
-            "name":
-            meeting.name,
-            "description":
-            meeting.description,
-            "meeting_type":
-            meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
-            "meeting_subtype":
-            meeting.meeting_subtype.value
-            if hasattr(meeting.meeting_subtype, 'value') else str(meeting.meeting_subtype),
-            "location":
-            meeting.location,
-            "course_name":
-            meeting.course_name,
-            "tee_time":
-            meeting.tee_times[0] if meeting.tee_times and len(meeting.tee_times) > 0 else None,
-            "meeting_time":
-            meeting.meeting_time.isoformat() if meeting.meeting_time else None,
-            "max_participants":
-            meeting.max_participants,
-            "status":
-            meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status),
-            "club_id":
-            meeting.club_id,
-            "club_name":
-            club.name,
-            "participant_count":
-            1,
-            "created_at":
-            meeting.created_at.isoformat() if meeting.created_at else None,
-            "updated_at":
-            meeting.updated_at.isoformat() if meeting.updated_at else None
+            "id": meeting.id,
+            "name": meeting.name,
+            "description": meeting.description,
+            "meeting_type": meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type),
+            "meeting_subtype": meeting.meeting_subtype.value
+            if meeting.meeting_subtype and hasattr(meeting.meeting_subtype, 'value')
+            else str(meeting.meeting_subtype),
+            "location": meeting.location,
+            "course_name": meeting.course_name,
+            "tee_times": meeting.tee_times or [],
+            "tee_time": meeting.tee_times[0] if meeting.tee_times and len(meeting.tee_times) > 0 else None,
+            "meeting_time": meeting.meeting_time.isoformat() if meeting.meeting_time else None,
+            "application_deadline": meeting.application_deadline.isoformat() if meeting.application_deadline else None,
+            "max_participants": meeting.max_participants,
+            "status": meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status),
+            "club_id": meeting.club_id,
+            "club_name": club.name,
+            "participant_count": participant_count,
+            "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
+            "updated_at": meeting.updated_at.isoformat() if meeting.updated_at else None,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"관리자 라운딩 모임 생성 중 오류: {str(e)}")
+        db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="라운딩 모임 생성 중 오류가 발생했습니다")
 
 
@@ -1707,7 +2590,7 @@ async def create_admin_event_meeting(meeting_data: dict,
     """관리자용 이벤트 모임 생성"""
     try:
         from models import Meeting, Club, MeetingParticipant, MeetingType, MeetingStatus, ParticipantType
-        from utils import generate_id
+        from models.enums import SocialType, SettlementMethod
         from datetime import datetime
 
         # 클럽 존재 확인
@@ -1715,16 +2598,39 @@ async def create_admin_event_meeting(meeting_data: dict,
         if not club:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="클럽을 찾을 수 없습니다.")
 
+        def _parse_dt(key):
+            raw = meeting_data.get(key)
+            if not raw:
+                return None
+            return datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+
+        social_type_raw = meeting_data.get('type') or meeting_data.get('social_type')
+        try:
+            social_type = SocialType(social_type_raw) if social_type_raw else SocialType.CASUAL
+        except ValueError:
+            social_type = SocialType.CASUAL
+
+        sm_raw = meeting_data.get('settlement_method') or meeting_data.get('social_settlement_method')
+        settlement_method = None
+        if sm_raw:
+            try:
+                settlement_method = SettlementMethod(sm_raw)
+            except ValueError:
+                settlement_method = None
+
         # 모임 생성
         meeting = Meeting(name=meeting_data.get('name'),
                           description=meeting_data.get('description'),
-                          meeting_time=datetime.fromisoformat(meeting_data.get('meeting_time').replace('Z', '+00:00'))
-                          if meeting_data.get('meeting_time') else None,
+                          meeting_time=_parse_dt('meeting_time'),
+                          application_deadline=_parse_dt('application_deadline'),
                           max_participants=meeting_data.get('max_participants', 20),
                           meeting_type=MeetingType.SOCIAL,
                           venue_name=meeting_data.get('venue_name'),
+                          location=meeting_data.get('location'),
                           social_cost=meeting_data.get('social_cost'),
-                          social_settlement_method=meeting_data.get('social_settlement_method'),
+                          social_notes=meeting_data.get('social_notes'),
+                          settlement_method=settlement_method,
+                          social_type=social_type,
                           club_id=meeting_data.get('club_id'),
                           status=MeetingStatus.SCHEDULED,
                           created_by=current_user['id'])
@@ -1755,8 +2661,14 @@ async def create_admin_event_meeting(meeting_data: dict,
             meeting.venue_name,
             "meeting_time":
             meeting.meeting_time.isoformat() if meeting.meeting_time else None,
+            "application_deadline":
+            meeting.application_deadline.isoformat() if meeting.application_deadline else None,
             "max_participants":
             meeting.max_participants,
+            "social_type":
+            meeting.social_type.value if getattr(meeting, 'social_type', None) and hasattr(meeting.social_type, 'value') else None,
+            "settlement_method":
+            meeting.settlement_method.value if meeting.settlement_method and hasattr(meeting.settlement_method, 'value') else None,
             "status":
             meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status),
             "club_id":
@@ -1768,7 +2680,9 @@ async def create_admin_event_meeting(meeting_data: dict,
             "created_at":
             meeting.created_at.isoformat() if meeting.created_at else None,
             "updated_at":
-            meeting.updated_at.isoformat() if meeting.updated_at else None
+            meeting.updated_at.isoformat() if meeting.updated_at else None,
+            "social_notes":
+            getattr(meeting, "social_notes", None) or None,
         }
 
     except Exception as e:
@@ -1791,10 +2705,11 @@ async def update_admin_meeting(meeting_id: int,
                                meeting_data: dict,
                                db: Session = Depends(get_db),
                                current_user: dict = Depends(get_admin_user)):
-    """관리자용 모임 수정"""
+    """관리자용 모임 수정 (라운딩: 티타임·신청마감·비용·프라이빗 참가자 동기화 등 포함)"""
     try:
+        from decimal import Decimal
         from models import Meeting, Club, MeetingParticipant
-        from sqlalchemy import and_
+        from models.enums import MeetingSubtype, SettlementMethod
 
         # 모임 조회
         meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -1804,17 +2719,83 @@ async def update_admin_meeting(meeting_id: int,
 
         previous_status = meeting.status
 
-        # 모임 데이터 업데이트
-        update_fields = ['name', 'description', 'location', 'meeting_time', 'max_participants', 'status']
+        update_fields = [
+            'name', 'description', 'location', 'meeting_time', 'max_participants', 'status',
+            'venue_name', 'social_notes',
+        ]
+        mt0 = meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type)
+        if mt0 == 'ROUND':
+            update_fields += [
+                'application_deadline', 'tee_times', 'course_name', 'reservation_name', 'hole_count',
+                'meeting_subtype', 'team_formation_mode', 'team_size', 'green_fee', 'caddy_fee',
+                'cart_fee', 'total_cost', 'settlement_method', 'is_private', 'club_id',
+            ]
+
         for field in update_fields:
-            if field in meeting_data:
-                value = meeting_data[field]
-                if field == 'meeting_time' and value and isinstance(value, str):
-                    try:
-                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    except (ValueError, TypeError):
-                        pass
-                setattr(meeting, field, value)
+            if field not in meeting_data:
+                continue
+            value = meeting_data[field]
+            if field == 'meeting_time' and value and isinstance(value, str):
+                try:
+                    value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    value = value.replace(tzinfo=None) if value.tzinfo else value
+                except (ValueError, TypeError):
+                    continue
+            elif field == 'application_deadline' and value and isinstance(value, str):
+                try:
+                    value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    value = value.replace(tzinfo=None) if value.tzinfo else value
+                except (ValueError, TypeError):
+                    continue
+            elif field == 'tee_times':
+                if isinstance(value, str):
+                    value = [x.strip() for x in value.replace(',', ' ').split() if x.strip()]
+                if not isinstance(value, list):
+                    continue
+                value = [str(t).strip() for t in value if str(t).strip()]
+            elif field == 'is_private':
+                value = bool(value)
+            elif field == 'club_id':
+                try:
+                    cid = int(value)
+                except (TypeError, ValueError):
+                    continue
+                club_chk = db.query(Club).filter(Club.id == cid).first()
+                if not club_chk:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="클럽을 찾을 수 없습니다.")
+                value = cid
+            elif field == 'meeting_subtype' and value:
+                try:
+                    value = MeetingSubtype(value) if isinstance(value, str) else value
+                except ValueError:
+                    continue
+            elif field == 'settlement_method' and value:
+                try:
+                    value = SettlementMethod(value) if isinstance(value, str) else value
+                except ValueError:
+                    continue
+            elif field in ('green_fee', 'caddy_fee', 'cart_fee', 'total_cost'):
+                if value is None or value == '':
+                    continue
+                try:
+                    value = Decimal(str(value))
+                except Exception:
+                    continue
+            elif field in ('hole_count', 'team_size', 'max_participants'):
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    continue
+            elif field == 'status' and value is not None:
+                value = str(value)
+
+            setattr(meeting, field, value)
+
+        mt = meeting.meeting_type.value if hasattr(meeting.meeting_type, 'value') else str(meeting.meeting_type)
+        st_str = meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status)
+        if mt == 'ROUND' and st_str == 'SCHEDULED' and meeting.is_private:
+            if 'selected_participants' in meeting_data or 'selected_guests' in meeting_data:
+                _admin_sync_private_round_participants(db, meeting, meeting.club_id, meeting_data)
 
         meeting.updated_at = get_kst_now()
         db.commit()
@@ -1873,7 +2854,9 @@ async def update_admin_meeting(meeting_id: int,
             "created_at":
             meeting.created_at.isoformat() if meeting.created_at else None,
             "updated_at":
-            meeting.updated_at.isoformat() if meeting.updated_at else None
+            meeting.updated_at.isoformat() if meeting.updated_at else None,
+            "social_notes":
+            getattr(meeting, "social_notes", None) or None,
         }
 
     except HTTPException:

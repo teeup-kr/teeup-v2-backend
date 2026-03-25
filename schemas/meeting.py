@@ -114,6 +114,8 @@ class MeetingResponse(BaseModel):
     rounding_started_at: Optional[datetime] = None
     rounding_completed_at: Optional[datetime] = None
     settlement_confirmed: bool = False
+    # 클럽 현재 설정 기준 (모임 상세·목록에서 정산 UI 분기)
+    settlement_enabled: bool = True
     is_completed: bool = False
     is_private: bool = False
     created_by: Optional[int] = None
