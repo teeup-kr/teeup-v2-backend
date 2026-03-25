@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from database import get_db
-from models import (Team, TeamMember, MeetingParticipant, Meeting, User, MeetingResult, Guest)
+from models import (Team, TeamMember, MeetingParticipant, Meeting, User, MeetingResult, UserScoreHistory, Guest)
 from schemas import (TeamFormationMode, TeamStatus, ClubRole)
 from schemas import (TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, TeamFormationRequest,
                      TeamFormationResponse, MessageResponse)
@@ -159,7 +159,7 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                     else:
                                         handicap = None
 
-                                    # MeetingResult에서 실제 직전 대회 성적 조회
+                                    # MeetingResult의 직전 경기 id를 찾은 뒤 UserScoreHistory.gross_score 조회
                                     average_score = None
                                     last_result = db.query(MeetingResult).filter(
                                         MeetingResult.user_id == participant.user_id,
@@ -167,7 +167,12 @@ async def get_teams(meeting_id: int, db: Session = Depends(get_db), current_user
                                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                                     if last_result:
-                                        average_score = last_result.gross_score
+                                        last_score = db.query(UserScoreHistory).filter(
+                                            UserScoreHistory.user_id == participant.user_id,
+                                            UserScoreHistory.meeting_id == last_result.meeting_id
+                                        ).order_by(UserScoreHistory.played_at.desc()).first()
+                                        if last_score:
+                                            average_score = last_score.gross_score
                                 else:
                                     logger.warning(f"사용자 조회 실패 - user_id: {participant.user_id}")
                                     continue
@@ -584,14 +589,19 @@ async def auto_form_teams(meeting_id: int,
                     gender = user.gender.value if user.gender else None
                     handicap = participant.handicap
 
-                    # MeetingResult에서 실제 직전 대회 성적 조회
+                    # MeetingResult의 직전 경기 id를 찾은 뒤 UserScoreHistory.gross_score 조회
                     last_result = db.query(MeetingResult).filter(
                         MeetingResult.user_id == participant.user_id,
                         MeetingResult.meeting_id != meeting_id  # 현재 모임 제외
                     ).order_by(MeetingResult.completed_at.desc()).first()
 
                     if last_result:
-                        average_score = last_result.gross_score
+                        last_score = db.query(UserScoreHistory).filter(
+                            UserScoreHistory.user_id == participant.user_id,
+                            UserScoreHistory.meeting_id == last_result.meeting_id
+                        ).order_by(UserScoreHistory.played_at.desc()).first()
+                        if last_score:
+                            average_score = last_score.gross_score
                 else:
                     continue
 

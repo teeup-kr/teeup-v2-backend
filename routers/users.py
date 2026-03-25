@@ -574,6 +574,7 @@ async def get_my_clubs(db: Session = Depends(get_db), current_user: User = Depen
                 "my_role": membership.role.value if membership.role else None,
                 "joined_at": membership.created_at,
                 "profile_image": club.profile_image,
+                "settlement_enabled": getattr(club, "settlement_enabled", True),
             }
             clubs.append(club_data)
 
@@ -1677,7 +1678,8 @@ class RoundingMeetingItem(BaseModel):
     has_hole_scores: bool
     gross_score: Optional[int] = None
     net_score: Optional[float] = None
-    handicap_used: Optional[float] = None  # 해당 경기에서 사용된 핸디캡 (그때의 기록)
+    handicap_used: Optional[float] = None  # 해당 경기 넷 계산에 쓴 핸디캡 (경기 전 기준)
+    handicap_after_round: Optional[float] = None  # 이 경기 반영 후 자동 재계산 핸디캡 (기록 표시 권장)
 
 
 class RoundingMeetingsResponse(BaseModel):
@@ -1888,8 +1890,11 @@ async def get_my_rounding_meetings(
         for participant, meeting, club in results:
             score_history = score_map.get(meeting.id)
             handicap_used_val = None
+            handicap_after_val = None
             if score_history and score_history.handicap_used is not None:
                 handicap_used_val = float(score_history.handicap_used)
+            if score_history and getattr(score_history, "handicap_after_round", None) is not None:
+                handicap_after_val = float(score_history.handicap_after_round)
             meetings_data.append(
                 RoundingMeetingItem(
                     meeting_id=meeting.id,
@@ -1902,6 +1907,7 @@ async def get_my_rounding_meetings(
                     gross_score=score_history.gross_score if score_history else None,
                     net_score=(float(score_history.net_score) if score_history and score_history.net_score else None),
                     handicap_used=handicap_used_val,
+                    handicap_after_round=handicap_after_val,
                 ))
 
         # 총 페이지 수 계산

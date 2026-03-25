@@ -35,9 +35,20 @@ from utils.amount_split import split_amount_10won, allocate_by_total, allocate_i
 from models import Notification
 from schemas import NotificationType, NotificationStatus
 from utils.cuid import generate_cuid
+from utils.club_flags import club_settlement_enabled
 
 router = APIRouter(prefix="/meetings", tags=["meeting-settlement"])
 logger = logging.getLogger(__name__)
+
+
+def assert_club_settlement_api_allowed(meeting: Meeting, db: Session) -> None:
+    """클럽에서 정산 기능을 끈 경우 정산 API 전부 403."""
+    club = db.query(Club).filter(Club.id == meeting.club_id).first()
+    if club is not None and not club_settlement_enabled(club):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 클럽에서는 정산 기능이 비활성화되어 있습니다.",
+        )
 
 
 def _resolve_extra_payer_index(effective_ids: list, extra_payer_id) -> Optional[int]:
@@ -195,6 +206,8 @@ async def create_rounding_settlement(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="라운딩 모임이 아닙니다."
             )
+
+        assert_club_settlement_api_allowed(meeting, db)
         
         # 정산이 이미 확정된 경우 생성/수정 불가
         if meeting.settlement_confirmed:
@@ -516,6 +529,7 @@ async def update_rounding_settlement(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
         if meeting.meeting_type != MeetingType.ROUND:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 모임이 아닙니다.")
+        assert_club_settlement_api_allowed(meeting, db)
         if meeting.settlement_confirmed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산이 이미 확정되어 수정할 수 없습니다.")
         if not can_manage_settlement(meeting_id, current_user.id, db):
@@ -557,6 +571,8 @@ async def create_social_settlement(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="소셜 모임이 아닙니다."
             )
+
+        assert_club_settlement_api_allowed(meeting, db)
         
         # 정산이 이미 확정된 경우 생성/수정 불가
         if meeting.settlement_confirmed:
@@ -612,7 +628,16 @@ async def create_social_settlement(
             organizer_pid = None
         default_extra_payer_id = default_extra_payer_id or organizer_pid or (settlement_targets[0] if settlement_targets else None)
 
-        amount_per_person = Decimal('0') if exclude_remaining_amount else total_cost / target_count
+        cost_to_split = sum(
+            Decimal(str(x.get("amount", 0)))
+            for x in (expense_items_data or [])
+            if Decimal(str(x.get("amount", 0))) > 0 and not bool(x.get("covered_by_fee"))
+        )
+        amount_per_person = (
+            Decimal("0")
+            if exclude_remaining_amount or target_count == 0
+            else cost_to_split / target_count
+        )
 
         def _add_social_participants(expense_item, participant_ids, amount_list):
             """amount_list: 10원 단위 나머지 배분법으로 계산된 인원별 금액"""
@@ -653,7 +678,7 @@ async def create_social_settlement(
         db.add(expense)
         db.flush()
 
-        # 각 정산 항목 생성, 금액 합산 후 n명 균등 분배 (총액/n)
+        # 각 정산 항목 생성, 금액 합산 후 n명 균등 분배 (회비 처리 항목은 참가자 분담 라인 없음)
         for idx, item in enumerate(expense_items_data or []):
             amt = Decimal(str(item.get('amount', 0)))
             if amt <= 0:
@@ -661,18 +686,24 @@ async def create_social_settlement(
             title = item.get('title') or item.get('name') or f"항목 {idx + 1}"
             memo_val = item.get("memo")
             memo_str = (str(memo_val).strip() if memo_val is not None else "") or None
+            item_covered = bool(item.get("covered_by_fee"))
             ei = ExpenseItem(
                 expense_id=expense.id,
                 type=ExpenseItemType.SOCIAL_ITEM,
                 title=title,
                 memo=memo_str,
                 amount=amt,
-                covered_by_fee=False,
+                covered_by_fee=item_covered,
                 order_index=idx,
             )
             db.add(ei)
             db.flush()
-            if settlement_targets and target_count > 0:
+            if (
+                not item_covered
+                and not exclude_remaining_amount
+                and settlement_targets
+                and target_count > 0
+            ):
                 extra_payer_id = item.get('extra_payer_id', default_extra_payer_id)
                 extra_idx = _resolve_extra_payer_index(settlement_targets, extra_payer_id)
                 if extra_idx is None:
@@ -724,6 +755,7 @@ async def update_social_settlement(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다.")
         if meeting.meeting_type != MeetingType.SOCIAL:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="소셜 모임이 아닙니다.")
+        assert_club_settlement_api_allowed(meeting, db)
         if meeting.settlement_confirmed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="정산이 이미 확정되어 수정할 수 없습니다.")
         if not can_manage_settlement(meeting_id, current_user.id, db):
@@ -814,6 +846,12 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
     meeting_type_val = meeting.meeting_type.value if hasattr(meeting.meeting_type, "value") else str(meeting.meeting_type)
 
     if meeting_type_val == "SOCIAL":
+        # 항목별 회비 처리(covered_by_fee)는 ExpenseItemParticipant가 없으므로, 인당 부담은 실제 분담 합계 기준
+        if settlement_targets:
+            split_total = sum(float(v["amount"]) for v in agg.values())
+            settlement_data["amount_per_person"] = split_total / len(settlement_targets)
+        else:
+            settlement_data["amount_per_person"] = 0
         settlement_data["exclude_remaining_amount"] = bool(expense.exclude_remaining_amount)
         settlement_data["extra_payer_id"] = None
         expense_items_api = []
@@ -827,6 +865,7 @@ def _build_settlement_response(meeting_id: int, db: Session) -> dict:
             expense_items_api.append({
                 "id": item.id, "title": item.title or "항목", "amount": float(item.amount or 0),
                 "memo": (getattr(item, "memo", None) or "").strip() or None,
+                "covered_by_fee": bool(getattr(item, "covered_by_fee", False)),
                 "participants": pids,
             })
         settlement_data["expense_items"] = expense_items_api
@@ -920,6 +959,8 @@ async def get_meeting_settlement(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="모임을 찾을 수 없습니다."
             )
+
+        assert_club_settlement_api_allowed(meeting, db)
         
         # 프라이빗 라운딩인 경우 권한 체크
         if meeting.is_private:
@@ -1000,6 +1041,8 @@ async def get_my_settlement(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="모임을 찾을 수 없습니다."
             )
+
+        assert_club_settlement_api_allowed(meeting, db)
         
         # 정산 존재 확인 (정산 확정 여부는 체크하지 않음)
         
@@ -1099,6 +1142,8 @@ async def get_available_participants(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="모임을 찾을 수 없습니다."
             )
+
+        assert_club_settlement_api_allowed(meeting, db)
         
         # 정산 권한 확인: 주최자 또는 클럽 리더/매니저
         if not can_manage_settlement(meeting_id, current_user.id, db):

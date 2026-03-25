@@ -247,7 +247,12 @@ class UserScoreHistory(Base):
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False)
     gross_score = Column(Integer, nullable=False, comment="실제 타수 (Gross Score)")
     net_score = Column(DECIMAL(5, 1), comment="넷 스코어 (Gross Score - Handicap)")
-    handicap_used = Column(DECIMAL(4, 1), nullable=False, comment="해당 경기에서 사용된 핸디캡")
+    handicap_used = Column(DECIMAL(4, 1), nullable=False, comment="해당 경기에서 사용된 핸디캡 (넷 계산 기준)")
+    handicap_after_round = Column(
+        DECIMAL(4, 1),
+        nullable=True,
+        comment="이 경기 반영 후 핸디캡 (자동 재계산 결과, 기록 표시용)",
+    )
     played_at = Column(DateTime, nullable=False, comment="경기 날짜")
     created_at = Column(DateTime, default=func.now())
 

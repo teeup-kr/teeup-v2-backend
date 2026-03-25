@@ -38,6 +38,7 @@ from utils.jwt_auth import security
 from utils.handicap_calculator import (
     get_user_handicap_for_formation,
     save_score_to_history,
+    set_handicap_after_round_on_history,
     update_user_handicap,
     create_meeting_results
 )
@@ -991,7 +992,8 @@ async def create_simple_score(
             user_id=user_id,
             score_count=5
         )
-        
+        set_handicap_after_round_on_history(db, score_history, updated_handicap)
+
         # MeetingResult 생성/업데이트
         try:
             create_meeting_results(db, meeting_id)
@@ -1099,7 +1101,8 @@ async def update_simple_score(
             user_id=user_id,
             score_count=5
         )
-        
+        set_handicap_after_round_on_history(db, existing_score, updated_handicap)
+
         # MeetingResult 재생성/업데이트
         try:
             # 기존 MeetingResult 삭제 후 재생성

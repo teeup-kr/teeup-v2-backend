@@ -939,7 +939,9 @@ def add_guest_to_meeting(meeting_id: int,
                          average_score: Optional[int] = None,
                          guest_birthdate: Optional[str] = None,
                          guest_gender: Optional[Gender] = None,
-                         db: Session = None) -> MeetingParticipant:
+                         db: Session = None,
+                         *,
+                         auto_commit: bool = True) -> MeetingParticipant:
     """
     게스트 데이터 입력 함수
     
@@ -1020,7 +1022,10 @@ def add_guest_to_meeting(meeting_id: int,
         participant_type=ParticipantType.GUEST)
 
     db.add(guest_participant)
-    db.commit()
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(guest_participant)
 
     return guest_participant

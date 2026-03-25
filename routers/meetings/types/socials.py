@@ -23,6 +23,7 @@ from schemas import (
 )
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both
 from utils.permissions import MEMBERSHIP_ACTIVE_STATUSES
+from utils.club_flags import club_settlement_enabled
 from utils.notification_service import notify_organizer_participant_added_after_recruitment_closed
 from routers.meetings.workflow import close_meetings_with_passed_deadline
 
@@ -140,6 +141,7 @@ async def get_socials(
                 **meeting_dict,
                 club_name=meeting.club.name,
                 participant_count=participant_count,
+                settlement_enabled=club_settlement_enabled(meeting.club),
             )
         )
     
@@ -268,6 +270,7 @@ async def create_social(
         **meeting_dict,
         club_name=club.name,
         participant_count=1,
+        settlement_enabled=club_settlement_enabled(club),
     )
 
 # =============================================================================
@@ -332,6 +335,7 @@ async def get_social(
         **meeting_dict,
         club_name=meeting.club.name,
         participant_count=participant_count,
+        settlement_enabled=club_settlement_enabled(meeting.club),
     )
 
 # =============================================================================
@@ -423,6 +427,7 @@ async def update_social(
         **meeting_dict,
         club_name=club.name,
         participant_count=participant_count,
+        settlement_enabled=club_settlement_enabled(club),
     )
 
 # =============================================================================

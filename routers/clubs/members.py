@@ -8,12 +8,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 from database import get_db
-from models import User, Club, ClubMembership
+from models import User, Club, ClubMembership, Meeting, UserScoreHistory
 from schemas import (
     MessageResponse, ClubRole, ClubStatus, MembershipStatus,
     ClubMemberAddRequest, ClubMemberRoleUpdateRequest,
     MemberNoteUpdate, MemberNoteResponse,
-    ClubMemberSearchResponse
+    ClubMemberSearchResponse, ClubMemberRecordSummaryResponse, ClubMembershipResponse
 )
 from routers.auth import get_current_active_user
 from utils.datetime_utils import get_kst_now
@@ -39,6 +39,171 @@ def _raise_profile_not_completed(message: str) -> None:
             "redirect": "/mypage/edit",
         },
     )
+
+
+def _resolve_club_by_id_or_display_id(db: Session, club_id: str) -> Club:
+    """club_id(display_id or numeric id)를 Club 레코드로 해석"""
+    club = db.query(Club).filter(
+        Club.display_id == club_id,
+        Club.deleted_at.is_(None),
+    ).first()
+
+    if club:
+        return club
+
+    try:
+        club_id_int = int(club_id)
+    except ValueError:
+        club_id_int = None
+
+    if club_id_int is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="클럽을 찾을 수 없습니다.",
+        )
+
+    club = db.query(Club).filter(
+        Club.id == club_id_int,
+        Club.deleted_at.is_(None),
+    ).first()
+
+    if not club:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="클럽을 찾을 수 없습니다.",
+        )
+
+    return club
+
+
+@router.get("/{club_id}/membership", response_model=ClubMembershipResponse)
+async def get_club_membership(
+    club_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """현재 사용자의 클럽 멤버십 조회 (display_id 또는 id 지원)"""
+    club = _resolve_club_by_id_or_display_id(db, club_id)
+
+    membership = db.query(ClubMembership).filter(
+        ClubMembership.club_id == club.id,
+        ClubMembership.user_id == current_user.id,
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 클럽의 멤버가 아닙니다.",
+        )
+
+    role_value = membership.role.value if hasattr(membership.role, "value") else str(membership.role)
+    status_value = membership.status.value if hasattr(membership.status, "value") else str(membership.status)
+
+    return ClubMembershipResponse(
+        id=membership.id,
+        club_id=club.id,
+        user_id=current_user.id,
+        role=role_value,
+        status=status_value,
+        joined_at=membership.created_at,
+    )
+
+
+@router.get("/{club_id}/members/{user_id}/record-summary", response_model=ClubMemberRecordSummaryResponse)
+async def get_club_member_record_summary(
+    club_id: str,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """클럽 구성원이 보는 특정 멤버의 기록 요약 (가입자만 접근 가능)"""
+    try:
+        club = _resolve_club_by_id_or_display_id(db, club_id)
+
+        # 요청자 권한: 해당 클럽 ACTIVE/APPROVED 멤버여야 함
+        viewer_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == current_user.id,
+        ).first()
+        if not _is_active_membership(viewer_membership):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="클럽 구성원만 멤버 기록을 조회할 수 있습니다.",
+            )
+
+        # 대상자도 해당 클럽 멤버인지 확인 (ACTIVE/APPROVED 기준)
+        target_membership = db.query(ClubMembership).filter(
+            ClubMembership.club_id == club.id,
+            ClubMembership.user_id == user_id,
+            ClubMembership.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+        ).first()
+        if not target_membership:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="해당 사용자는 클럽 구성원이 아닙니다.",
+            )
+
+        target_user = db.query(User).filter(
+            User.id == user_id,
+            User.deleted_at.is_(None),
+        ).first()
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다.",
+            )
+
+        # 클럽 내 ROUND 모임의 스코어 히스토리만 집계
+        from sqlalchemy import func
+        from models.enums import MeetingType
+
+        score_q = (
+            db.query(UserScoreHistory)
+            .join(Meeting, Meeting.id == UserScoreHistory.meeting_id)
+            .filter(
+                UserScoreHistory.user_id == user_id,
+                Meeting.club_id == club.id,
+                Meeting.meeting_type == MeetingType.ROUND,
+            )
+        )
+
+        recent_rounds_count = int(score_q.count())
+        avg_score_val = (
+            db.query(func.avg(UserScoreHistory.gross_score))
+            .join(Meeting, Meeting.id == UserScoreHistory.meeting_id)
+            .filter(
+                UserScoreHistory.user_id == user_id,
+                Meeting.club_id == club.id,
+                Meeting.meeting_type == MeetingType.ROUND,
+            )
+            .scalar()
+        )
+
+        handicap_source = (
+            float(target_user.handicap)
+            if target_user.handicap is not None
+            else (float(target_user.handicap_init) if target_user.handicap_init is not None else None)
+        )
+
+        average_score = float(avg_score_val) if avg_score_val is not None else None
+        if average_score is not None:
+            average_score = round(average_score, 1)
+
+        return ClubMemberRecordSummaryResponse(
+            user_id=user_id,
+            club_id=club.id,
+            handicap=handicap_source,
+            average_score=average_score,
+            recent_rounds_count=recent_rounds_count,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"멤버 기록 요약 조회 실패: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="서버 내부 오류가 발생했습니다.",
+        )
 
 
 @router.get("/members/search", response_model=ClubMemberSearchResponse)

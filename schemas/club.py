@@ -29,6 +29,7 @@ class ClubUpdate(BaseModel):
     representative_name: Optional[str] = Field(None, max_length=255, description="대표자 이름")
     additional_info: Optional[str] = Field(None, description="추가 정보")
     application_deadline: Optional[datetime] = Field(None, description="신청 마감일")
+    settlement_enabled: Optional[bool] = Field(None, description="모임 정산 기능 사용 여부")
 
 
 class ClubFeeSummary(BaseModel):
@@ -53,6 +54,7 @@ class ClubResponse(BaseModel):
     representative_name: Optional[str]
     additional_info: Optional[str]
     status: ClubStatus
+    settlement_enabled: bool = True
     created_at: datetime
     updated_at: datetime
     membership_status: Optional[str] = None  # 현재 사용자의 멤버십 상태
@@ -115,6 +117,16 @@ class ClubMembershipResponse(BaseModel):
     joined_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ClubMemberRecordSummaryResponse(BaseModel):
+    """클럽 구성원이 보는 멤버 기록 요약"""
+
+    user_id: int
+    club_id: int
+    handicap: Optional[float] = None
+    average_score: Optional[float] = None
+    recent_rounds_count: int = 0
 
 
 class ClubMemberAddRequest(BaseModel):
