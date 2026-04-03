@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
