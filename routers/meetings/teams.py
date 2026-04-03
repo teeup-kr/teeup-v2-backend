@@ -21,6 +21,11 @@ from schemas import (TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, T
 from utils.team_formation import TeamFormationEngine
 from utils.handicap_calculator import calculate_handicap_from_average_score
 from routers.auth import get_current_user
+from routers.meetings.workflow import (
+    is_meeting_time_started,
+    sync_rounding_completion_if_due,
+    reset_team_formation_confirmation,
+)
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -243,6 +248,13 @@ async def create_team(team_data: TeamCreate,
             print(f"모임을 찾을 수 없음: {meeting_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="모임을 찾을 수 없습니다")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다")
+
         print(f"모임 찾음: {meeting.name}")
 
         # 권한 확인 (임시 비활성화)
@@ -274,6 +286,7 @@ async def create_team(team_data: TeamCreate,
         print(f"객체 ID가 UUID인지 확인: {'-' in team.id}")
 
         db.add(team)
+        reset_team_formation_confirmation(meeting, db)
         db.commit()
         db.refresh(team)
 
@@ -399,6 +412,13 @@ async def update_team(team_id: int,
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="팀을 찾을 수 없습니다")
 
+    if sync_rounding_completion_if_due(team.meeting):
+        db.commit()
+        db.refresh(team)
+
+    if is_meeting_time_started(team.meeting.meeting_time):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다")
+
     # 권한 확인
     if not check_team_management_permission(current_user["user_id"], team.meeting, db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="팀 관리는 리더/매니저만 가능합니다")
@@ -408,6 +428,7 @@ async def update_team(team_id: int,
     for field, value in update_data.items():
         setattr(team, field, value)
 
+    reset_team_formation_confirmation(team.meeting, db)
     db.commit()
     db.refresh(team)
 
@@ -482,6 +503,13 @@ async def delete_team(team_id: int, db: Session = Depends(get_db), current_user:
             logger.warning(f"팀을 찾을 수 없음 - team_id: {team_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="팀을 찾을 수 없습니다")
 
+        if sync_rounding_completion_if_due(team.meeting):
+            db.commit()
+            db.refresh(team)
+
+        if is_meeting_time_started(team.meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다")
+
         logger.info(f"팀 정보 - id: {team.id}, name: {team.name}, meeting_id: {team.meeting_id}")
 
         # 권한 확인
@@ -495,6 +523,7 @@ async def delete_team(team_id: int, db: Session = Depends(get_db), current_user:
 
         # 팀 삭제 (CASCADE로 멤버들도 자동 삭제됨)
         db.delete(team)
+        reset_team_formation_confirmation(team.meeting, db)
         db.commit()
 
         logger.info(f"팀 삭제 완료 - team_id: {team_id}")

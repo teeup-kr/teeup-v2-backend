@@ -1102,6 +1102,9 @@ async def cancel_meeting(meeting_id: int,
         if meeting.status == MeetingStatus.CANCELED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 취소된 모임입니다.")
 
+        if meeting.status == MeetingStatus.IN_PROGRESS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="진행중인 모임은 취소할 수 없습니다.")
+
         previous_status = meeting.status
 
         # 모임 취소

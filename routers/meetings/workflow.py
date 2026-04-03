@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_
 from typing import List, Optional
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 import logging
 from schemas.team import TeamMemberResponse
@@ -24,7 +24,7 @@ from models import (
 from schemas import (
     MeetingType, MeetingSubtype, SettlementMethod,
     MeetingStatus, MeetingParticipantStatus, MeetingParticipantRole,
-    ClubRole, NotificationType, NotificationStatus
+    ClubRole, NotificationType, NotificationStatus, TeamStatus
 )
 from schemas import (
     RoundingMeetingCreate, SocialMeetingCreate, MeetingUpdate, 
@@ -73,6 +73,81 @@ def close_meetings_with_passed_deadline(db: Session) -> int:
         db.commit()
         logger.info(f"모집 마감일 경과 자동 처리: {len(meetings)}건 (meeting_ids={[m.id for m in meetings]})")
     return len(meetings)
+
+
+def is_meeting_time_started(meeting_time) -> bool:
+    """티업시간(모임 시작시간) 경과 여부"""
+    if not meeting_time:
+        return False
+    return datetime.now() >= meeting_time
+
+
+def get_rounding_auto_complete_deadline(meeting_time):
+    """라운딩 자동 종료 기준: 모임 다음날 00:00"""
+    if not meeting_time:
+        return None
+    next_day = meeting_time.date() + timedelta(days=1)
+    return datetime.combine(next_day, time.min)
+
+
+def sync_rounding_completion_if_due(meeting: Meeting) -> bool:
+    """자동 종료 기준을 넘긴 라운딩의 종료 시각을 동기화"""
+    if not meeting or meeting.meeting_type != MeetingType.ROUND:
+        return False
+    if meeting.rounding_completed_at:
+        return False
+
+    deadline = get_rounding_auto_complete_deadline(meeting.meeting_time)
+    if not deadline or datetime.now() < deadline:
+        return False
+
+    if not meeting.rounding_started_at and meeting.meeting_time:
+        meeting.rounding_started_at = meeting.meeting_time
+    meeting.rounding_completed_at = deadline
+    return True
+
+
+def close_roundings_with_passed_completion_deadline(db: Session) -> int:
+    """
+    다음날 00:00이 지난 라운딩을 자동 종료 처리.
+    라운딩 목록/상세 조회 시 호출되어, 화면 재진입만으로도 상태가 맞춰진다.
+    """
+    today_start = datetime.combine(datetime.now().date(), time.min)
+    meetings = db.query(Meeting).filter(
+        Meeting.meeting_type == MeetingType.ROUND,
+        Meeting.meeting_time.isnot(None),
+        Meeting.meeting_time < today_start,
+        Meeting.rounding_completed_at.is_(None),
+    ).all()
+
+    for meeting in meetings:
+        if not meeting.rounding_started_at and meeting.meeting_time:
+            meeting.rounding_started_at = meeting.meeting_time
+        meeting.rounding_completed_at = get_rounding_auto_complete_deadline(meeting.meeting_time)
+
+    if meetings:
+        db.commit()
+        logger.info(f"라운딩 자동 종료 처리: {len(meetings)}건 (meeting_ids={[m.id for m in meetings]})")
+    return len(meetings)
+
+
+def reset_team_formation_confirmation(meeting: Meeting, db: Session) -> bool:
+    """팀 편집이 발생하면 기존 확정 상태를 다시 미확정으로 되돌림"""
+    if not meeting:
+        return False
+
+    changed = False
+    if meeting.team_formation_confirmed_at is not None:
+        meeting.team_formation_confirmed_at = None
+        changed = True
+
+    teams = db.query(Team).filter(Team.meeting_id == meeting.id).all()
+    for team in teams:
+        if str(team.status or "").upper() != TeamStatus.DRAFT.value:
+            team.status = TeamStatus.DRAFT.value
+            changed = True
+
+    return changed
 
 
 # =============================================================================
@@ -158,9 +233,16 @@ async def add_round_guest(meeting_id: int,
         if not meeting or meeting.meeting_type != MeetingType.ROUND:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
         from utils.permissions import is_meeting_organizer_or_manager
         if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="라운딩 매니저만 게스트를 추가할 수 있습니다.")
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 게스트를 추가할 수 없습니다.")
 
         if meeting.max_participants is not None:
             current_participants = db.query(MeetingParticipant).filter(
@@ -368,6 +450,13 @@ async def start_team_formation(meeting_id: int,
         if not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 팀 편성을 시작할 수 있습니다.")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 시작할 수 없습니다.")
+
         # 모집마감 확인
         is_closed = meeting.application_closed_early or is_application_deadline_passed(meeting.application_deadline)
         if not is_closed:
@@ -422,6 +511,13 @@ async def auto_form_teams(meeting_id: int,
         if not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 팀을 편성할 수 있습니다.")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 변경할 수 없습니다.")
+
         # 모집마감 확인
         is_closed = meeting.application_closed_early or is_application_deadline_passed(meeting.application_deadline)
         if not is_closed:
@@ -437,6 +533,8 @@ async def auto_form_teams(meeting_id: int,
             meeting_type_name = "라운딩" if meeting.meeting_type == MeetingType.ROUND else "소셜"
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f"{meeting_type_name} 모임의 팀 편성을 위해서는 최소 {min_participants}명의 참가자가 필요합니다.")
+
+        reset_team_formation_confirmation(meeting, db)
 
         # 팀 편성 실행 (TeamFormationEngine 사용)
         formation_engine = TeamFormationEngine(db)
@@ -570,11 +668,20 @@ async def confirm_team_formation(meeting_id: int,
         if not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 팀 편성을 확정할 수 있습니다.")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 확정할 수 없습니다.")
+
+        if meeting.team_formation_confirmed_at:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 팀 편성이 확정되었습니다.")
+
         # 팀 편성 확정
         teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
         for team in teams:
-            team.is_confirmed = True
-            team.status = "CONFIRMED"
+            team.status = TeamStatus.CONFIRMED.value
 
         # 확정일자 저장
         meeting.team_formation_confirmed_at = datetime.now()
@@ -720,13 +827,22 @@ async def complete_rounding(meeting_id: int,
         if not is_meeting_organizer_or_manager(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 라운딩을 종료할 수 있습니다.")
 
-        # 모임 진행 중인지 확인
-        if not meeting.rounding_started_at:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="모임이 진행 중이 아닙니다.")
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
 
         # 이미 종료되었는지 확인
         if meeting.rounding_completed_at:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 라운딩이 종료되었습니다.")
+
+        if meeting.meeting_time and not is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 전에는 라운딩을 종료할 수 없습니다.")
+
+        if not meeting.meeting_time and not meeting.rounding_started_at:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="모임이 진행 중이 아닙니다.")
+
+        if not meeting.rounding_started_at:
+            meeting.rounding_started_at = meeting.meeting_time or datetime.now()
 
         # 라운딩 종료
         meeting.rounding_completed_at = get_kst_now()
@@ -869,6 +985,13 @@ async def confirm_settlement(meeting_id: int,
 
         if not can_manage_settlement(meeting_id, current_user.id, db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 정산을 확정할 수 있습니다.")
+
+        if meeting.meeting_type == MeetingType.ROUND:
+            if sync_rounding_completion_if_due(meeting):
+                db.commit()
+                db.refresh(meeting)
+            if not meeting.rounding_completed_at:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 종료 후 정산을 확정할 수 있습니다.")
 
         # 정산 확정 처리
         meeting.settlement_confirmed = True
