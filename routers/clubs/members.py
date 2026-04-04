@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import Optional
+from typing import List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,8 @@ from schemas import (
     MessageResponse, ClubRole, ClubStatus, MembershipStatus,
     ClubMemberAddRequest, ClubMemberRoleUpdateRequest,
     MemberNoteUpdate, MemberNoteResponse,
-    ClubMemberSearchResponse, ClubMemberRecordSummaryResponse, ClubMembershipResponse
+    ClubMemberSearchResponse, ClubMemberRecordSummaryResponse, ClubMemberRoundingHistoryItem,
+    ClubMembershipResponse,
 )
 from routers.auth import get_current_active_user
 from utils.datetime_utils import get_kst_now
@@ -116,7 +117,11 @@ async def get_club_member_record_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """클럽 구성원이 보는 특정 멤버의 기록 요약 (가입자만 접근 가능)"""
+    """클럽 구성원이 보는 특정 멤버의 기록 요약 (가입자만 접근 가능).
+
+    스코어·통계·내역은 모두 **클럽에 소속된 라운딩 모임**만 포함합니다.
+    다른 클럽에서 친 라운딩은 제외되며, 프라이빗 라운딩도 제외됩니다.
+    """
     try:
         club = _resolve_club_by_id_or_display_id(db, club_id)
 
@@ -153,31 +158,59 @@ async def get_club_member_record_summary(
                 detail="사용자를 찾을 수 없습니다.",
             )
 
-        # 클럽 내 ROUND 모임의 스코어 히스토리만 집계
+        # 클럽(club.id) 소속 ROUND만 집계 — 타 클럽 모임·프라이빗 라운딩 제외
         from sqlalchemy import func
         from models.enums import MeetingType
+
+        non_private_round_filter = (
+            UserScoreHistory.user_id == user_id,
+            Meeting.club_id == club.id,
+            Meeting.meeting_type == MeetingType.ROUND,
+            Meeting.is_private.is_(False),
+        )
 
         score_q = (
             db.query(UserScoreHistory)
             .join(Meeting, Meeting.id == UserScoreHistory.meeting_id)
-            .filter(
-                UserScoreHistory.user_id == user_id,
-                Meeting.club_id == club.id,
-                Meeting.meeting_type == MeetingType.ROUND,
-            )
+            .filter(*non_private_round_filter)
         )
 
         recent_rounds_count = int(score_q.count())
         avg_score_val = (
             db.query(func.avg(UserScoreHistory.gross_score))
             .join(Meeting, Meeting.id == UserScoreHistory.meeting_id)
-            .filter(
-                UserScoreHistory.user_id == user_id,
-                Meeting.club_id == club.id,
-                Meeting.meeting_type == MeetingType.ROUND,
-            )
+            .filter(*non_private_round_filter)
             .scalar()
         )
+
+        history_rows = (
+            db.query(UserScoreHistory, Meeting)
+            .join(Meeting, Meeting.id == UserScoreHistory.meeting_id)
+            .filter(*non_private_round_filter)
+            .order_by(UserScoreHistory.played_at.desc())
+            .limit(50)
+            .all()
+        )
+
+        rounding_history: List[ClubMemberRoundingHistoryItem] = []
+        for ush, mtg in history_rows:
+            net_val = float(ush.net_score) if ush.net_score is not None else None
+            hc_val = float(ush.handicap_used) if ush.handicap_used is not None else None
+            course = (mtg.course_name or mtg.venue_name or mtg.location or None)
+            if isinstance(course, str) and not course.strip():
+                course = None
+            rounding_history.append(
+                ClubMemberRoundingHistoryItem(
+                    meeting_id=mtg.id,
+                    meeting_name=mtg.name,
+                    meeting_time=mtg.meeting_time,
+                    course_name=course,
+                    gross_score=ush.gross_score,
+                    net_score=net_val,
+                    handicap_used=hc_val,
+                    played_at=ush.played_at,
+                )
+            )
 
         handicap_source = (
             float(target_user.handicap)
@@ -195,6 +228,7 @@ async def get_club_member_record_summary(
             handicap=handicap_source,
             average_score=average_score,
             recent_rounds_count=recent_rounds_count,
+            rounding_history=rounding_history,
         )
     except HTTPException:
         raise
