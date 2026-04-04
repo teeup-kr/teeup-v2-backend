@@ -127,6 +127,8 @@ class TestMeetings:
             "reservation_name": "김테스트",
             "application_deadline": application_deadline.isoformat(),
             "club_id": club_id,
+            "team_formation_mode": "GENDER_MIXED_HANDICAP",
+            "team_size": 4,
         }
 
         response = requests.post(f"{BASE_URL}/rounds/", json=round_data, headers={
@@ -158,6 +160,36 @@ class TestMeetings:
         })
         assert response.status_code == 200
         return response.json()["id"]
+
+    def test_bulk_update_round_teams(self):
+        """라운딩 팀 상태 전체 저장"""
+        club_id = self.create_test_club()
+        leader_token = self.get_auth_token()
+        leader_user_id = self.get_user_id(leader_token)
+        round_id = self.create_test_round(club_id, datetime.now() + timedelta(minutes=30))
+
+        response = requests.put(
+            f"{BASE_URL}/rounds/{round_id}/teams",
+            json={
+                "teams": [
+                    {
+                        "name": "팀 1",
+                        "members": [
+                            {"user_id": leader_user_id},
+                        ],
+                    }
+                ]
+            },
+            headers={"Authorization": f"Bearer {leader_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["name"] == "팀 1"
+        assert len(data[0]["members"]) == 1
+        assert data[0]["members"][0]["user_id"] == leader_user_id
     
     def test_create_meeting_success(self):
         """미팅 생성 성공"""

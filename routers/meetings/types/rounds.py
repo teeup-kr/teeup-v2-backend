@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_, case
 from typing import List, Optional
 from datetime import date, datetime, time
+from decimal import Decimal
 from utils.datetime_utils import get_kst_now
 import logging
 
@@ -15,7 +16,7 @@ from models import (User, Club, ClubMembership, Meeting, MeetingParticipant, Tea
                     ParticipantType, Gender)
 from schemas import (MeetingType, MeetingSubtype, SettlementMethod, MeetingStatus, ClubRole, TeamFormationMode)
 from schemas import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, MeetingParticipantResponse,
-                     PaginatedResponse, TeamResponse, TeamMemberResponse, TeamStatus)
+                     PaginatedResponse, TeamResponse, TeamMemberResponse, TeamStatus, TeamBulkUpdateRequest)
 from routers.auth import get_current_active_user, get_current_user, get_current_user_allow_both, get_user_role_from_token
 from fastapi.security import HTTPAuthorizationCredentials
 from utils.jwt_auth import security
@@ -26,6 +27,7 @@ from utils.notification_service import (
     notify_round_participants_status_changed,
 )
 from utils.handicap_calculator import calculate_handicap_from_average_score
+from utils.handicap_calculator import get_user_handicap_for_formation
 from routers.meetings.workflow import (
     close_meetings_with_passed_deadline,
     close_roundings_with_passed_completion_deadline,
@@ -1012,6 +1014,131 @@ async def get_round_teams(meeting_id: int,
         raise
     except Exception as e:
         logger.error(f"팀 목록 조회 오류: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+
+@router.put("/{meeting_id}/teams", response_model=List[TeamResponse])
+async def update_round_teams(
+    meeting_id: int,
+    team_data: TeamBulkUpdateRequest,
+    current_user: User = Depends(get_current_user_allow_both),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None,
+    db: Session = Depends(get_db)):
+    """라운딩 팀 상태 전체 저장"""
+    try:
+        meeting = db.query(Meeting).filter(and_(Meeting.id == meeting_id,
+                                                Meeting.meeting_type == MeetingType.ROUND)).first()
+
+        if not meeting:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
+
+        user_role = get_user_role_from_token(credentials, request)
+        user_id = current_user.id
+
+        if user_role != "ADMIN":
+            from utils.permissions import is_meeting_organizer_or_manager
+            is_creator = meeting.created_by == user_id
+            if not is_meeting_organizer_or_manager(meeting_id, user_id, db) and not is_creator:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="매니저/리더만 팀 편성을 저장할 수 있습니다.")
+
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다.")
+
+        participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).all()
+        participant_by_key = {}
+        for participant in participants:
+            if participant.user_id:
+                participant_by_key[f"user:{participant.user_id}"] = participant
+            elif participant.guest_id:
+                participant_by_key[f"guest:{participant.guest_id}"] = participant
+
+        assigned_member_keys = set()
+        for team in team_data.teams:
+            for member in team.members:
+                if member.user_id:
+                    member_key = f"user:{member.user_id}"
+                elif member.guest_id:
+                    member_key = f"guest:{member.guest_id}"
+                else:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="팀 멤버에는 user_id 또는 guest_id가 필요합니다.")
+
+                if member_key not in participant_by_key:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="라운딩 참가자가 아닌 멤버가 포함되어 있습니다.")
+
+                if member_key in assigned_member_keys:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="한 참가자는 하나의 팀에만 속할 수 있습니다.")
+
+                assigned_member_keys.add(member_key)
+
+        existing_teams = db.query(Team).filter(Team.meeting_id == meeting_id).all()
+        existing_team_ids = [team.id for team in existing_teams]
+        if existing_team_ids:
+            db.query(TeamMember).filter(TeamMember.team_id.in_(existing_team_ids)).delete(synchronize_session=False)
+
+        db.query(Team).filter(Team.meeting_id == meeting_id).delete(synchronize_session=False)
+
+        for team_index, team in enumerate(team_data.teams):
+            total_handicap = 0.0
+            for member in team.members:
+                if member.user_id:
+                    handicap = get_user_handicap_for_formation(db, member.user_id)
+                    participant = participant_by_key[f"user:{member.user_id}"]
+                    if handicap is None and participant.handicap is not None:
+                        handicap = participant.handicap
+                else:
+                    guest = db.query(Guest).filter(Guest.id == member.guest_id).first()
+                    handicap = float(guest.handicap) if guest and guest.handicap is not None else None
+
+                if handicap is not None:
+                    total_handicap += float(handicap)
+
+            new_team = Team(
+                name=team.name,
+                meeting_id=meeting_id,
+                formation_mode=meeting.team_formation_mode,
+                status=TeamStatus.DRAFT.value,
+                tee_off_order=team_index + 1,
+            )
+
+            if team.members:
+                new_team.total_handicap = Decimal(str(round(total_handicap, 1)))
+
+            db.add(new_team)
+            db.flush()
+
+            for member_index, member in enumerate(team.members):
+                db.add(
+                    TeamMember(
+                        team_id=new_team.id,
+                        user_id=member.user_id,
+                        guest_id=member.guest_id,
+                        order=member_index + 1,
+                    )
+                )
+
+        reset_team_formation_confirmation(meeting, db)
+        db.commit()
+        db.refresh(meeting)
+
+        return await get_round_teams(
+            meeting_id=meeting_id,
+            current_user=current_user,
+            credentials=credentials,
+            request=request,
+            db=db,
+        )
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"팀 상태 전체 저장 오류: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
 
 

@@ -118,6 +118,17 @@ class TeamMemberAddRequest(BaseModel):
     participant_id: Optional[int] = Field(None, description="참가자 ID (MeetingParticipant.id)")
 
 
+class TeamBulkItem(BaseModel):
+    """모임 단위 팀 상태 저장용 팀 항목"""
+    name: str = Field(..., min_length=1, max_length=255, description="팀 이름")
+    members: List[TeamMemberAddRequest] = Field(default_factory=list, description="팀 멤버 목록")
+
+
+class TeamBulkUpdateRequest(BaseModel):
+    """모임 단위 팀 상태 전체 저장 요청"""
+    teams: List[TeamBulkItem] = Field(default_factory=list, description="최종 팀 목록")
+
+
 class TeamFormationRequest(BaseModel):
     formation_mode: TeamFormationMode = Field(..., description="편성 모드")
     team_size: int = Field(..., ge=2, le=4, description="팀 크기")

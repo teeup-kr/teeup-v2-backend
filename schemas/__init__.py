@@ -34,7 +34,7 @@ from .meeting import (RoundingMeetingCreate, MeetingUpdate, MeetingResponse, Mee
 
 # 팀 관련 스키마
 from .team import (TeamCreate, TeamUpdate, TeamResponse, TeamMemberResponse, GuestCreate, GuestUpdate, GuestResponse,
-                   TeamFormationRequest, TeamFormationResponse, TeamMemberAddRequest)
+                   TeamFormationRequest, TeamFormationResponse, TeamMemberAddRequest, TeamBulkItem, TeamBulkUpdateRequest)
 
 # 결제 관련 스키마 (플랜, 결제 수단, 구독, 결제 포함)
 from .payment import (PlanCreate, PlanUpdate, PlanResponse, PaymentMethodCreate, PaymentMethodUpdate,
@@ -150,6 +150,8 @@ __all__ = [
     "TeamFormationRequest",
     "TeamFormationResponse",
     "TeamMemberAddRequest",
+    "TeamBulkItem",
+    "TeamBulkUpdateRequest",
     # Payment
     "PlanCreate",
     "PlanUpdate",
