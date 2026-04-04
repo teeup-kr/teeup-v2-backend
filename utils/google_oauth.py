@@ -181,19 +181,38 @@ class GoogleOAuth:
         self.user_info_url = "https://www.googleapis.com/oauth2/v2/userinfo"
 
     def _resolve_redirect_uri(
-        self, redirect_uri: str, authorizationCode: str, codeVerifier: str
+        self,
+        client_type: str,
+        redirect_uri: str,
+        authorizationCode: str,
+        codeVerifier: Optional[str],
     ) -> Dict[str, str]:
-
-        # 클라이언트 타입
-        client_type: str | None = self.client_types.get(redirect_uri)
-        if not client_type:
+        if client_type not in self.client_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="유효하지 않은 리디렉션 URI입니다",
+                detail="유효하지 않은 클라이언트 타입입니다",
             )
 
-        # 클라이언트 ID
-        client_id: str | None = self.client_ids.get(client_type)
+        if client_type == "web":
+            if not redirect_uri or redirect_uri != self.redirect_uris["web"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="유효하지 않은 리디렉션 URI입니다",
+                )
+            if not codeVerifier:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="웹 OAuth 요청에는 codeVerifier가 필요합니다",
+                )
+            client_id = self.client_ids["web"]
+        else:
+            if redirect_uri not in ("", None):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="앱 OAuth 요청의 redirectUri가 유효하지 않습니다",
+                )
+            client_id = self.client_ids["web"]
+
         if not client_id:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -206,16 +225,18 @@ class GoogleOAuth:
             "grant_type": "authorization_code",
             "code": authorizationCode,
             "redirect_uri": redirect_uri,
-            "code_verifier": codeVerifier,
         }
 
-        # 웹인 경우 client_secret 추가
-        if client_type == "web":
-            data["client_secret"] = settings.GOOGLE_CLIENT_SECRET
+        if not settings.GOOGLE_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OAuth 클라이언트 시크릿이 설정되지 않았습니다",
+            )
 
-        # if client_type == "android":
-        #     data["code"] = authorizationCode
-        #     data["code_verifier"] = codeVerifier
+        data["client_secret"] = settings.GOOGLE_CLIENT_SECRET
+
+        if client_type == "web":
+            data["code_verifier"] = codeVerifier
 
         return data
 
@@ -251,8 +272,9 @@ class GoogleOAuth:
     def exchange_code_for_token(
         self,
         authorizationCode: str,
-        codeVerifier: str,
+        codeVerifier: Optional[str],
         redirect_uri: str,
+        client_type: str,
     ) -> Dict[str, Any]:
         response = None
         """인증 코드를 액세스 토큰으로 교환"""
@@ -267,7 +289,7 @@ class GoogleOAuth:
 
             # 리디렉션 URI로 요청 페이로드 생성
             data = self._resolve_redirect_uri(
-                redirect_uri, authorizationCode, codeVerifier
+                client_type, redirect_uri, authorizationCode, codeVerifier
             )
 
             logger.info(f"Google OAuth 토큰 교환 요청: {data}")

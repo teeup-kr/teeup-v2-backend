@@ -26,7 +26,13 @@ from utils.notification_service import (
     notify_round_participants_status_changed,
 )
 from utils.handicap_calculator import calculate_handicap_from_average_score
-from routers.meetings.workflow import close_meetings_with_passed_deadline
+from routers.meetings.workflow import (
+    close_meetings_with_passed_deadline,
+    close_roundings_with_passed_completion_deadline,
+    is_meeting_time_started,
+    sync_rounding_completion_if_due,
+    reset_team_formation_confirmation,
+)
 
 router = APIRouter(prefix="/rounds", tags=["라운딩 관리"])
 logger = logging.getLogger(__name__)
@@ -52,6 +58,11 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
         close_meetings_with_passed_deadline(db)
     except Exception as e:
         logger.warning(f"마감일 경과 자동 갱신 스킵: {e}")
+
+    try:
+        close_roundings_with_passed_completion_deadline(db)
+    except Exception as e:
+        logger.warning(f"라운딩 자동 종료 갱신 스킵: {e}")
 
     # 프라이빗 라운딩: 목록에는 참가자/생성자/클럽 리더·매니저만 노출
     user_participant_meeting_ids = db.query(
@@ -401,6 +412,10 @@ async def get_round(meeting_id: int,
             if not membership:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="해당 클럽의 멤버가 아닙니다.")
 
+    if sync_rounding_completion_if_due(meeting):
+        db.commit()
+        db.refresh(meeting)
+
     # 참가자 수 조회
     participant_count = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id).count()
 
@@ -584,6 +599,12 @@ async def join_round(meeting_id: int,
 
     if existing_participant:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 참가한 라운딩입니다.")
+
+    if meeting.application_deadline and datetime.now() > meeting.application_deadline:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="참가 신청 마감되었습니다.")
+
+    if meeting.application_closed_early:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="참가 신청이 조기 마감되었습니다.")
 
     # 최대 참가자 수 확인
     current_participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).count()
@@ -1061,6 +1082,7 @@ async def add_team_member(
         team_member = TeamMember(team_id=team_id, user_id=user_id, guest_id=guest_id, order=existing_members_count + 1)
 
         db.add(team_member)
+        reset_team_formation_confirmation(meeting, db)
         db.commit()
         db.refresh(team_member)
 
@@ -1164,6 +1186,13 @@ async def remove_team_member(meeting_id: int,
         if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="라운딩을 찾을 수 없습니다.")
 
+        if sync_rounding_completion_if_due(meeting):
+            db.commit()
+            db.refresh(meeting)
+
+        if is_meeting_time_started(meeting.meeting_time):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다.")
+
         # 팀 존재 확인
         team = db.query(Team).filter(and_(Team.id == team_id, Team.meeting_id == meeting_id)).first()
 
@@ -1179,6 +1208,7 @@ async def remove_team_member(meeting_id: int,
 
         # 팀 멤버 삭제
         db.delete(team_member)
+        reset_team_formation_confirmation(meeting, db)
         db.commit()
 
         return {"message": "팀 멤버가 제거되었습니다."}

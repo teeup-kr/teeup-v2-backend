@@ -40,7 +40,10 @@ def _detect_client_type(request: Request, redirect_uri: str | None) -> str:
         "ios": settings.GOOGLE_IOS_REDIRECT_URI,
     }[client_type]
 
-    if redirect_uri != expected_redirect_uri:
+    if client_type == "web" and redirect_uri != expected_redirect_uri:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="클라이언트 타입과 redirectUri가 일치하지 않습니다.")
+
+    if client_type != "web" and redirect_uri and redirect_uri != expected_redirect_uri:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="클라이언트 타입과 redirectUri가 일치하지 않습니다.")
 
     return client_type
@@ -199,13 +202,20 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
         codeVerifier = request.codeVerifier
 
         redirect_uri = request.redirectUri
+        client_type = _detect_client_type(http_request, redirect_uri)
         if not redirect_uri:
+            redirect_uri = {
+                "web": settings.GOOGLE_WEB_REDIRECT_URI,
+                "android": "",
+                "ios": "",
+            }[client_type]
+
+        if client_type == "web" and not codeVerifier:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth redirectUri가 필요합니다",
+                detail="웹 OAuth 요청에는 codeVerifier가 필요합니다",
             )
 
-        client_type = _detect_client_type(http_request, redirect_uri)
         session_policy = "app_persistent" if _is_app_client(client_type) else "web_default"
         refresh_expire_delta = _get_refresh_expire_delta(client_type)
 
@@ -216,12 +226,13 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
 
         logger.info(f"Google OAuth callback: "
                     f"code={authorizationCode[:10]}..., "
-                    f"verifier_len={len(codeVerifier)}")
+                    f"verifier_len={len(codeVerifier) if codeVerifier else 0}")
 
         oauth_token_data = google_oauth.exchange_code_for_token(
             authorizationCode=authorizationCode,
             codeVerifier=codeVerifier,
             redirect_uri=redirect_uri,
+            client_type=client_type,
         )
 
         print("!!!!!!!!!!!!!token_data:", oauth_token_data)

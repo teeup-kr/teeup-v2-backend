@@ -83,6 +83,81 @@ class TestMeetings:
         assert response.status_code == 200
         data = response.json()
         return data["id"]
+
+    def get_user_id(self, token):
+        """토큰으로 현재 사용자 ID 조회"""
+        response = requests.get(f"{BASE_URL}/users/me", headers={
+            "Authorization": f"Bearer {token}"
+        })
+        assert response.status_code == 200
+        return response.json()["id"]
+
+    def add_member_to_club(self, club_id, email="user2@teeup.run", password="test1234"):
+        """테스트용 클럽에 기존 테스트 사용자를 활성 멤버로 추가"""
+        member_token = self.get_auth_token(email, password)
+        member_user_id = self.get_user_id(member_token)
+        leader_token = self.get_auth_token()
+
+        response = requests.post(
+            f"{BASE_URL}/clubs/{club_id}/members",
+            json={"user_id": member_user_id, "role": "MEMBER"},
+            headers={"Authorization": f"Bearer {leader_token}"}
+        )
+        assert response.status_code == 200
+        return member_token, member_user_id
+
+    def create_test_round(self, club_id, application_deadline):
+        """실제 /rounds 경로로 테스트용 라운딩 생성"""
+        token = self.get_auth_token()
+        meeting_time = datetime.now() + timedelta(hours=1)
+        round_data = {
+            "name": f"테스트 라운딩 {int(time.time())}",
+            "description": "테스트용 라운딩입니다",
+            "location": "서울 골프클럽",
+            "meeting_time": meeting_time.isoformat(),
+            "tee_times": ["08:00", "08:10", "08:20"],
+            "max_participants": 4,
+            "meeting_type": "ROUND",
+            "meeting_subtype": "REGULAR",
+            "total_cost": 100000,
+            "green_fee": 80000,
+            "caddy_fee": 20000,
+            "cart_fee": 0,
+            "settlement_method": "EQUAL_SPLIT",
+            "reservation_name": "김테스트",
+            "application_deadline": application_deadline.isoformat(),
+            "club_id": club_id,
+        }
+
+        response = requests.post(f"{BASE_URL}/rounds/", json=round_data, headers={
+            "Authorization": f"Bearer {token}"
+        })
+        assert response.status_code == 200
+        return response.json()["id"]
+
+    def create_test_social(self, club_id, application_deadline):
+        """실제 /socials 경로로 테스트용 소셜 생성"""
+        token = self.get_auth_token()
+        meeting_time = datetime.now() + timedelta(hours=1)
+        social_data = {
+            "name": f"테스트 소셜 {int(time.time())}",
+            "description": "테스트용 소셜입니다",
+            "type": "CASUAL",
+            "meeting_time": meeting_time.isoformat(),
+            "max_participants": 4,
+            "venue_name": "테스트 라운지",
+            "social_cost": 30000,
+            "settlement_method": "EQUAL_SPLIT",
+            "club_id": club_id,
+            "application_deadline": application_deadline.isoformat(),
+            "social_notes": "테스트 메모",
+        }
+
+        response = requests.post(f"{BASE_URL}/socials/", json=social_data, headers={
+            "Authorization": f"Bearer {token}"
+        })
+        assert response.status_code == 200
+        return response.json()["id"]
     
     def test_create_meeting_success(self):
         """미팅 생성 성공"""
@@ -377,3 +452,29 @@ class TestMeetings:
             "Authorization": f"Bearer {token}"
         })
         assert response.status_code == 200
+
+    def test_join_round_rejects_after_application_deadline(self):
+        """라운딩 신청 기한 경과 후 참가 거부"""
+        club_id = self.create_test_club()
+        member_token, _ = self.add_member_to_club(club_id)
+        round_id = self.create_test_round(club_id, datetime.now() - timedelta(minutes=1))
+
+        response = requests.post(f"{BASE_URL}/rounds/{round_id}/join", headers={
+            "Authorization": f"Bearer {member_token}"
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "참가 신청 마감되었습니다."
+
+    def test_join_social_rejects_after_application_deadline(self):
+        """소셜 신청 기한 경과 후 참가 거부"""
+        club_id = self.create_test_club()
+        member_token, _ = self.add_member_to_club(club_id)
+        social_id = self.create_test_social(club_id, datetime.now() - timedelta(minutes=1))
+
+        response = requests.post(f"{BASE_URL}/socials/{social_id}/join", headers={
+            "Authorization": f"Bearer {member_token}"
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "참가 신청 마감되었습니다."
