@@ -616,6 +616,18 @@ async def join_social(
     if existing_participant:
         # 이미 참가한 경우에도 200 (idempotent - 프론트 반복 클릭 대응)
         return {"message": "이미 참가한 소셜 모임입니다.", "already_joined": True}
+
+    if meeting.application_deadline and datetime.now() > meeting.application_deadline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="참가 신청 마감되었습니다."
+        )
+
+    if meeting.application_closed_early:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="참가 신청이 조기 마감되었습니다."
+        )
     
     # 최대 참가자 수 확인 (max_participants가 null이면 제한 없음)
     if meeting.max_participants is not None:

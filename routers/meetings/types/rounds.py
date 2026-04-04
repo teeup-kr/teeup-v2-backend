@@ -604,6 +604,12 @@ async def join_round(meeting_id: int,
     if existing_participant:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이미 참가한 라운딩입니다.")
 
+    if meeting.application_deadline and datetime.now() > meeting.application_deadline:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="참가 신청 마감되었습니다.")
+
+    if meeting.application_closed_early:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="참가 신청이 조기 마감되었습니다.")
+
     # 최대 참가자 수 확인
     current_participants = db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting_id).count()
 
