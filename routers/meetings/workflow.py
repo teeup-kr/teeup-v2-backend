@@ -323,8 +323,6 @@ async def close_application_early(meeting_id: int,
 
         # 조기 마감 처리
         meeting.application_closed_early = True
-        if str(getattr(meeting.status, "value", meeting.status)) == "SCHEDULED":
-            meeting.status = MeetingStatus.IN_PROGRESS
         logger.info(f"조기 마감 플래그 설정 - meeting_id: {meeting_id}")
 
         try:
