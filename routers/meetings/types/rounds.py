@@ -153,8 +153,7 @@ async def get_rounds(page: int = Query(1, ge=1, description="페이지 번호"),
             if creator:
                 created_by_name = creator.nickname or creator.name
 
-        meeting_dict = {**meeting.__dict__}
-        meeting_dict.pop("_sa_instance_state", None)
+        meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
         meeting_dict["tee_times"] = meeting.tee_times or []
 
         meeting_responses.append(
@@ -346,8 +345,7 @@ async def create_round(meeting_data: RoundingMeetingCreate,
             hour, minute = map(int, tee_time_str.split(':'))
             tee_time = time(hour, minute)
 
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
     meeting_dict["tee_times"] = meeting.tee_times or []
 
     return MeetingResponse(**meeting_dict,
@@ -428,8 +426,7 @@ async def get_round(meeting_id: int,
         if creator:
             created_by_name = creator.nickname or creator.name
 
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
     meeting_dict["tee_times"] = meeting.tee_times or []
 
     return MeetingResponse(**meeting_dict,
@@ -529,8 +526,7 @@ async def update_round(meeting_id: int,
         if creator:
             created_by_name = creator.nickname or creator.name
 
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
+    meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
     meeting_dict["tee_times"] = meeting.tee_times or []
 
     return MeetingResponse(**meeting_dict,
@@ -685,8 +681,7 @@ async def get_round_participants(meeting_id: int,
             db.commit()
             db.refresh(meeting)
 
-        if is_meeting_time_started(meeting.meeting_time):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="티업시간 이후에는 팀 편성을 수정할 수 없습니다.")
+        # 티업 이후에도 참가자 조회 허용 (기록 입력 등). 팀 수정은 teams 라우트에서 차단.
 
         # 프라이빗 라운딩인 경우 권한 체크
         user_role = get_user_role_from_token(credentials, request)

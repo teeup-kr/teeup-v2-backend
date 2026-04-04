@@ -846,6 +846,8 @@ async def complete_rounding(meeting_id: int,
 
         # 라운딩 종료
         meeting.rounding_completed_at = get_kst_now()
+        meeting.is_completed = True
+        meeting.status = MeetingStatus.COMPLETED
         db.commit()
         db.refresh(meeting)
 

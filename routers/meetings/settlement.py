@@ -47,7 +47,7 @@ def assert_club_settlement_api_allowed(meeting: Meeting, db: Session) -> None:
     if club is not None and not club_settlement_enabled(club):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="이 클럽에서는 정산 기능이 비활성화되어 있습니다.",
+            detail="클럽에서는 정산 기능이 비활성화되어 있습니다.",
         )
 
 

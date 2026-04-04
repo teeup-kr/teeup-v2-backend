@@ -14,6 +14,7 @@ from database import get_db
 from models import (
     User, Club, ClubMembership, Meeting, MeetingParticipant, ParticipantType, Guest
 )
+from models.enums import MeetingType as DbMeetingType
 from schemas import (
     MeetingType, MeetingStatus, ClubRole
 )
@@ -29,6 +30,27 @@ from routers.meetings.workflow import close_meetings_with_passed_deadline
 
 router = APIRouter(prefix="/socials", tags=["소셜 모임 관리"])
 logger = logging.getLogger(__name__)
+
+
+def _meeting_to_response(meeting: Meeting, club: Club, participant_count: int) -> MeetingResponse:
+    """ORM 행 → MeetingResponse. SQLAlchemy 2.x는 __dict__에 컬럼이 없을 수 있어 테이블 메타데이터로 수집."""
+    d = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
+    d["tee_times"] = meeting.tee_times or []
+    st = getattr(meeting, "social_type", None)
+    d["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
+    for key in ("meeting_type", "meeting_subtype", "settlement_method"):
+        v = d.get(key)
+        if v is not None and hasattr(v, "value"):
+            d[key] = v.value
+    sv = d.get("status")
+    if sv is not None and hasattr(sv, "value"):
+        d["status"] = sv.value
+    return MeetingResponse(
+        **d,
+        club_name=club.name,
+        participant_count=participant_count,
+        settlement_enabled=club_settlement_enabled(club),
+    )
 
 
 # =============================================================================
@@ -131,18 +153,8 @@ async def get_socials(
             MeetingParticipant.meeting_id == meeting.id
         ).count()
         
-        meeting_dict = {**meeting.__dict__}
-        meeting_dict.pop("_sa_instance_state", None)
-        meeting_dict["tee_times"] = meeting.tee_times or []
-        st = getattr(meeting, "social_type", None)
-        meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
         meeting_responses.append(
-            MeetingResponse(
-                **meeting_dict,
-                club_name=meeting.club.name,
-                participant_count=participant_count,
-                settlement_enabled=club_settlement_enabled(meeting.club),
-            )
+            _meeting_to_response(meeting, meeting.club, participant_count)
         )
     
     return PaginatedResponse(
@@ -206,7 +218,7 @@ async def create_social(
         meeting_time=meeting_data.meeting_time,
         application_deadline=meeting_data.application_deadline,
         max_participants=meeting_data.max_participants,
-        meeting_type=MeetingType.SOCIAL,
+        meeting_type=DbMeetingType.SOCIAL,
         venue_name=meeting_data.venue_name,
         location=meeting_data.venue_name,
         social_cost=meeting_data.social_cost,
@@ -214,7 +226,7 @@ async def create_social(
         social_notes=meeting_data.social_notes,
         social_type=social_type,
         club_id=meeting_data.club_id,
-        status=MeetingStatus.SCHEDULED,
+        status=MeetingStatus.SCHEDULED.value,
         tee_times=[],
         created_by=current_user.id
     )
@@ -260,18 +272,7 @@ async def create_social(
         logger = logging.getLogger(__name__)
         logger.error(f"소셜모임 등록 알림 전송 실패: {str(e)}")
     
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
-    meeting_dict["tee_times"] = meeting.tee_times or []
-    st = getattr(meeting, "social_type", None)
-    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
-
-    return MeetingResponse(
-        **meeting_dict,
-        club_name=club.name,
-        participant_count=1,
-        settlement_enabled=club_settlement_enabled(club),
-    )
+    return _meeting_to_response(meeting, club, 1)
 
 # =============================================================================
 # 소셜 모임 상세 조회
@@ -326,17 +327,7 @@ async def get_social(
         MeetingParticipant.meeting_id == meeting.id
     ).count()
     
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
-    meeting_dict["tee_times"] = meeting.tee_times or []
-    st = getattr(meeting, "social_type", None)
-    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
-    return MeetingResponse(
-        **meeting_dict,
-        club_name=meeting.club.name,
-        participant_count=participant_count,
-        settlement_enabled=club_settlement_enabled(meeting.club),
-    )
+    return _meeting_to_response(meeting, meeting.club, participant_count)
 
 # =============================================================================
 # 소셜 모임 수정
@@ -418,17 +409,7 @@ async def update_social(
         MeetingParticipant.meeting_id == meeting.id
     ).count()
     
-    meeting_dict = {**meeting.__dict__}
-    meeting_dict.pop("_sa_instance_state", None)
-    meeting_dict["tee_times"] = meeting.tee_times or []
-    st = getattr(meeting, "social_type", None)
-    meeting_dict["type"] = st.value if st is not None and hasattr(st, "value") else (st if isinstance(st, str) else None)
-    return MeetingResponse(
-        **meeting_dict,
-        club_name=club.name,
-        participant_count=participant_count,
-        settlement_enabled=club_settlement_enabled(club),
-    )
+    return _meeting_to_response(meeting, club, participant_count)
 
 # =============================================================================
 # 소셜 모임 삭제

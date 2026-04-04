@@ -284,8 +284,7 @@ async def get_rounding_meetings(page: int = Query(1, ge=1),
                 if creator:
                     created_by_name = creator.nickname or creator.name
 
-            meeting_dict = {**meeting.__dict__}
-            meeting_dict.pop("_sa_instance_state", None)
+            meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
             meeting_dict["tee_times"] = meeting.tee_times or []
             
             meeting_responses.append(MeetingResponse(
@@ -869,8 +868,7 @@ async def get_meeting(meeting_id: int,
             if creator:
                 created_by_name = creator.nickname or creator.name
 
-        meeting_dict = {**meeting.__dict__}
-        meeting_dict.pop("_sa_instance_state", None)
+        meeting_dict = {col.key: getattr(meeting, col.key) for col in Meeting.__table__.columns}
         meeting_dict["tee_times"] = meeting.tee_times or []
         
         return MeetingResponse(

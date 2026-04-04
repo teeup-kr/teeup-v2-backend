@@ -119,14 +119,35 @@ class ClubMembershipResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClubMemberRoundingHistoryItem(BaseModel):
+    """해당 클럽 소속·공개 라운딩만 (타 클럽·프라이빗 제외) 멤버의 라운드별 스코어"""
+
+    meeting_id: int
+    meeting_name: str
+    meeting_time: Optional[datetime] = None
+    course_name: Optional[str] = None
+    gross_score: int
+    net_score: Optional[float] = None
+    handicap_used: Optional[float] = None
+    played_at: datetime
+
+
 class ClubMemberRecordSummaryResponse(BaseModel):
-    """클럽 구성원이 보는 멤버 기록 요약"""
+    """클럽 구성원이 보는 멤버 기록 요약. 통계·내역은 요청한 클럽 모임만 (타 클럽·프라이빗 제외)."""
 
     user_id: int
     club_id: int
-    handicap: Optional[float] = None
-    average_score: Optional[float] = None
-    recent_rounds_count: int = 0
+    handicap: Optional[float] = Field(None, description="회원 프로필 핸디(전역)")
+    average_score: Optional[float] = Field(
+        None, description="클럽 공개 라운딩 gross 평균 (타 클럽·프라이빗 제외)"
+    )
+    recent_rounds_count: int = Field(
+        0, description="클럽 공개 라운딩 기록 건수 (타 클럽·프라이빗 제외)"
+    )
+    rounding_history: List[ClubMemberRoundingHistoryItem] = Field(
+        default_factory=list,
+        description="클럽 소속 공개 라운딩만 (타 클럽·프라이빗 제외), 최근 순",
+    )
 
 
 class ClubMemberAddRequest(BaseModel):
