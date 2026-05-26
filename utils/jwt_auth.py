@@ -18,6 +18,33 @@ security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 
+ACCOUNT_TYPES = frozenset({"user", "admin"})
+
+
+def resolve_account_type(payload: Dict[str, Any]) -> str:
+    """JWT payload에서 계정 종류(user/admin) 추출. type 클레임은 access/refresh 용도."""
+    account_type = payload.get("account_type")
+    if account_type in ACCOUNT_TYPES:
+        return account_type
+    legacy_type = payload.get("type")
+    if legacy_type in ACCOUNT_TYPES:
+        return legacy_type
+    return "user"
+
+
+def _prepare_token_payload(data: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+    """
+    입력 data의 type(user/admin)을 account_type으로 분리.
+    password_reset·admin_temp 등 특수 type은 그대로 반환.
+    """
+    to_encode = data.copy()
+    raw_type = to_encode.pop("type", None)
+    if raw_type in ACCOUNT_TYPES:
+        to_encode["account_type"] = raw_type
+        return to_encode, None
+    return to_encode, raw_type
+
+
 class JWTAuth:
     """JWT 토큰 인증 클래스"""
     
@@ -29,15 +56,17 @@ class JWTAuth:
     def create_access_token(self, data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
         """액세스 토큰 생성"""
         try:
-            to_encode = data.copy()
+            to_encode, special_type = _prepare_token_payload(data)
             
             if expires_delta:
                 expire = get_kst_now() + expires_delta
             else:
                 expire = get_kst_now() + timedelta(minutes=self.expire_minutes)
             
-            # type이 이미 있으면 덮어쓰지 않음 (password_reset 등 특수 토큰용)
-            if "type" not in to_encode:
+            # 특수 토큰(password_reset 등)은 type 유지, 일반 로그인은 access
+            if special_type is not None:
+                to_encode["type"] = special_type
+            elif "type" not in to_encode:
                 to_encode["type"] = "access"
             
             to_encode.update({
@@ -62,7 +91,7 @@ class JWTAuth:
             import secrets
             import string
             
-            to_encode = data.copy()
+            to_encode, _special_type = _prepare_token_payload(data)
             refresh_delta = expires_delta or timedelta(days=settings.JWT_WEB_REFRESH_EXPIRE_DAYS)
             expire = get_kst_now() + refresh_delta
             
