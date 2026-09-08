@@ -13,7 +13,7 @@ from database import get_db
 from models import User, Admin, UserStatus, Provider, RefreshTokenBlacklist, TokenRevokeReason
 from schemas import MessageResponse
 from services.push_token_service import deactivate_user_push_tokens, sync_user_push_token
-from utils.jwt_auth import jwt_auth
+from utils.jwt_auth import jwt_auth, resolve_account_type
 from utils.csrf_protection import generate_csrf_token, get_middleware_instance
 from config import settings
 import jwt
@@ -132,12 +132,10 @@ def get_user_role_from_token(credentials: Optional[HTTPAuthorizationCredentials]
     try:
         token = _get_access_token(credentials, request)
         payload = jwt_auth.verify_token(token, "access")
-        # role 또는 type 필드에서 역할 확인
         role = payload.get("role", "USER")
-        token_type = payload.get("type", "user")
+        account_type = resolve_account_type(payload)
 
-        # type이 "admin"이면 ADMIN 반환
-        if token_type == "admin" or role == "ADMIN":
+        if account_type == "admin" or role == "ADMIN":
             return "ADMIN"
         return "USER"
     except Exception:
@@ -267,8 +265,8 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
 
         # 토큰 타입 확인 (User/Admin 구분)
         token_role = payload.get("role", "USER")  # 기본값은 USER
-        token_type = payload.get("type", "user")  # 하위 호환성
-        is_admin_token = token_role == "ADMIN" or token_type == "admin"
+        account_type = resolve_account_type(payload)
+        is_admin_token = token_role == "ADMIN" or account_type == "admin"
 
         # required_type에 따른 검증
         if required_type == "user" and is_admin_token:
@@ -378,6 +376,11 @@ class LoginResponse(BaseModel):
     user: dict
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 class PushTokenSyncRequest(BaseModel):
     push_token: str
     token_type: str = "FCM"
@@ -402,6 +405,109 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
         }
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+
+def _build_login_token_payload(
+    *,
+    user_id: int,
+    role: str,
+    user_type: str,
+    client_type: str,
+    email: Optional[str] = None,
+    nickname: Optional[str] = None,
+) -> dict:
+    """Google OAuth와 동일하게 client_type을 JWT에 포함 (웹 refresh·쿠키 세션용)."""
+    session_policy = "app_persistent" if is_app_client_type(client_type) else "web_default"
+    payload = {
+        "id": user_id,
+        "role": role,
+        "type": user_type,  # create_* 에서 account_type 으로 분리됨
+        "client_type": client_type,
+        "session_policy": session_policy,
+    }
+    if email is not None:
+        payload["email"] = email
+    if nickname is not None:
+        payload["nickname"] = nickname
+    return payload
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(
+    request: Request,
+    response: Response,
+    payload: LoginRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    """로컬 이메일/비밀번호 로그인 (User/Admin 겸용)"""
+    client_type = _get_client_type(request)
+    email = (payload.email or "").strip().lower()
+    password = payload.password or ""
+
+    if not email or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이메일과 비밀번호를 입력해주세요.")
+
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    refresh_expire_delta = get_refresh_expire_delta(client_type)
+
+    # 1) Admin 우선 로그인
+    admin = db.query(Admin).filter(Admin.email == email, Admin.deleted_at.is_(None)).first()
+    if admin and admin.password == password_hash:
+        if admin.status == UserStatus.DELETED:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="삭제된 관리자 계정입니다.")
+        if admin.status == UserStatus.DEACTIVATED:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="비활성화된 관리자 계정입니다.")
+
+        token_payload = _build_login_token_payload(
+            user_id=admin.id,
+            role="ADMIN",
+            user_type="admin",
+            client_type=client_type,
+            email=admin.email,
+        )
+        access_token = jwt_auth.create_access_token(token_payload)
+        refresh_token = jwt_auth.create_refresh_token(token_payload, expires_delta=refresh_expire_delta)
+
+        if client_type == "web":
+            set_auth_cookies(response, access_token, refresh_token, int(refresh_expire_delta.total_seconds()))
+
+        return LoginResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=jwt_auth.expire_minutes * 60,
+            user={"id": admin.id, "email": admin.email, "role": "ADMIN"},
+        )
+
+    # 2) User 로그인
+    user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+    if not user or user.password != password_hash:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
+
+    if user.status == UserStatus.DELETED:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="탈퇴한 사용자입니다.")
+    if user.status == UserStatus.DEACTIVATED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자에 의해 비활성화 처리된 회원입니다.")
+
+    token_payload = _build_login_token_payload(
+        user_id=user.id,
+        role="USER",
+        user_type="user",
+        client_type=client_type,
+        email=user.email,
+        nickname=user.nickname,
+    )
+    access_token = jwt_auth.create_access_token(token_payload)
+    refresh_token = jwt_auth.create_refresh_token(token_payload, expires_delta=refresh_expire_delta)
+
+    if client_type == "web":
+        set_auth_cookies(response, access_token, refresh_token, int(refresh_expire_delta.total_seconds()))
+
+    return LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=jwt_auth.expire_minutes * 60,
+        user={"id": user.id, "email": user.email, "role": "USER"},
+    )
 
 
 # 새로운 API 엔드포인트들
@@ -561,11 +667,13 @@ async def withdraw_user(current_user: User = Depends(get_current_active_user), d
 
 
 @router.post("/logout")
-async def logout(payload: Optional[LogoutRequest] = Body(default=None),
-                 request: Request = None,
-                 response: Response = None,
-                 current_user: User = Depends(get_current_active_user),
-                 db: Session = Depends(get_db)):
+async def logout(
+    request: Request,
+    response: Response,
+    payload: Optional[LogoutRequest] = Body(default=None),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
     """로그아웃 (토큰 무효화)"""
     try:
         client_type = _get_client_type(request)
@@ -636,10 +744,12 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(token_data: Optional[TokenRefreshRequest] = Body(default=None),
-                        request: Request = None,
-                        response: Response = None,
-                        db: Session = Depends(get_db)):
+async def refresh_token(
+    request: Request,
+    response: Response,
+    token_data: Optional[TokenRefreshRequest] = Body(default=None),
+    db: Session = Depends(get_db),
+):
     """토큰 갱신 (자동 로그인용)"""
     try:
         request_client_type = _get_client_type(request)
