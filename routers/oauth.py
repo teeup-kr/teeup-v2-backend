@@ -13,10 +13,11 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from database import get_db
 from models import User
-from schemas import GoogleOAuthBody, UserStatus, Provider
+from schemas import GoogleOAuthBody, AppleOAuthBody, UserStatus, Provider
 from schemas import OAuthLoginRequest, OAuthCallbackRequest, OAuthUserInfo
 from services.push_token_service import sync_user_push_token
 from utils.google_oauth import google_oauth
+from utils.apple_oauth import apple_oauth
 from config import settings
 from utils.jwt_auth import jwt_auth
 from utils.cuid import generate_cuid
@@ -391,12 +392,117 @@ async def google_oauth_callback_post(request: GoogleOAuthBody, http_request: Req
         )
 
 
-async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tuple[User, bool]:
+def _build_user_payload(user: User) -> Dict[str, Any]:
+    """로그인 응답의 user 블록 생성"""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "nickname": user.nickname,
+        "role": "USER",  # User 모델에는 role이 없으므로 항상 USER로 설정
+        "status": user.status.value if user.status else "ACTIVE",
+        "provider": user.provider.value if user.provider else None,
+        "created_at": (user.created_at.isoformat() if user.created_at is not None else None),
+        "updated_at": (user.updated_at.isoformat() if user.updated_at is not None else None),
+        "profile_image": user.profile_image,
+        "phone": user.phone_number,
+        "needs_terms_agreement": getattr(user, 'needs_terms_agreement', False),
+        "terms_agreement": getattr(user, 'terms_agreement', False),
+        "privacy_policy": getattr(user, 'privacy_policy', False),
+        "privacy_collection": getattr(user, 'privacy_collection', False),
+        "marketing_consent": getattr(user, 'marketing_consent', False),
+    }
+
+
+@router.post("/apple/callback")
+async def apple_oauth_callback_post(request: AppleOAuthBody,
+                                    http_request: Request,
+                                    response: Response,
+                                    db: Session = Depends(get_db)):
+    """
+    Sign in with Apple 콜백 처리 (POST)
+
+    네이티브 앱이 Apple SDK로 받은 identity token을 그대로 전달하면
+    서버가 서명을 검증하고 자체 JWT를 발급한다.
+    """
+    try:
+        client_type = _detect_client_type(http_request, None)
+        session_policy = "app_persistent" if _is_app_client(client_type) else "web_default"
+        refresh_expire_delta = _get_refresh_expire_delta(client_type)
+
+        try:
+            apple_user = apple_oauth.get_user_info(
+                identity_token=request.identityToken,
+                full_name=request.fullName,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        user, is_new_user = await create_or_get_oauth_user(apple_user, db, provider=Provider.APPLE)
+
+        jwt_payload = {
+            "id": user.id,
+            "email": user.email,
+            "nickname": user.nickname,
+            "role": "USER",
+            "provider": user.provider.value if user.provider else None,
+            "client_type": client_type,
+            "session_policy": session_policy,
+        }
+
+        access_token = jwt_auth.create_access_token(jwt_payload)
+        refresh_token = jwt_auth.create_refresh_token(jwt_payload, expires_delta=refresh_expire_delta)
+
+        logger.info(f"Apple 로그인 성공: user_id={user.id}, is_new_user={is_new_user}")
+
+        if request.push_token:
+            sync_user_push_token(db=db,
+                                 user_id=user.id,
+                                 push_token=request.push_token,
+                                 token_type=request.token_type or "FCM",
+                                 enabled=request.enabled if request.enabled is not None else True)
+
+        if not _is_app_client(client_type):
+            set_auth_cookies(response,
+                             access_token=access_token,
+                             refresh_token=refresh_token,
+                             refresh_max_age=int(refresh_expire_delta.total_seconds()))
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": jwt_auth.expire_minutes * 60,
+            "refresh_expires_in": int(refresh_expire_delta.total_seconds()),
+            "session_policy": session_policy,
+            "client_type": client_type,
+            "user": _build_user_payload(user),
+            "is_new_user": is_new_user,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"Apple 로그인 처리 실패: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Apple 로그인 처리에 실패했습니다",
+        )
+
+
+async def create_or_get_oauth_user(oauth_user: OAuthUserInfo,
+                                   db: Session,
+                                   provider: Provider = Provider.GOOGLE) -> tuple[User, bool]:
     """OAuth 사용자 생성 또는 조회"""
     try:
-        # 기존 사용자 조회 (이메일 또는 provider_id로)
-        existing_user = (db.query(User).filter((User.email == oauth_user.email)
-                                               | (User.provider_id == oauth_user.provider_id)).first())
+        # 기존 사용자 조회 (provider_id 우선, 없으면 이메일로)
+        # Apple은 이메일 가리기(private relay)를 쓸 수 있어 provider_id가 더 안정적인 식별자다.
+        existing_user = (db.query(User).filter(User.provider_id == oauth_user.provider_id,
+                                               User.provider == provider).first())
+
+        if not existing_user and oauth_user.email:
+            existing_user = db.query(User).filter(User.email == oauth_user.email).first()
 
         if existing_user:
             provider = cast(Provider, existing_user.provider)
@@ -492,6 +598,10 @@ async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tu
             return existing_user, False  # 기존 사용자
 
         # 새 사용자 생성
+        # Apple 로그인은 이메일 가리기 사용 시에도 relay 주소가 내려오지만,
+        # 만약 비어 있으면 provider_id 기반 placeholder로 unique 제약을 지킨다.
+        email = oauth_user.email or f"{oauth_user.provider_id}@{oauth_user.provider}.local"
+
         # OAuth 사용자는 닉네임 유효성 검사 면제, 원본 그대로 사용
         base_nickname = oauth_user.name or "user"
 
@@ -508,9 +618,9 @@ async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tu
             counter += 1
 
         new_user = User(
-            email=oauth_user.email,
+            email=email,
             nickname=nickname,
-            provider=Provider.GOOGLE,
+            provider=provider,
             provider_id=oauth_user.provider_id,
             email_verified=datetime.now() if oauth_user.verified_email else None,
             profile_image=oauth_user.picture,
@@ -527,7 +637,7 @@ async def create_or_get_oauth_user(oauth_user: OAuthUserInfo, db: Session) -> tu
         db.commit()
         db.refresh(new_user)
 
-        logger.info(f"새 Google OAuth 사용자 생성: {new_user.email}")
+        logger.info(f"새 {provider.value} OAuth 사용자 생성: {new_user.email}")
         return new_user, True  # 새 사용자
 
     except HTTPException as he:

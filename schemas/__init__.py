@@ -73,7 +73,7 @@ from .score import (
 )
 
 # OAuth 관련 스키마
-from .oauth import (OAuthLoginRequest, OAuthCallbackRequest, OAuthUserInfo, GoogleOAuthBody)
+from .oauth import (OAuthLoginRequest, OAuthCallbackRequest, OAuthUserInfo, GoogleOAuthBody, AppleOAuthBody)
 
 # FAQ 관련 스키마
 from .faq import (FAQCategoryBase, FAQCategoryCreate, FAQCategoryUpdate, FAQCategoryResponse, FAQBase, FAQCreate,
@@ -214,6 +214,7 @@ __all__ = [
     "OAuthCallbackRequest",
     "OAuthUserInfo",
     "GoogleOAuthBody",
+    "AppleOAuthBody",
     # FAQ
     "FAQCategoryBase",
     "FAQCategoryCreate",

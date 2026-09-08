@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     GOOGLE_IOS_REDIRECT_URI: str = ""  # OAuth 리다이렉트 URI (환경 변수 필수)
 
     GOOGLE_CLIENT_SECRET: str = ""
+
+    # Sign in with Apple
+    APPLE_BUNDLE_ID: str = ""  # 네이티브 iOS 앱 번들 ID (identity token의 aud)
+    APPLE_SERVICE_ID: str = ""  # 웹 Sign in with Apple용 Service ID (미사용 시 공란)
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_REDIRECT_URI: str = (
         ""  # 드라이브 전용 토큰 발급 콜백(프런트) (환경 변수 필수)

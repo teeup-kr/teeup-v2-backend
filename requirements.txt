@@ -4,6 +4,7 @@ protobuf
 pydantic
 pydantic_settings
 PyJWT
+cryptography
 PyMySQL
 pytest
 Requests

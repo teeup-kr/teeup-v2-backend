@@ -24,6 +24,7 @@ class UserStatus(str, enum.Enum):
 class Provider(str, enum.Enum):
     LOCAL = "LOCAL"
     GOOGLE = "GOOGLE"
+    APPLE = "APPLE"
 
 class Gender(str, enum.Enum):
     MALE = "MALE"
