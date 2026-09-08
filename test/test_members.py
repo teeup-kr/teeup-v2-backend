@@ -193,6 +193,30 @@ class TestClubMembers:
         print(f"Response content: {response.text}")
         
         assert response.status_code == 403
+
+    def test_get_member_record_summary_not_member(self):
+        """클럽 멤버가 아닌 사용자가 멤버 기록 요약 조회 시도"""
+        club_id = self.create_test_club()
+        leader_token = self.get_auth_token()
+        leader_headers = self.get_auth_headers(leader_token)
+
+        # 클럽 멤버 1명(리더)을 조회해서 user_id 확보
+        members_res = requests.get(f"{BASE_URL}/clubs/{club_id}/members", headers=leader_headers)
+        assert members_res.status_code == 200
+        members_data = members_res.json()
+        # API가 list 또는 {data: []} 형태 모두 있을 수 있어 방어적으로 처리
+        member_list = members_data if isinstance(members_data, list) else members_data.get("data", [])
+        assert len(member_list) >= 1
+        target_user_id = member_list[0]["user_id"]
+
+        # 비멤버 계정으로 기록 요약 요청 -> 403
+        token2 = self.get_auth_token("user2@teeup.run", "test1234")
+        headers2 = self.get_auth_headers(token2)
+        res = requests.get(
+            f"{BASE_URL}/clubs/{club_id}/members/{target_user_id}/record-summary",
+            headers=headers2,
+        )
+        assert res.status_code == 403
     
     def test_add_club_member_success(self):
         """클럽 멤버 추가 성공 테스트 (리더 권한)"""
