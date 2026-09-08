@@ -26,7 +26,7 @@ def create_admin_user():
     try:
         # 기존 관리자 계정 확인 및 삭제 (soft delete 대신 물리 삭제)
         existing_admin = db.query(Admin).filter(
-            Admin.email == "admin@teeup.run",
+            Admin.email == "admin@teeup.kr",
             Admin.deleted_at.is_(None)
         ).first()
 
@@ -41,7 +41,7 @@ def create_admin_user():
 
         # Admin 엔티티 생성
         admin = Admin(
-            email="admin@teeup.run",
+            email="admin@teeup.kr",
             password=password_hash,
             name="관리자",
             provider=Provider.LOCAL,
@@ -53,11 +53,11 @@ def create_admin_user():
         db.refresh(admin)
 
         logger.info("관리자 계정이 성공적으로 생성되었습니다!")
-        logger.info("이메일: admin@teeup.run")
+        logger.info("이메일: admin@teeup.kr")
         logger.info("비밀번호: admin123")
         logger.info(f"Admin ID: {admin.id}")
         print("[성공] 관리자 계정이 성공적으로 생성되었습니다!")
-        print("이메일: admin@teeup.run")
+        print("이메일: admin@teeup.kr")
         print("비밀번호: admin123")
         print(f"Admin ID: {admin.id}")
 

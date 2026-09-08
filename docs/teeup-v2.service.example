@@ -1,0 +1,32 @@
+# /etc/systemd/system/teeup-v2.service 예시
+# 복사: sudo cp docs/teeup-v2.service.example /etc/systemd/system/teeup-v2.service
+#
+# [처음 한 번] 서비스 등록·시작
+#   sudo systemctl daemon-reload && sudo systemctl enable teeup-v2 && sudo systemctl start teeup-v2
+#
+# [코드만 수정 후] 재실행
+#   sudo systemctl restart teeup-v2
+#
+# [이 .service 파일을 수정한 경우]
+#   sudo systemctl daemon-reload && sudo systemctl restart teeup-v2
+#
+# [유저 조회 API 로그 보기] (get_admin_users 검증 로그)
+#   실시간: journalctl -u teeup-v2 -f | grep get_admin_users
+#   최근만: journalctl -u teeup-v2 -n 200 | grep get_admin_users
+
+[Unit]
+Description=TeeUp V2 Backend
+After=network.target
+
+[Service]
+Type=simple
+User=cubic
+Group=cubic
+WorkingDirectory=/home/cubic/Projects/golf/teeup-v2-backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/cubic/Projects/golf/teeup-v2-backend/.venv/bin/python /home/cubic/Projects/golf/teeup-v2-backend/main.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
