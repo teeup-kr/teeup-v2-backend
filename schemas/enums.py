@@ -184,5 +184,6 @@ class InquiryStatus(str, Enum):
 class Provider(str, Enum):
     LOCAL = "LOCAL"
     GOOGLE = "GOOGLE"
+    APPLE = "APPLE"
     KAKAO = "KAKAO"
     NAVER = "NAVER"

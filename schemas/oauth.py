@@ -28,3 +28,13 @@ class GoogleOAuthBody(BaseModel):
     push_token: Optional[str] = Field(None, description="디바이스 푸시 토큰(선택)")
     token_type: Optional[str] = Field("FCM", description="푸시 토큰 타입(선택)")
     enabled: Optional[bool] = Field(True, description="토큰 활성화 여부(선택)")
+
+class AppleOAuthBody(BaseModel):
+    identityToken: str = Field(..., description="Apple이 발급한 identity token(JWT)")
+    fullName: Optional[str] = Field(
+        None,
+        description="사용자 이름. Apple은 최초 1회 인증에서만 이름을 내려주므로 그때만 값이 채워진다."
+    )
+    push_token: Optional[str] = Field(None, description="디바이스 푸시 토큰(선택)")
+    token_type: Optional[str] = Field("FCM", description="푸시 토큰 타입(선택)")
+    enabled: Optional[bool] = Field(True, description="토큰 활성화 여부(선택)")
