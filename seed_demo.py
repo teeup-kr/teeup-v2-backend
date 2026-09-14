@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import (
     User, Club, ClubMembership, ClubNotice, ClubFee, ClubRegion, Sido, Gungu,
-    Meeting, MeetingParticipant, UserScoreHistory, MeetingResult,
+    Meeting, MeetingParticipant, UserScoreHistory, MeetingResult, Score,
     Provider, Gender, UserStatus, ClubType, ClubStatus, ClubRole, MembershipStatus,
     MeetingType, MeetingSubtype, SocialType, SettlementMethod, ParticipantType,
     ParticipantStatus, BillingCycle, HandicapUpdateMethod,
@@ -60,6 +60,10 @@ GOLF_COURSES = [
     ("베어크리크 GC", "경기 포천시"),
     ("파인비치 GL", "전남 해남군"),
 ]
+
+# 18홀 파 배치 (전반 36 + 후반 36 = 파72, par3 x4 / par4 x10 / par5 x4)
+HOLE_PARS = [4, 4, 3, 5, 4, 4, 3, 4, 5, 4, 3, 5, 4, 4, 3, 4, 5, 4]
+
 
 
 def get_or_create_user(db: Session, email: str, **fields) -> tuple[User, bool]:
@@ -163,10 +167,39 @@ def add_social(db: Session, club: Club, leader: User, participants: list[User], 
     return m
 
 
+def make_hole_strokes(gross: int, rng: random.Random) -> list[int]:
+    """합계가 정확히 gross 인 18홀 타수 생성.
+
+    총타(UserScoreHistory.gross_score)와 홀별 합이 어긋나면 화면에서
+    값이 서로 다르게 보이므로 반드시 일치시킨다.
+    """
+    avg_over = (gross - sum(HOLE_PARS)) / len(HOLE_PARS)
+    strokes = []
+    for par in HOLE_PARS:
+        delta = max(-1, min(4, round(rng.gauss(avg_over, 0.9))))  # 홀당 버디~트리플보기+
+        strokes.append(max(2, par + delta))
+    guard = 0
+    while sum(strokes) != gross and guard < 10000:
+        guard += 1
+        i = rng.randrange(len(HOLE_PARS))
+        par = HOLE_PARS[i]
+        if sum(strokes) < gross and strokes[i] < par + 4:
+            strokes[i] += 1
+        elif sum(strokes) > gross and strokes[i] > max(2, par - 1):
+            strokes[i] -= 1
+    return strokes
+
+
 def record_scores(db: Session, meeting: Meeting, participants: list[User], rng: random.Random) -> int:
     """완료된 라운딩에 참가자별 스코어 기록. 이미 있으면 건너뜀."""
     if db.query(UserScoreHistory).filter(UserScoreHistory.meeting_id == meeting.id).count():
         return 0
+    # 홀별 스코어를 붙이려면 참가자 레코드가 필요하다 (scores.participant_id)
+    part_by_user = {
+        p.user_id: p
+        for p in db.query(MeetingParticipant).filter(MeetingParticipant.meeting_id == meeting.id)
+        if p.user_id is not None
+    }
     results = []
     for u in participants:
         base = u.average_score or 90
@@ -176,6 +209,17 @@ def record_scores(db: Session, meeting: Meeting, participants: list[User], rng: 
         db.add(UserScoreHistory(user_id=u.id, meeting_id=meeting.id,
                                 gross_score=gross, net_score=net, handicap_used=hc,
                                 handicap_after_round=hc, played_at=meeting.meeting_time))
+
+        # 홀별 스코어 (합계는 위 gross 와 정확히 일치).
+        # 이미 있으면 건너뛴다 — 안 그러면 재실행 시 18홀이 덧쌓인다.
+        part = part_by_user.get(u.id)
+        if part is not None and not db.query(Score).filter(Score.participant_id == part.id).count():
+            for i, strokes in enumerate(make_hole_strokes(gross, rng), start=1):
+                par = HOLE_PARS[i - 1]
+                db.add(Score(participant_id=part.id, hole_number=i,
+                             strokes=strokes, par=par, score_to_par=strokes - par))
+            part.has_hole_scores = True
+
         results.append((u.id, net))
     results.sort(key=lambda r: r[1])
     for rank, (uid, _) in enumerate(results, 1):
