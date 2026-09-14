@@ -3,6 +3,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -73,7 +74,7 @@ class HandicapResponse(BaseModel):
 # 사용자 생성은 /api/v1/admin/users POST 에서만 가능 (admin/users.py)
 
 
-@router.put("/me", response_model=UserResponse)
+@router.put("/me", response_model=UserResponse, dependencies=[Depends(reject_banned_content)])
 async def update_my_profile(
         user_data: UserUpdate,
         db: Session = Depends(get_db),

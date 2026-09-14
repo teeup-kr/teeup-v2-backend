@@ -1,5 +1,6 @@
 # 클럽 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -45,7 +46,7 @@ async def get_club_meetings_legacy(
     )
 
 
-@router.post("/register", response_model=ClubResponse)
+@router.post("/register", response_model=ClubResponse, dependencies=[Depends(reject_banned_content)])
 async def register_club(
     club_data: ClubCreate,
     db: Session = Depends(get_db),
@@ -54,7 +55,7 @@ async def register_club(
     """클럽 등록 (바로 활성화)"""
     return await create_club(club_data, db, current_user)
 
-@router.post("/", response_model=ClubResponse)
+@router.post("/", response_model=ClubResponse, dependencies=[Depends(reject_banned_content)])
 async def create_club(club_data: ClubCreate,
                       db: Session = Depends(get_db),
                       current_user: User = Depends(get_current_active_user)):
@@ -462,7 +463,7 @@ async def get_club(club_id: str, db: Session = Depends(get_db), current_user: Us
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
 
 
-@router.put("/{club_id}", response_model=ClubResponse)
+@router.put("/{club_id}", response_model=ClubResponse, dependencies=[Depends(reject_banned_content)])
 async def update_club(club_id: str,
                       club_data: ClubUpdate,
                       db: Session = Depends(get_db),

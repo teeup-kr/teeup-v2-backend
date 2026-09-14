@@ -1,5 +1,6 @@
 # 클럽 규정 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/clubs", tags=["클럽 규정"])
 
 # ===== 규정 카테고리 관리 =====
 
-@router.post("/{club_id}/regulations/categories", response_model=RegulationCategoryResponse)
+@router.post("/{club_id}/regulations/categories", response_model=RegulationCategoryResponse, dependencies=[Depends(reject_banned_content)])
 async def create_regulation_category(
     club_id: str,
     category_data: RegulationCategoryCreate,
@@ -194,7 +195,7 @@ def _resolve_club(db: Session, club_id: str):
     return club
 
 
-@router.put("/{club_id}/regulations/categories/{category_id}", response_model=RegulationCategoryResponse)
+@router.put("/{club_id}/regulations/categories/{category_id}", response_model=RegulationCategoryResponse, dependencies=[Depends(reject_banned_content)])
 async def update_regulation_category(
     club_id: str,
     category_id: int,
@@ -635,7 +636,7 @@ async def get_club_regulations_list(
             detail="서버 내부 오류가 발생했습니다."
         )
 
-@router.post("/{club_id}/regulations", response_model=ClubRegulationResponse)
+@router.post("/{club_id}/regulations", response_model=ClubRegulationResponse, dependencies=[Depends(reject_banned_content)])
 async def create_club_regulation(
     club_id: str,
     regulation_data: ClubRegulationCreate,
@@ -821,7 +822,7 @@ async def get_club_regulation(
             detail="서버 내부 오류가 발생했습니다."
         )
 
-@router.put("/{club_id}/regulations/{regulation_id}", response_model=ClubRegulationResponse)
+@router.put("/{club_id}/regulations/{regulation_id}", response_model=ClubRegulationResponse, dependencies=[Depends(reject_banned_content)])
 async def update_club_regulation(
     club_id: str,
     regulation_id: int,

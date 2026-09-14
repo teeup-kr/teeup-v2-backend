@@ -1,5 +1,6 @@
 # 클럽 멤버 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Optional
@@ -1381,7 +1382,7 @@ async def get_member_note(
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
 
-@router.put("/{club_id}/members/{user_id}/note", response_model=MessageResponse)
+@router.put("/{club_id}/members/{user_id}/note", response_model=MessageResponse, dependencies=[Depends(reject_banned_content)])
 async def update_member_note(
     club_id: str,
     user_id: int,

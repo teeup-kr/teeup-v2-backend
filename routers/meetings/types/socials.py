@@ -3,6 +3,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, case
 from typing import List, Optional
@@ -169,7 +170,7 @@ async def get_socials(
 # 소셜 모임 생성
 # =============================================================================
 
-@router.post("/", response_model=MeetingResponse)
+@router.post("/", response_model=MeetingResponse, dependencies=[Depends(reject_banned_content)])
 async def create_social(
     meeting_data: SocialMeetingCreate,
     current_user: User = Depends(get_current_user_allow_both),
@@ -333,7 +334,7 @@ async def get_social(
 # 소셜 모임 수정
 # =============================================================================
 
-@router.put("/{meeting_id}", response_model=MeetingResponse)
+@router.put("/{meeting_id}", response_model=MeetingResponse, dependencies=[Depends(reject_banned_content)])
 async def update_social(
     meeting_id: int,
     meeting_data: MeetingUpdate,

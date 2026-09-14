@@ -1,5 +1,6 @@
 # 클럽별 공지사항 CRUD API들
 from fastapi import APIRouter, Depends, HTTPException, status
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -121,7 +122,7 @@ async def get_club_notices(
             detail=f"서버 내부 오류가 발생했습니다: {str(e)}"
         )
 
-@router.post("/{club_id}/notices", response_model=ClubNoticeResponse)
+@router.post("/{club_id}/notices", response_model=ClubNoticeResponse, dependencies=[Depends(reject_banned_content)])
 async def create_club_notice(
     club_id: str,
     notice_data: ClubNoticeCreate,
@@ -346,7 +347,7 @@ async def get_club_notice_detail(
             detail="서버 내부 오류가 발생했습니다."
         )
 
-@router.put("/{club_id}/notices/{notice_id}", response_model=ClubNoticeResponse)
+@router.put("/{club_id}/notices/{notice_id}", response_model=ClubNoticeResponse, dependencies=[Depends(reject_banned_content)])
 async def update_club_notice(
     club_id: str,
     notice_id: int,

@@ -1,5 +1,6 @@
 # 모임 관리 API들
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from utils.content_filter import reject_banned_content
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, or_, and_, select
 from typing import List, Optional
@@ -42,7 +43,7 @@ from utils.notification_service import notify_round_participants_status_changed
 router = APIRouter(prefix="/meetings", tags=["모임 관리"])
 
 
-@router.post("/", response_model=MeetingResponse)
+@router.post("/", response_model=MeetingResponse, dependencies=[Depends(reject_banned_content)])
 async def create_meeting(meeting_data: RoundingMeetingCreate,
                          club_id: str = Query(..., description="클럽 ID"),
                          db: Session = Depends(get_db),
@@ -919,7 +920,7 @@ async def get_meeting(meeting_id: int,
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"서버 내부 오류가 발생했습니다: {str(e)}")
 
 
-@router.put("/{meeting_id}", response_model=MeetingResponse)
+@router.put("/{meeting_id}", response_model=MeetingResponse, dependencies=[Depends(reject_banned_content)])
 async def update_meeting(meeting_id: int,
                          meeting_data: MeetingUpdate,
                          db: Session = Depends(get_db),
