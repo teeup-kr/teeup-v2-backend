@@ -37,7 +37,7 @@ import logging
 from config import settings
 from database import get_db, init_database, test_connection
 from routers import (auth, plans, payments, payment_methods, region, subscriptions, users, terms, notices, inquiries,
-                     upload, admin, oauth, faq)
+                     upload, admin, oauth, faq, moderation)
 from routers.internal import loadtest_router
 from routers.clubs import (
     base_router as clubs_router,
@@ -198,6 +198,7 @@ app.include_router(subscriptions.router, prefix="/api/v1")
 app.include_router(terms.router, prefix="/api/v1")
 app.include_router(notices.router, prefix="/api/v1")
 app.include_router(inquiries.router, prefix="/api/v1")
+app.include_router(moderation.router, prefix="/api/v1")  # /moderation - 신고·차단
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(faq.client_router, prefix="/api/v1")

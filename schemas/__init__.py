@@ -11,8 +11,8 @@ from .enums import (
     NotificationType, NotificationStatus,
     PlanType, PaymentStatus, PaymentMethod, PaymentMethodStatus, SubscriptionStatus,
     TermsType, UserStatus,
-    NoticeType, InquiryType, InquiryStatus, Provider
-)
+    NoticeType, InquiryType, InquiryStatus, Provider,
+    ReportTargetType, ReportReason, ReportStatus)
 
 # 공통 스키마
 from .common import MessageResponse, PaginatedResponse
@@ -53,6 +53,7 @@ from .terms import (TermsCreate, TermsUpdate, TermsResponse, TermsListResponse, 
 from .notice import (NoticeCreate, NoticeUpdate, NoticeResponse, NoticeListResponse)
 
 # 문의 관련 스키마
+from .moderation import (ContentReportCreate, ContentReportResponse, BlockedUserItem, BlockedUsersResponse)
 from .inquiry import (InquiryCreate, InquiryUpdate, InquiryResponse, InquiryListResponse, InquiryResponseCreate,
                       InquiryResponseUpdate, InquiryResponseResponse, InquiryDetailResponse)
 

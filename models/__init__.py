@@ -5,7 +5,8 @@
 from .enums import (UserStatus, Provider, Gender, ClubType, ClubStatus, ClubRole, MembershipStatus, MeetingType, MeetingSubtype, SocialType, MeetingStatus,
                     SettlementMethod, ParticipantStatus, ParticipantRole, ParticipantType, PaymentStatus, SubscriptionStatus,
                     BillingCycle, TermsType, InquiryType, InquiryStatus, FeeType, ExpenseStatus, ExpenseItemType, NoticeType, TokenRevokeReason,
-                    HandicapUpdateMethod, NotificationType, NotificationStatus, AdminRole)
+                    HandicapUpdateMethod, NotificationType, NotificationStatus, AdminRole,
+                    ReportTargetType, ReportReason, ReportStatus)
 
 # User 관련 모델
 from .user import User, RefreshTokenBlacklist
@@ -28,6 +29,9 @@ from .terms import Terms, TermsAgreement
 
 # Inquiry 관련 모델
 from .inquiry import Inquiry, InquiryResponse
+
+# 신고 / 차단 모델
+from .moderation import ContentReport, UserBlock
 
 # 기타 모델
 from .notification import Notification

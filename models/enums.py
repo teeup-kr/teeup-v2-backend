@@ -186,3 +186,29 @@ class NotificationStatus(str, enum.Enum):
     UNREAD = "UNREAD"
     READ = "READ"
     ARCHIVED = "ARCHIVED"
+
+class ReportTargetType(str, enum.Enum):
+    """신고 대상 종류"""
+    CLUB = "CLUB"
+    MEETING = "MEETING"
+    CLUB_NOTICE = "CLUB_NOTICE"
+    REGULATION = "REGULATION"
+    USER = "USER"
+
+
+class ReportReason(str, enum.Enum):
+    """신고 사유"""
+    SPAM = "SPAM"                    # 스팸·광고
+    ABUSE = "ABUSE"                  # 욕설·비방·괴롭힘
+    INAPPROPRIATE = "INAPPROPRIATE"  # 부적절한 콘텐츠
+    FRAUD = "FRAUD"                  # 사기·허위 정보
+    PRIVACY = "PRIVACY"              # 개인정보 노출
+    OTHER = "OTHER"                  # 기타
+
+
+class ReportStatus(str, enum.Enum):
+    """신고 처리 상태"""
+    PENDING = "PENDING"
+    REVIEWING = "REVIEWING"
+    RESOLVED = "RESOLVED"
+    DISMISSED = "DISMISSED"
