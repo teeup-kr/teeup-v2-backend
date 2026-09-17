@@ -49,10 +49,22 @@ class AppleOAuth:
             logger.error("APPLE_BUNDLE_ID / APPLE_SERVICE_ID가 설정되지 않았습니다")
             raise ValueError("Apple 로그인 설정이 완료되지 않았습니다")
 
+        # 토큰 형식 오류(클라이언트 문제)와 공개키 조회 실패(네트워크/Apple 문제)를
+        # 구분해야 심사 리젝 같은 상황에서 로그만 보고 원인을 짚을 수 있다.
+        try:
+            header = jwt.get_unverified_header(identity_token)
+        except jwt.DecodeError as e:
+            logger.error(f"Apple 토큰 형식 오류 (JWT 아님): {e} / 길이={len(identity_token or '')}")
+            raise ValueError("Apple 토큰 형식이 올바르지 않습니다")
+
         try:
             signing_key = self.jwk_client.get_signing_key_from_jwt(identity_token)
+        except jwt.PyJWKClientError as e:
+            # kid 가 Apple JWKS 에 없음 — 키 롤링 직후이거나 위조 토큰
+            logger.error(f"Apple 공개키에 일치하는 kid 없음: kid={header.get('kid')} / {e}")
+            raise ValueError("Apple 토큰 서명 키를 찾을 수 없습니다")
         except Exception as e:
-            logger.error(f"Apple 공개키 조회 실패: {e}")
+            logger.error(f"Apple 공개키 조회 실패 (네트워크?): {type(e).__name__}: {e}")
             raise ValueError("Apple 공개키를 가져오지 못했습니다")
 
         try:
