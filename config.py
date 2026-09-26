@@ -110,6 +110,16 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_NOTICE_FOLDER_ID: str = (
         ""  # 공지사항 첨부파일 업로드 대상 구글 드라이브 폴더 ID
     )
+    # 정적 파일 서빙 (Cloud Run 용).
+    # 집 서버에서는 게이트웨이 nginx 가 했고, Cloud Run 은 앞단이 없어서
+    # 앱이 직접 한다. 비어 있으면 미들웨어를 달지 않으므로 기존 배포에는
+    # 아무 영향이 없다.
+    STATIC_CLIENT_DIR: str = ""
+    STATIC_ADMIN_DIR: str = ""
+    ADMIN_HOSTS: str = "admin.teeup.kr"
+    ADMIN_BASIC_USER: str = ""
+    ADMIN_BASIC_PASSWORD: str = ""
+
     # OAuth 토큰 저장 경로(절대경로): 백엔드 폴더의 token.json
     GOOGLE_TOKEN_FILE: str = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "token.json"))
