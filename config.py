@@ -110,6 +110,23 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_NOTICE_FOLDER_ID: str = (
         ""  # 공지사항 첨부파일 업로드 대상 구글 드라이브 폴더 ID
     )
+    # CSRF 검증 스위치.
+    #
+    # 예전에는 ENVIRONMENT != "development" 이면 자동으로 켜졌다. 그런데 집
+    # 서버가 development 로 떠 있어서 운영에서 한 번도 켜진 적이 없고, 그
+    # 상태에 맞춰 클라이언트가 만들어졌다. RN 앱과 배포된 웹 번들에는
+    # X-CSRF-Token 을 보내는 코드가 아예 없다(백오피스에만 있다).
+    #
+    # 그래서 ENVIRONMENT 를 production 으로 올리는 것만으로 검증이 켜지면,
+    # 스토어에 올라간 앱이 쓰기 요청마다 403 을 받는다. 문서 차단·보안 쿠키
+    # 같은 다른 운영 설정과 분리해 둔다.
+    #
+    # 켜기 전에 두 가지가 선행되어야 한다.
+    #   1. 클라이언트가 /api/v1/auth/csrf-token 을 받아 헤더로 실어 보낼 것
+    #   2. 토큰 저장소를 공유 저장소로 옮길 것. 지금은 프로세스 메모리
+    #      dict 라 인스턴스가 둘 이상이면 발급한 곳에서만 통과한다
+    CSRF_PROTECTION_ENABLED: bool = False
+
     # 정적 파일 서빙 (Cloud Run 용).
     # 집 서버에서는 게이트웨이 nginx 가 했고, Cloud Run 은 앞단이 없어서
     # 앱이 직접 한다. 비어 있으면 미들웨어를 달지 않으므로 기존 배포에는
