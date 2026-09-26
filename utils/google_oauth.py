@@ -117,6 +117,83 @@ logger = logging.getLogger(__name__)
 #     verified_email: bool
 
 
+def upload_to_drive(
+    file_bytes: bytes,
+    filename: str,
+    folder_id: str,
+    share: str | None = None,
+) -> Dict:
+    """파일을 Google Drive 폴더에 올리고 메타데이터를 돌려준다.
+
+    로컬 디스크에 쓰지 않는다. 컨테이너·Cloud Run 은 파일시스템이 휘발이라
+    저장해도 재기동 때 사라지고, 서빙 경로도 없다.
+
+    share="link" 를 주면 링크를 아는 사람이 볼 수 있게 권한을 연다.
+    권한 부여가 실패해도 업로드 자체는 성공으로 둔다. 파일은 이미 올라갔고,
+    권한은 나중에 Drive 에서 손으로 열 수 있다.
+    """
+    access_token = load_access_token()
+    mime_type = get_mime_type(os.path.splitext(filename)[1])
+
+    boundary = "teeuplink_boundary"
+    metadata = {"name": filename, "parents": [folder_id]}
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(metadata)}\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mime_type}\r\n\r\n"
+    ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    resp = requests.post(
+        "https://www.googleapis.com/upload/drive/v3/files",
+        params={"uploadType": "multipart", "fields": "id,name,mimeType"},
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+        data=body,
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise GoogleOAuthError(f"Drive 업로드 실패: {resp.status_code} {resp.text}")
+
+    file_id = resp.json().get("id")
+    if not file_id:
+        raise GoogleOAuthError("Drive 응답에 파일 ID가 없습니다.")
+
+    if share == "link":
+        try:
+            requests.post(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                params={"fields": "id"},
+                json={"role": "reader", "type": "anyone"},
+                timeout=20,
+            )
+        except requests.RequestException:
+            pass
+
+    meta_resp = requests.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        params={"fields": "id,webViewLink,webContentLink,name,size,mimeType"},
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    meta = meta_resp.json() if meta_resp.status_code == 200 else {}
+
+    return {
+        "file_id": file_id,
+        "filename": filename,
+        "mime_type": meta.get("mimeType", mime_type),
+        "web_view_link": meta.get("webViewLink"),
+        "web_content_link": meta.get("webContentLink"),
+    }
+
+
 def _coerce_user_info(raw: Any) -> OAuthUserInfo:
     if not isinstance(raw, dict):
         raise ValueError("user_info is not an object")

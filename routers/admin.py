@@ -1,5 +1,15 @@
 """
 백오피스 전용 API 라우터
+
+[주의] 이 파일은 로드되지 않는다.
+같은 디렉터리에 routers/admin/ 패키지가 있고, 파이썬은 모듈보다 패키지를
+먼저 찾는다. 따라서 `from routers import admin` 은 항상
+routers/admin/__init__.py 를 가리킨다. 확인:
+
+    python -c "import routers.admin as a; print(a.__file__)"
+
+여기를 고쳐도 서비스 동작은 바뀌지 않는다. 실제 구현은 routers/admin/ 아래에
+있다.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Query, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
