@@ -82,7 +82,17 @@ def load_access_token() -> str:
     if "expiry" in token:
         del token["expiry"]
 
-    _write_token_file(token_path, token)
+    # 되쓰기는 있으면 좋은 정도다. 이 함수는 위에서 보듯 만료를 따지지 않고
+    # 매번 refresh_token 으로 새 access_token 을 받아 온다. 즉 파일에 적힌
+    # access_token 을 다시 읽어 쓰는 경로가 없다.
+    #
+    # Cloud Run 에서는 이 파일이 Secret Manager 볼륨으로 들어와 읽기 전용이다.
+    # 여기서 예외가 올라가면 토큰은 멀쩡히 발급됐는데 업로드가 통째로 실패한다.
+    try:
+        _write_token_file(token_path, token)
+    except OSError as e:
+        logger.warning("토큰 파일 갱신 실패(무시하고 진행): %s", e)
+
     return new_access_token
 
 
