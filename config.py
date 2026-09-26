@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # Server Configuration
     BACKEND_PORT: str = ""  # 백엔드 서버 포트 (환경 변수 필수)
+    # Cloud Run 이 주입하는 포트. 플랫폼이 정해 주는 값이라 기본값을 두지
+    # 않는다. 로컬·compose 에는 이 변수가 없고 BACKEND_PORT 가 쓰인다.
+    PORT: str = ""
 
     # Database Auto Creation
     AUTO_CREATE_TABLES: Optional[bool] = (
@@ -142,19 +145,25 @@ class Settings(BaseSettings):
 
     @property
     def backend_port(self) -> int:
-        """백엔드 서버 포트 (환경 변수 필수)"""
-        if not self.BACKEND_PORT:
-            raise ValueError("BACKEND_PORT 환경 변수가 설정되지 않았습니다.")
+        """백엔드 서버가 들을 포트 (환경 변수 필수).
+
+        PORT 가 BACKEND_PORT 보다 우선한다. Cloud Run 은 PORT 를 주입하고
+        컨테이너가 반드시 그 포트를 듣기를 요구한다. 다른 포트를 들으면
+        시작 확인에 실패해 배포가 롤백된다. 둘 중 하나만 있으면 그것을 쓴다.
+        """
+        source = "PORT" if self.PORT else "BACKEND_PORT"
+        raw = self.PORT or self.BACKEND_PORT
+        if not raw:
+            raise ValueError("PORT 또는 BACKEND_PORT 환경 변수가 설정되지 않았습니다.")
         try:
-            port = int(self.BACKEND_PORT)
+            port = int(raw)
             if port <= 0:
-                raise ValueError(
-                    f"BACKEND_PORT가 유효하지 않습니다: {self.BACKEND_PORT}")
+                raise ValueError(f"{source}가 유효하지 않습니다: {raw}")
             return port
         except ValueError as e:
             if "유효하지 않습니다" in str(e):
                 raise
-            raise ValueError(f"BACKEND_PORT가 유효하지 않습니다: {self.BACKEND_PORT}")
+            raise ValueError(f"{source}가 유효하지 않습니다: {raw}")
 
     class Config:
         # 프로젝트 루트의 .env 파일을 절대경로로 지정 (실행 위치 무관)
