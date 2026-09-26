@@ -72,13 +72,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 운영에서는 자동 문서를 닫는다. 259개 엔드포인트의 스키마가 통째로 공개된다.
+# 집 서버에서는 nginx 가 /api/ 만 넘겨 줘서 가려져 있었지만, Cloud Run 에는
+# 그 앞단이 없어 그대로 노출된다.
+_IS_PRODUCTION = settings.ENVIRONMENT == "production"
+
 app = FastAPI(
     title="TeeupLink API",
     description="골프 모임 관리 플랫폼 API",
     version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url=None if _IS_PRODUCTION else "/api/docs",
+    redoc_url=None if _IS_PRODUCTION else "/api/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/api/openapi.json",
     default_response_class=JSONResponse,
     openapi_tags=[
         {
@@ -207,6 +212,15 @@ app.include_router(loadtest_router, prefix="/api/v1")
 # 외부 데이터 관련 API 라우터
 app.include_router(region.region_router, prefix="/api/v1")
 
+# 정적 파일 서빙.
+# 라우터를 모두 등록한 뒤에 단다. /api/ 로 시작하는 요청은 미들웨어가
+# 손대지 않고 그대로 앱으로 넘긴다.
+# STATIC_CLIENT_DIR / STATIC_ADMIN_DIR 이 비어 있으면 아무것도 하지 않으므로
+# 집 서버 배포(게이트웨이 nginx 가 정적을 담당)에는 영향이 없다.
+from static_serving import mount_static  # noqa: E402
+
+mount_static(app, settings)
+
 # 보안 미들웨어 설정
 # Rate Limiting (개발 환경에서는 비활성화)
 # app.add_middleware(RateLimiterMiddleware, requests_per_minute=120, requests_per_hour=2000)
@@ -255,19 +269,21 @@ async def startup_event():
         logger.error("Database connection test failed")
 
 
-@app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
-def swagger_ui():
-    return get_swagger_ui_html(openapi_url="/openapi.json", title="FastAPI - Swagger UI")
+# 루트 경로의 문서도 같은 이유로 운영에서는 달지 않는다. 위의 docs_url=None
+# 만으로는 막히지 않는다. 이 세 개는 별도 라우트라 운영 분기를 우회한다.
+if not _IS_PRODUCTION:
 
+    @app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
+    def swagger_ui():
+        return get_swagger_ui_html(openapi_url="/openapi.json", title="FastAPI - Swagger UI")
 
-@app.get("/redoc", include_in_schema=False, response_class=HTMLResponse)
-def redoc_ui():
-    return get_redoc_html(openapi_url="/openapi.json", title="FastAPI - ReDoc")
+    @app.get("/redoc", include_in_schema=False, response_class=HTMLResponse)
+    def redoc_ui():
+        return get_redoc_html(openapi_url="/openapi.json", title="FastAPI - ReDoc")
 
-
-@app.get("/openapi.json", include_in_schema=False)
-def openapi():
-    return app.openapi()
+    @app.get("/openapi.json", include_in_schema=False)
+    def openapi():
+        return app.openapi()
 
 
 if __name__ == "__main__":

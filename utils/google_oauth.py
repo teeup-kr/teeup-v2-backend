@@ -82,7 +82,17 @@ def load_access_token() -> str:
     if "expiry" in token:
         del token["expiry"]
 
-    _write_token_file(token_path, token)
+    # 되쓰기는 있으면 좋은 정도다. 이 함수는 위에서 보듯 만료를 따지지 않고
+    # 매번 refresh_token 으로 새 access_token 을 받아 온다. 즉 파일에 적힌
+    # access_token 을 다시 읽어 쓰는 경로가 없다.
+    #
+    # Cloud Run 에서는 이 파일이 Secret Manager 볼륨으로 들어와 읽기 전용이다.
+    # 여기서 예외가 올라가면 토큰은 멀쩡히 발급됐는데 업로드가 통째로 실패한다.
+    try:
+        _write_token_file(token_path, token)
+    except OSError as e:
+        logger.warning("토큰 파일 갱신 실패(무시하고 진행): %s", e)
+
     return new_access_token
 
 
@@ -115,6 +125,83 @@ logger = logging.getLogger(__name__)
 #     name: str
 #     picture: Optional[str]
 #     verified_email: bool
+
+
+def upload_to_drive(
+    file_bytes: bytes,
+    filename: str,
+    folder_id: str,
+    share: str | None = None,
+) -> Dict:
+    """파일을 Google Drive 폴더에 올리고 메타데이터를 돌려준다.
+
+    로컬 디스크에 쓰지 않는다. 컨테이너·Cloud Run 은 파일시스템이 휘발이라
+    저장해도 재기동 때 사라지고, 서빙 경로도 없다.
+
+    share="link" 를 주면 링크를 아는 사람이 볼 수 있게 권한을 연다.
+    권한 부여가 실패해도 업로드 자체는 성공으로 둔다. 파일은 이미 올라갔고,
+    권한은 나중에 Drive 에서 손으로 열 수 있다.
+    """
+    access_token = load_access_token()
+    mime_type = get_mime_type(os.path.splitext(filename)[1])
+
+    boundary = "teeuplink_boundary"
+    metadata = {"name": filename, "parents": [folder_id]}
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(metadata)}\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mime_type}\r\n\r\n"
+    ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    resp = requests.post(
+        "https://www.googleapis.com/upload/drive/v3/files",
+        params={"uploadType": "multipart", "fields": "id,name,mimeType"},
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+        data=body,
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise GoogleOAuthError(f"Drive 업로드 실패: {resp.status_code} {resp.text}")
+
+    file_id = resp.json().get("id")
+    if not file_id:
+        raise GoogleOAuthError("Drive 응답에 파일 ID가 없습니다.")
+
+    if share == "link":
+        try:
+            requests.post(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                params={"fields": "id"},
+                json={"role": "reader", "type": "anyone"},
+                timeout=20,
+            )
+        except requests.RequestException:
+            pass
+
+    meta_resp = requests.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        params={"fields": "id,webViewLink,webContentLink,name,size,mimeType"},
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    meta = meta_resp.json() if meta_resp.status_code == 200 else {}
+
+    return {
+        "file_id": file_id,
+        "filename": filename,
+        "mime_type": meta.get("mimeType", mime_type),
+        "web_view_link": meta.get("webViewLink"),
+        "web_content_link": meta.get("webContentLink"),
+    }
 
 
 def _coerce_user_info(raw: Any) -> OAuthUserInfo:

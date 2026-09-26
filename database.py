@@ -57,8 +57,18 @@ def create_database_if_not_exists():
         from urllib.parse import urlparse
         parsed_url = urlparse(settings.DATABASE_URL)
 
-        # Connect without specifying database
-        temp_url = f"mysql+pymysql://{parsed_url.username}:{parsed_url.password}@{parsed_url.hostname}:{parsed_url.port}"
+        # Connect without specifying database.
+        #
+        # 쿼리스트링을 반드시 그대로 들고 간다. 여기에 ssl_ca 같은 접속 옵션이
+        # 들어 있는데, 예전에는 호스트·포트만 다시 조립해서 전부 버렸다.
+        # TLS 를 요구하는 관리형 DB(TiDB Cloud 등)에서는 이 연결이 실패하고,
+        # init_database 가 그 자리에서 False 로 빠져 create_all 까지
+        # 건너뛴다. 집 MySQL 은 평문을 받아 줘서 드러나지 않았을 뿐이다.
+        query = f"?{parsed_url.query}" if parsed_url.query else ""
+        temp_url = (
+            f"mysql+pymysql://{parsed_url.username}:{parsed_url.password}"
+            f"@{parsed_url.hostname}:{parsed_url.port}{query}"
+        )
         temp_engine = create_engine(temp_url)
 
         with temp_engine.connect() as connection:

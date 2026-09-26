@@ -1020,7 +1020,7 @@ async def verify_admin_token(request: AdminTokenVerifyRequest = Body(...), db: S
         if not token_jti:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰 형식입니다")
 
-        # 토큰 사용 여부 확인 (admin.py의 함수 사용)
+        # 토큰 사용 여부 확인 (routers/admin/tokens.py)
         from routers.admin import is_token_used, mark_token_as_used
 
         if is_token_used(token_jti):

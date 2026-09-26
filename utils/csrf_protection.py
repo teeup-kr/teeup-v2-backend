@@ -54,9 +54,10 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """강화된 CSRF 검증 미들웨어"""
         logger.debug(f"CSRF Middleware: {request.method} {request.url.path}")
-        # 개발 환경에서는 CSRF 검증 완화
-        if settings.ENVIRONMENT.lower() == "development":
-            logger.debug("Development 환경 - CSRF 검증 건너뜀")
+        # 명시적으로 켰을 때만 검증한다. 근거는 config.CSRF_PROTECTION_ENABLED
+        # 주석에 있다. ENVIRONMENT 에 묶어 두면 운영 승격과 동시에 앱이 깨진다.
+        if not settings.CSRF_PROTECTION_ENABLED:
+            logger.debug("CSRF 검증 비활성 - 건너뜀")
             return await call_next(request)
 
         # GET, HEAD, OPTIONS 요청은 CSRF 검증 제외
