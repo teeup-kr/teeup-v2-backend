@@ -94,14 +94,28 @@ def write_token_file(payload: dict) -> str:
         "scopes": [SCOPE],
     }
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # rename 도 os.replace 도 쓰지 않는다. 이 파일은 컨테이너에 단일 파일
+    # 바인드 마운트로 들어오기 때문에, 경로를 갈아끼우려 하면
+    # OSError: [Errno 16] Device or resource busy 가 난다.
+    # 백업은 내용 복사로, 본문은 제자리 덮어쓰기로 한다.
     if os.path.exists(path):
         backup = path + ".bak"
-        os.replace(path, backup)
-        print(f"기존 파일을 {backup} 로 옮겼다.")
-    # 파일을 만들 때부터 권한을 좁힌다.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with open(path, "rb") as src:
+            old = src.read()
+        fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as dst:
+            dst.write(old)
+        print(f"기존 내용을 {backup} 에 복사했다.")
+
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(token, f)
+    try:
+        os.chmod(path, 0o600)
+    except OSError as e:
+        # 마운트 원본의 소유자가 달라 실패할 수 있다. 내용은 이미 썼으므로
+        # 치명적이지 않다. 호스트에서 직접 좁히면 된다.
+        print(f"권한 조정 실패(무시 가능): {e}")
     return path
 
 
